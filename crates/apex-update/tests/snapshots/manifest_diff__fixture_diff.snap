@@ -1,0 +1,15 @@
+---
+source: crates/apex-update/tests/manifest_diff.rs
+expression: "lines.join(\"\\n\")"
+---
+upgraded   gnome-shell.x86_64 51.0-1.fc45 -> 51.1-1.fc45
+removed    gnome-tour.x86_64 51.0-1.fc45 -> -
+upgraded   kernel.x86_64 7.2.7-200.fc45 -> 7.2.9-200.fc45
+upgraded   libadwaita.x86_64 1.10~rc-1.fc45 -> 1.10.0-1.fc45
+upgraded   libfprint.x86_64 1.94.10-1.apex1.fc45 -> 1.94.10-2.apex1.fc45
+upgraded   mesa-dri-drivers.i686 26.1.4-1.fc45 -> 26.1.5-1.fc45
+upgraded   mesa-dri-drivers.x86_64 26.1.4-1.fc45 -> 26.1.5-1.fc45
+upgraded   oo7.x86_64 0.6.0-1.fc45 -> 0.6.0^20260922git1a2b3c4-1.fc45
+added      orca.noarch - -> 51.0-1.fc45
+upgraded   tzdata.noarch 2026a-1.fc45 -> 2026b-1.fc45
+downgraded xdg-desktop-portal.x86_64 1:1.22.0-1.fc45 -> 1.24.0-1.fc45

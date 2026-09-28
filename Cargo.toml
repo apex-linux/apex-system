@@ -1,0 +1,88 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Highest MSRV in the dependency stack is gtk4-rs 0.11 (1.92); Fedora 45 ships 1.98.1.
+rust-version = "1.93"
+license = "GPL-3.0-or-later"
+authors = ["Thuong Vo <66083331+SekiroKenjii@users.noreply.github.com>"]
+repository = "https://github.com/SekiroKenjii/apex-fedora"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+apex-boot = { path = "crates/apex-boot" }
+apex-bootc = { path = "crates/apex-bootc" }
+apex-dbus = { path = "crates/apex-dbus" }
+apex-update = { path = "crates/apex-update" }
+
+# Core
+anyhow = "1.0.104"
+camino = "1.2.6"
+clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+
+# System services (tokio current_thread + zbus on tokio: no hidden executor threads)
+libc = "0.2"
+nix = { version = "0.31.3", features = ["ioctl", "fs"] }
+sd-notify = "0.5.0"
+tokio = { version = "1.53.1", features = ["rt", "macros", "process", "signal", "io-util", "time", "sync", "fs"] }
+tracing-journald = "0.3.2"
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+zbus_polkit = "5.1.0"
+
+# GNOME (release target is GNOME 51: gtk v4_24, adw v1_10, glib v2_90 via crate features)
+adw = { package = "libadwaita", version = "0.9.2" }
+async-channel = "2.5.0"
+gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
+gio = "0.22.10"
+glib = "0.22.10"
+glib-build-tools = "0.22.8"
+gtk = { package = "gtk4", version = "0.11.5" }
+
+# Testing
+insta = { version = "1.48.0", features = ["json"] }
+proptest = "1.11.0"
+tempfile = "3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Pedantic lints that fight idiomatic GTK/zbus code or add noise without value here.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# Correctness-adjacent lints we want as hard errors in CI (-D warnings covers the rest).
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"
+
+[profile.dev.package."*"]
+# Dependencies (gtk4-rs in particular) compile once with optimisations; our code stays debuggable.
+opt-level = 1

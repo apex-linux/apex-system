@@ -1,0 +1,129 @@
+{
+  "apiVersion": "org.containers.bootc/v1",
+  "kind": "BootcHost",
+  "metadata": {
+    "annotations": {
+      "example.org/note": "drift test"
+    },
+    "labels": null,
+    "name": "host"
+  },
+  "spec": {
+    "bootOrder": "rollback",
+    "image": {
+      "image": "ghcr.io/sekirokenjii/apex-testing:45",
+      "signature": "containerPolicy",
+      "transport": "registry"
+    },
+    "someFutureSpecField": {
+      "enabled": true
+    }
+  },
+  "status": {
+    "booted": {
+      "cachedUpdate": null,
+      "downloadOnly": false,
+      "futureBootEntryField": [1, 2, 3],
+      "image": {
+        "architecture": "amd64",
+        "image": {
+          "image": "ghcr.io/sekirokenjii/apex-testing:45",
+          "signature": "containerPolicy",
+          "transport": "registry"
+        },
+        "imageDigest": "sha256:9f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "timestamp": "2026-09-23T03:10:02+02:00",
+        "version": "45.20260923.114"
+      },
+      "incompatible": false,
+      "ostree": {
+        "checksum": "5d2c1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4",
+        "deploySerial": 1,
+        "stateroot": "default"
+      },
+      "pinned": false,
+      "softRebootCapable": true,
+      "store": "someFutureStore"
+    },
+    "otherDeployments": [
+      {
+        "cachedUpdate": null,
+        "downloadOnly": false,
+        "image": {
+          "architecture": "amd64",
+          "image": {
+            "image": "ghcr.io/sekirokenjii/apex:45",
+            "signature": "containerPolicy",
+            "transport": "registry"
+          },
+          "imageDigest": "sha256:aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+          "timestamp": null,
+          "version": "45.20260901.12"
+        },
+        "incompatible": false,
+        "ostree": {
+          "checksum": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "deploySerial": 0,
+          "stateroot": "default"
+        },
+        "pinned": true,
+        "softRebootCapable": false,
+        "store": "ostreeContainer"
+      }
+    ],
+    "readOnly": false,
+    "rollback": {
+      "cachedUpdate": null,
+      "downloadOnly": false,
+      "image": {
+        "architecture": "amd64",
+        "image": {
+          "image": "ghcr.io/sekirokenjii/apex:45",
+          "signature": {
+            "sigstoreBundle": "future"
+          },
+          "transport": "registry"
+        },
+        "imageDigest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+        "timestamp": "2026-09-20T03:09:40Z",
+        "version": "45.20260920.103"
+      },
+      "incompatible": false,
+      "ostree": {
+        "checksum": "e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5",
+        "deploySerial": 0,
+        "stateroot": "default"
+      },
+      "pinned": false,
+      "softRebootCapable": false,
+      "store": "ostreeContainer"
+    },
+    "rollbackQueued": true,
+    "staged": {
+      "cachedUpdate": null,
+      "composefs": {
+        "bootDigest": null,
+        "bootType": "Bls",
+        "bootloader": "grub",
+        "missingVerityAllowed": false,
+        "verity": "abcdef"
+      },
+      "downloadOnly": false,
+      "image": null,
+      "incompatible": true,
+      "ostree": {
+        "checksum": "c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00",
+        "deploySerial": 0,
+        "stateroot": "default"
+      },
+      "pinned": false,
+      "softRebootCapable": false,
+      "store": null
+    },
+    "type": "bootcHost",
+    "usrOverlay": {
+      "accessMode": "readWrite",
+      "persistence": "transient"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# D-Bus activation of the Apex update service. Installed in
+# /usr/share/dbus-1/system-services/. The bus hands activation to systemd
+# (SystemdService=), which starts apex-updated.service; Exec= is never run.
+[D-BUS Service]
+Name=io.github.sekirokenjii.Apex.Update1
+Exec=/bin/false
+User=root
+SystemdService=apex-updated.service

@@ -1,0 +1,50 @@
+---
+source: crates/apexctl/src/status.rs
+expression: json
+---
+{
+  "available": null,
+  "booted": {
+    "degraded": [
+      "audio"
+    ],
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "download_only": null,
+    "image": "ghcr.io/sekirokenjii/apex:45",
+    "pinned": false,
+    "timestamp": 1790208000,
+    "version": "45.20260924.117"
+  },
+  "channel": "stable",
+  "deferred_reason": null,
+  "degraded": [
+    "audio"
+  ],
+  "health_failure": null,
+  "last_check": 1790240400,
+  "last_error": null,
+  "progress": null,
+  "rollback": {
+    "degraded": [
+      "audio"
+    ],
+    "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "download_only": null,
+    "image": "ghcr.io/sekirokenjii/apex:45",
+    "pinned": false,
+    "timestamp": 1790208000,
+    "version": "45.20260920.110"
+  },
+  "schema": 1,
+  "staged": {
+    "degraded": [],
+    "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "download_only": true,
+    "image": "ghcr.io/sekirokenjii/apex:45",
+    "pinned": false,
+    "timestamp": 1790208000,
+    "version": "45.20260925.118"
+  },
+  "stale": false,
+  "state": "staged"
+}

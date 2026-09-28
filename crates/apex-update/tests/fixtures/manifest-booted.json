@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "apex",
+  "version": "45.20260920.3",
+  "fedora": 45,
+  "revision": "1111111111111111111111111111111111111111",
+  "base_image": "quay.io/fedora/fedora-bootc@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "degraded": ["audio"],
+  "packages": [
+    { "name": "bash", "epoch": 0, "version": "5.3.0", "release": "2.fc45", "arch": "x86_64" },
+    { "name": "gnome-shell", "epoch": 0, "version": "51.0", "release": "1.fc45", "arch": "x86_64" },
+    { "name": "gnome-tour", "epoch": 0, "version": "51.0", "release": "1.fc45", "arch": "x86_64" },
+    { "name": "kernel", "epoch": 0, "version": "7.2.7", "release": "200.fc45", "arch": "x86_64" },
+    { "name": "libadwaita", "epoch": 0, "version": "1.10~rc", "release": "1.fc45", "arch": "x86_64" },
+    { "name": "libfprint", "epoch": 0, "version": "1.94.10", "release": "1.apex1.fc45", "arch": "x86_64" },
+    { "name": "mesa-dri-drivers", "epoch": 0, "version": "26.1.4", "release": "1.fc45", "arch": "i686" },
+    { "name": "mesa-dri-drivers", "epoch": 0, "version": "26.1.4", "release": "1.fc45", "arch": "x86_64" },
+    { "name": "oo7", "epoch": 0, "version": "0.6.0", "release": "1.fc45", "arch": "x86_64" },
+    { "name": "systemd", "epoch": 0, "version": "259.2", "release": "1.fc45", "arch": "x86_64" },
+    { "name": "tzdata", "epoch": 0, "version": "2026a", "release": "1.fc45", "arch": "noarch" },
+    { "name": "xdg-desktop-portal", "epoch": 1, "version": "1.22.0", "release": "1.fc45", "arch": "x86_64" }
+  ]
+}

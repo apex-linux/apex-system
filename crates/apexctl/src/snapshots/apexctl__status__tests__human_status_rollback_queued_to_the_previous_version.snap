@@ -1,0 +1,14 @@
+---
+source: crates/apexctl/src/status.rs
+expression: text
+---
+The previous version 45.20260920.110 will start at the next boot (rollback queued).
+Reboot to finish the rollback. Automatic updates are paused until then.
+
+Booted     45.20260924.117  built 2026-09-24
+           sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Rollback   45.20260920.110  built 2026-09-24
+           sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+Channel    stable (running image)
+Checked    2026-09-24 09:00 UTC
+Degraded   audio: the speaker fix is not available yet

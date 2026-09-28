@@ -1,0 +1,23 @@
+[package]
+name = "apex-update"
+description = "Pure update engine for Apex: snapshot, gates, state derivation, version ordering, rpmvercmp, manifest diff and the persisted-state stores"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

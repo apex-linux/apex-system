@@ -1,0 +1,105 @@
+# Hardware profile: ASUS Vivobook Pro 14X OLED M7400QC.
+#
+# Single source of truth for machine facts. Image drop-ins (HDA patch firmware,
+# monitors.xml, hwdb entries) are generated from this file by Apex tooling, and
+# golden tests keep the committed copies identical to the generated output.
+# Facts were read on the machine itself on 2026-09-23 (BIOS M7400QC.311).
+
+schema = 1
+
+[machine]
+id = "m7400qc"
+dmi_sys_vendor = "ASUSTeK COMPUTER INC."
+dmi_product_name = "Vivobook_ASUSLaptop M7400QC_M7400QC"
+dmi_board_name = "M7400QC"
+bios_versions_seen = ["M7400QC.311"]
+
+[cpu]
+model = "AMD Ryzen 5 5600H with Radeon Graphics"
+# Zen 3 "Cezanne", family 25 model 80, 6C/12T. Used for -march/-mtune in the Apex kernel.
+march = "znver3"
+
+[panel]
+connector = "eDP-1"
+edid_vendor = "SDC"
+edid_product = "0x4154"
+edid_serial = "0x00000000"
+edid_name = "ATNA40YK04-0"
+width_px = 2880
+height_px = 1800
+# Physical size from the EDID detailed timing descriptor.
+width_mm = 302
+height_mm = 189
+# Exact rates as mutter reports them (DisplayConfig GetCurrentState).
+refresh_hz = [90.001434326171875, 60.000957489013672]
+# ADR 0003: integer scale is pixel-exact for every client; 5/3 is mutter's own choice.
+default_scale = { num = 2, den = 1 }
+alternative_scales = [{ num = 5, den = 3 }]
+
+[audio.codec]
+# Analog HDA controller; the HDMI controller 0000:04:00.1 carries codec 0x1002aa01.
+controller_pci = "0000:04:00.6"
+vendor_id = 0x10ec0294
+subsystem_id = 0x10431ab2
+address = 0
+# Realtek vendor-defined processing widget that owns the COEF registers.
+coef_nid = 0x20
+
+# ADR 0004: the fix is rendered only from values measured on this unit.
+# hardware/m7400qc/audio/coef-dump.sh prints these tables; paste them here.
+# Until audio.measurements.cold_boot exists, `apexctl profile render` produces no
+# firmware file and the image is labelled degraded=audio.
+[audio.fix]
+# For each rule: written = (cold_boot value & !clear) | set.
+rules = [
+    # Bit 10 of COEF 0x1b is cleared by the Windows driver on related ASUS ALC294
+    # models and survives a warm reboot; restoring it is the candidate fix.
+    { index = 0x1b, set = 0x0400, clear = 0x0000 },
+]
+# COEF indexes restored verbatim to their cold-boot value when the after-Windows dump
+# differs from the cold-boot dump (0x0f is the EAPD coefficient used by
+# ALC294_FIXUP_ASUS_HPE; 0x40 is the one ALC294_FIXUP_ASUS_SPK writes).
+restore_if_windows_differs = [0x0f, 0x40]
+
+# [audio.measurements]
+# date = 2026-09-25
+# bios = "M7400QC.311"
+# kernel = "7.0.0-31-generic"
+# cold_boot = [ { index = 0x0f, value = 0x0000 }, { index = 0x1b, value = 0x0000 }, { index = 0x40, value = 0x0000 } ]
+# after_windows = [ { index = 0x0f, value = 0x0000 }, { index = 0x1b, value = 0x0000 }, { index = 0x40, value = 0x0000 } ]
+
+[fingerprint]
+usb_vendor = 0x04f3
+usb_product = 0x0c6e
+libfprint_driver = "elan"
+
+[gpu.integrated]
+pci = "0000:04:00.0"
+vendor = 0x1002
+device = 0x1638
+
+[gpu.discrete]
+pci = "0000:01:00.0"
+vendor = 0x10de
+device = 0x25a2
+# Panel and HDMI are wired to the iGPU; the dGPU should idle in D3cold.
+drives_displays = false
+
+[firmware]
+# Weak dependencies are off, so every firmware package this machine needs is explicit.
+packages = ["linux-firmware", "amd-gpu-firmware", "amd-ucode-firmware", "iwlwifi-mvm-firmware"]
+# Files the image check requires (globs relative to /usr/lib/firmware).
+required_files = [
+    "amdgpu/green_sardine_*",
+    "iwlwifi-cc-a0-*.ucode*",
+    "intel/ibt-20-1-3.*",
+    "amd-ucode/microcode_amd_fam19h.bin*",
+]
+
+[battery]
+name = "BAT0"
+# The kernel exposes only an end threshold (no start) and resets it to 100 at boot.
+# UPower's default hwdb already asks for 75,80, but asus-wmi adds the attribute after
+# BAT0 appears without a uevent, so UPower never sees it: image/system_files ships a
+# udev re-trigger, an upower.service wait, and a default-on state file (ARCHITECTURE 6.4).
+charge_end_threshold = 80

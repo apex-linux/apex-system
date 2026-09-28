@@ -1,0 +1,6 @@
+# Keep in sync with [workspace.lints] in Cargo.toml.
+msrv = "1.93"
+avoid-breaking-exported-api = false
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true

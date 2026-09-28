@@ -1,0 +1,58 @@
+[package]
+name = "apex-updated"
+description = "Apex update service: the io.github.sekirokenjii.Apex.Update1 system bus service, the only component that runs bootc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "apex_updated"
+
+[[bin]]
+name = "apex-updated"
+path = "src/main.rs"
+
+[features]
+# Exposes `apex_updated::testing`: the allow-all authorizer and fake providers. Only the
+# crate's own tests enable it (self dev-dependency below); the daemon never does.
+testing = []
+
+[dependencies]
+anyhow.workspace = true
+apex-boot.workspace = true
+apex-bootc.workspace = true
+apex-dbus.workspace = true
+apex-update.workspace = true
+# `fs` (workspace) provides statvfs and O_NOFOLLOW.
+nix.workspace = true
+sd-notify.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-journald.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true
+zbus_polkit.workspace = true
+
+[dev-dependencies]
+# Self dev-dependency so the integration tests can use the `testing` feature.
+apex-updated = { path = ".", features = ["testing"] }
+apex-bootc = { workspace = true, features = ["testing"] }
+insta.workspace = true
+proptest.workspace = true
+# Well-formedness and content checks of the policy and bus configuration files; the same
+# version apex-dbus already uses, so nothing new enters Cargo.lock.
+quick-xml = "0.42.0"
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util", "net"] }
+# Peer-to-peer connections let the wiring test run the real interface without a bus daemon.
+zbus = { workspace = true, features = ["p2p"] }
+zbus_xml = "5.2.1"
+
+[lints]
+workspace = true

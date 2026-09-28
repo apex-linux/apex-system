@@ -1,0 +1,22 @@
+---
+source: crates/apex-bootc/tests/progress_stream.rs
+expression: render(&updates)
+---
+pulling   fraction=0.000 overall=0.000 bytes=0/314572800 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+pulling   fraction=0.333 overall=0.300 bytes=104857600/314572800 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+pulling   fraction=0.533 overall=0.480 bytes=167772160/314572800 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+importing fraction=0.000 overall=-     label="Importing Image"
+importing fraction=1.000 overall=-     label="Importing Image"
+retrying  fraction=-     overall=-     label="Container image pull failed; retrying in 2 seconds (1/3): Pulling"
+pulling   fraction=0.000 overall=0.480 bytes=0/209715200 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+pulling   fraction=0.300 overall=0.606 bytes=62914560/209715200 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+pulling   fraction=0.600 overall=0.732 bytes=125829120/209715200 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+pulling   fraction=0.800 overall=0.816 bytes=167772160/209715200 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+pulling   fraction=1.000 overall=0.900 bytes=209715200/209715200 label="Pulling Image: sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0"
+importing fraction=0.000 overall=0.900 label="Importing Image"
+importing fraction=1.000 overall=0.950 label="Importing Image"
+staging   fraction=0.000 overall=0.950 label="Deploying Image"
+staging   fraction=0.333 overall=0.967 label="Deploying Image"
+staging   fraction=0.333 overall=0.967 label="Deploying Image"
+staging   fraction=0.667 overall=0.983 label="Deploying Image"
+staging   fraction=1.000 overall=1.000 label="Deploying Image"

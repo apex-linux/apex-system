@@ -1,0 +1,47 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node (GNOME Shell extension toolchain)
+node_modules/
+/shell/*/dist/
+
+# Python bytecode (packaging/licenses.py and other helper scripts)
+**/__pycache__/
+
+# Build outputs
+/_build/
+# Mockup renders: derived, about 32 MB (`just design-render`, tools/design/render-mockup.cjs)
+/design/renders/
+/out/
+*.qcow2
+*.raw
+*.iso
+*.oci/
+# The RPMs image/Containerfile reads from the build context (.github/scripts/image.sh
+# context fills it from the apex-rpms and apex-libfprint artifacts)
+/rpms/
+
+# Private keys never belong in the repository: `cosign generate-key-pair` writes
+# cosign.key next to cosign.pub (image/system_files/usr/share/apex/keys/README.md).
+cosign.key
+*.key
+*.key.bak
+
+# Biometric data never belongs in the repository (ADR 0006, THREAT-MODEL T6,
+# docs/hardware/FINGERPRINT.md): fingerprint images, enrolled prints, umockdev
+# recordings, usbmon captures and fprintd's print store, in any letter case. CI's
+# .github/scripts/privacy-guard.sh fails on the same names, and on hex dumps and long
+# lines inside text files, which no ignore pattern can catch.
+*.[Pp][Gg][Mm]
+*.[Vv][Aa][Rr][Ii][Aa][Nn][Tt]
+*.[Ii][Oo][Cc][Tt][Ll]
+*.[Uu][Mm][Oo][Cc][Kk][Dd][Ee][Vv]
+*.[Pp][Cc][Aa][Pp]
+*.[Pp][Cc][Aa][Pp][Nn][Gg]
+**/var/lib/fprint/
+
+# Editors
+.idea/
+.vscode/
+*.swp

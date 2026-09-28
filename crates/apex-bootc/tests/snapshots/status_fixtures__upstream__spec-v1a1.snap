@@ -1,0 +1,31 @@
+---
+source: crates/apex-bootc/tests/status_fixtures.rs
+expression: project(&host)
+---
+{
+  "api_version": "org.containers.bootc/v1alpha1",
+  "boot_order": "Default",
+  "bootc_host": true,
+  "booted": {
+    "cached_update": null,
+    "digest": "sha256:b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
+    "download_only": false,
+    "image": "quay.io/otherexample/otherimage:latest",
+    "incompatible": false,
+    "pinned": false,
+    "root": "/sysroot/ostree/deploy/default/deploy/41af286dc0b172ed2f1ca934fd2278de4a1192302ffa07087cea2682e7d372e3.0",
+    "soft_reboot_capable": false,
+    "timestamp_unix": 1703952611,
+    "version": "20231230.1"
+  },
+  "incompatible": false,
+  "other_deployments": [],
+  "rollback": null,
+  "rollback_queued": false,
+  "spec_image": "registry:quay.io/otherexample/otherimage:latest",
+  "spec_signature": null,
+  "staged": null,
+  "staged_download_only": null,
+  "type": null,
+  "usr_overlay": null
+}

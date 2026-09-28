@@ -1,0 +1,20 @@
+---
+source: crates/apex-bootc/tests/status_fixtures.rs
+expression: project(&host)
+---
+{
+  "api_version": "org.containers.bootc/v1",
+  "boot_order": "Default",
+  "bootc_host": false,
+  "booted": null,
+  "incompatible": false,
+  "other_deployments": [],
+  "rollback": null,
+  "rollback_queued": false,
+  "spec_image": null,
+  "spec_signature": null,
+  "staged": null,
+  "staged_download_only": null,
+  "type": null,
+  "usr_overlay": null
+}

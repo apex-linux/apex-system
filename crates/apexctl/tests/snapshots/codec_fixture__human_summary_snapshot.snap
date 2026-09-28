@@ -1,0 +1,30 @@
+---
+source: crates/apexctl/tests/codec_fixture.rs
+expression: render(&snapshot)
+---
+Realtek ALC294 (vendor 0x10ec0294, subsystem 0x10431ab2, revision 0x100004)
+Source: tests/fixtures/alc294-m7400qc-codec0.txt (card 1, codec address 0)
+
+Pins
+  NID   Default     Pin-ctls           EAPD  Connections       Description
+  0x12  0x90a60130  0x20 IN            -     -                 [Fixed] Mic at Int N/A
+  0x13  0x40000000  0x00               -     -                 [N/A] Line Out at Ext N/A
+  0x14  0x90170110  0x40 OUT           0x2   0x02              [Fixed] Speaker at Int N/A
+  0x15  0x411111f0  0x00               0x2   0x02* 0x03 0x06   [N/A] Speaker at Ext Rear
+  0x16  0x411111f0  0x00               0x2   0x02* 0x03        [N/A] Speaker at Ext Rear
+  0x17  0x411111f0  0x00               0x2   0x02* 0x03 0x06   [N/A] Speaker at Ext Rear
+  0x18  0x411111f0  0x00               -     -                 [N/A] Speaker at Ext Rear
+  0x19  0x411111f0  0x20 IN VREF_HIZ   -     -                 [N/A] Speaker at Ext Rear
+  0x1a  0x411111f0  0x00 VREF_HIZ      -     -                 [N/A] Speaker at Ext Rear
+  0x1b  0x411111f0  0x20 IN VREF_HIZ   0x2   0x02* 0x03        [N/A] Speaker at Ext Rear
+  0x1d  0x40663b05  0x20 IN            -     -                 [N/A] Modem Line at Ext N/A
+  0x1e  0x411111f0  0x40 OUT           -     0x06              [N/A] Speaker at Ext Rear
+  0x1f  0x411111f0  0x20 IN            -     -                 [N/A] Speaker at Ext Rear
+  0x21  0x04211020  0xc0 OUT HP        0x2   0x02 0x03*        [Jack] HP Out at Ext Right
+
+COEFs (NID 0x20, 130 slots): not in this dump. To include them:
+  echo 1 | sudo tee /sys/module/snd_hda_codec/parameters/dump_coef
+
+init_verbs of hwC1D0:
+  0x20 0x500 0x001b     SET_COEF_INDEX 0x001b
+  0x20 0x400 0x4e4b     SET_PROC_COEF 0x4e4b

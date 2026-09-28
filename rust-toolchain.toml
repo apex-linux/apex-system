@@ -1,0 +1,5 @@
+# Fedora 45 ships rust 1.98.1; pin the same toolchain so local builds match the RPM builds.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

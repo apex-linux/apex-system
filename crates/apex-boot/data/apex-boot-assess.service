@@ -1,0 +1,177 @@
+# apex-boot-assess.service: judge this boot once and act on the verdict (ADR 0009).
+#
+# Installed as /usr/lib/systemd/system/apex-boot-assess.service and enabled by preset.
+# The binary runs the required checks, reads grubenv, applies the pure decision table of
+# crate apex-boot, and then may: confirm the boot or clear the counter (grub2-editenv on
+# /boot/grub2/grubenv), write /var/lib/apex/health-failure.json, call ReportBoot on
+# apex-updated over the system bus, and, only for a red armed boot with nobody logged in,
+# run `systemctl reboot` so GRUB's counter moves.
+#
+# To skip it for one boot (recovery), add systemd.mask=apex-boot-assess.service to the
+# kernel command line.
+
+[Unit]
+Description=Apex boot assessment
+Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0009-boot-assessment.md
+
+# The decision is about ostree deployments booted through GRUB's static config.
+ConditionPathExists=/run/ostree-booted
+
+# Start once the desktop target is reached, after gdm has been started. The required
+# session check needs a greeter or user session; the binary waits for one itself, bounded,
+# because "a session exists" is not a unit state we can order against.
+# A boot that never reaches graphical.target is never judged by this unit. When it stops
+# in the emergency or rescue shell, the drop-ins emergency.service.d/ and
+# rescue.service.d/50-apex-bootcount.conf run `apex-boot-assess --emergency-watchdog`,
+# which reboots after 60 s while GRUB is counting an update on trial (ADR 0009,
+# Consequences). panic=10 and rd.emergency=reboot cover panics and the initramfs. Still
+# not covered: a start job that hangs without a timeout; GRUB's counter then moves only
+# when the user forces a power-off.
+After=graphical.target
+
+# Deliberately no Before=boot-complete.target (unlike greenboot-healthcheck.service), and
+# nothing is ordered after this unit: the assessment takes minutes and must never delay
+# boot-complete.target, the greeter or a login.
+
+# grubenv lives on /boot (ext4, ADR 0010); the state files in /var/lib/apex.
+RequiresMountsFor=/boot /var/lib/apex
+
+# Default dependencies stay on: they order us after basic.target (the system bus is up)
+# and add Conflicts=/Before=shutdown.target, so the reboot this unit may request stops it
+# cleanly.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/apex/apex-boot-assess
+
+# Stays "active (exited)" for the rest of the boot: `systemctl status` shows this boot's
+# verdict, and the assessment does not run a second time if graphical.target is reached
+# again (for example after an isolate).
+RemainAfterExit=yes
+
+# Upper bound for the whole assessment (apex_boot::ASSESS_TIME_BUDGET, the one statement
+# of it; a test keeps this comment and TimeoutStartSec= in line with it): the session wait
+# (120 s) plus one logind query (5 s); the concurrent batch of checks (30 s each) with
+# bootc status alongside (bounded at 35 s); the daemon's Booted fallback (5 s); the logind
+# query for a logged-in user (5 s); and the slowest steps (135 s: a fallback's hedge write,
+# ReportBoot, then bootc status and one more write to reconcile, 35 + 30 + 35 + 35 s, each
+# grub2-editenv call 30 s plus 5 s to reap a killed helper). These add up to 305 s. 360 s
+# leaves a margin.
+TimeoutStartSec=360
+
+# Never restarted: one verdict per boot. A failure (for example unreadable grubenv)
+# leaves the unit failed and visible in `systemctl --failed`, with grubenv untouched.
+Restart=no
+
+# ---- Sandbox ----
+# What runs here: the binary (tokio, zbus), and as children `bootc status` (which uses
+# ostree), `systemctl`, and for grubenv writes `unshare` + `sh` + `mount` +
+# `grub2-editenv`. It stays root: grubenv, grub.cfg and /var/lib/apex are root-only, and
+# ReportBoot is accepted from uid 0 only.
+#
+# Two helpers change mounts, inside this unit only:
+#  - grubenv writes run `unshare --mount --propagation private` and remount /boot
+#    read-write in that new, private namespace (bootc mounts /boot read-only), then run
+#    grub2-editenv there (apex_boot::writer). The host and this unit keep a read-only
+#    /boot.
+#  - `bootc status` takes the ostree sysroot lock: ostree remounts /sysroot and /boot
+#    read-write in the current mount namespace and opens /sysroot/ostree/lock with
+#    O_CREAT|O_RDWR. bootc creates its own namespace only when it runs in PID 1's; here
+#    it runs in this unit's private one, so the remounts stay in this unit and never reach
+#    the host, but for the rest of the run /sysroot and /boot are writable in here.
+# So ProtectSystem=strict below cannot be relied on for /sysroot and /boot, and the
+# capabilities and system calls those remounts need must stay allowed.
+
+# Everything read-only except /var/lib/apex and the private /tmp. No ReadWritePaths= for
+# /boot: grubenv is written only in the writer's private namespace, and a writable bind
+# mount would not help anyway because the /boot filesystem itself is mounted read-only.
+ProtectSystem=strict
+# Creates /var/lib/apex (0700 root, M1 contract §1) if tmpfiles has not, and makes it
+# writable under ProtectSystem=strict (health-failure.json; the force-red hook is read
+# from it).
+StateDirectory=apex
+StateDirectoryMode=0700
+# health-failure.json and any temporary file are created 0600.
+UMask=0077
+# Required, not only hardening: under ProtectSystem=strict /tmp is read-only, and bootc
+# writes a temporary copy of itself there when it tries an SELinux re-exec
+# (selinux_ensure_install). A private /tmp is writable and seen by nobody else.
+PrivateTmp=yes
+# Never needs /home, /root or /run/user.
+ProtectHome=yes
+# No PrivateIPC: bootc's global_init joins the host IPC namespace (setns) whenever it
+# runs in an isolated one with CAP_SYS_ADMIN, and RestrictNamespaces=mnt forbids that
+# setns, so `bootc status` failed with "setns(ipc): Operation not permitted" in the
+# first real boot (qualify.sh local). In the host IPC namespace bootc skips the setns.
+
+# No network at all, by construction: ADR 0009 requires that network conditions never
+# decide a boot, and nothing here needs more than local AF_UNIX sockets (D-Bus, systemd,
+# journald all use socket files, which work in a private network namespace).
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+# Capabilities, all others dropped (for example CAP_SYS_MODULE, CAP_SYS_RAWIO,
+# CAP_SYS_TIME, CAP_SYS_BOOT, CAP_NET_*, CAP_SETUID, CAP_MKNOD, CAP_MAC_ADMIN, CAP_BPF):
+#  CAP_SYS_ADMIN        unshare(CLONE_NEWNS) and the /boot remount of the grubenv writer;
+#                       ostree's remounts of /sysroot and /boot for the sysroot lock; bootc
+#                       refuses to start without it in the bounding set.
+#  CAP_SYS_PTRACE       bootc reads /proc/1/ns/mnt to decide whether it must create a mount
+#                       namespace. Reading another process's namespace link is a ptrace
+#                       access check, and once the bounding set is narrowed PID 1 holds
+#                       capabilities this unit does not, so the kernel requires this one.
+#  CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH
+#                       root's usual file access, kept for bootc/ostree, grub2-editenv and
+#                       systemctl, which are not audited file by file for owner-only modes.
+#                       Dropping them would add an untested failure mode and protect
+#                       nothing while CAP_SYS_ADMIN (needed) can remount anything.
+# The reboot needs no capability: systemctl asks systemd over D-Bus.
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+# No setuid helpers are used. Under SELinux this also keeps bootc, mount and
+# grub2-editenv in this unit's domain instead of transitioning (install_t, mount_t,
+# bootloader_t): bootc's attempt to re-exec itself as install_t then continues without
+# it, which `bootc status` does not need.
+NoNewPrivileges=yes
+
+# System calls: the usual service set, which includes unshare (in @process), plus @mount
+# (mount, umount2, mount_setattr and the fsopen/fsconfig family) for the remounts above;
+# util-linux mount may use the new mount API. EPERM instead of SIGSYS, so a helper that
+# meets a refused call fails with a message instead of dying silently.
+SystemCallFilter=@system-service @mount
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+# Only mount namespaces may be created (the grubenv writer's unshare --mount).
+RestrictNamespaces=mnt
+
+# Kernel and system state it never changes. /sys and /proc/sys stay readable.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+# Not set on purpose:
+#  PrivateDevices=yes, DevicePolicy=, DeviceAllow=
+#                      grub2-editenv probes the block device under /boot/grub2 when it is
+#                      given the default grubenv path (for its btrfs support), and bootc
+#                      and ostree inspect block devices; a closed device policy would break
+#                      or degrade them.
+#  ProtectClock=yes    implies DeviceAllow=char-rtc, which closes every other device node,
+#                      with the same effect. The clock stays protected anyway: CAP_SYS_TIME
+#                      is not in the bounding set and @clock is not in the filter.
+#  PrivateUsers=yes    mounts inherited into a user namespace are locked read-only, so the
+#                      /boot and /sysroot remounts would fail; and uid 0 would no longer be
+#                      root for ReportBoot.
+#  ProtectProc=, ProcSubset=pid
+#                      ProcSubset=pid hides /proc/asound, which the audio reported check
+#                      reads; ProtectProc=invisible adds nothing for a root unit that holds
+#                      CAP_SYS_PTRACE.
+#  ReadWritePaths=/boot/grub2
+#                      see ProtectSystem= above.
+
+[Install]
+# Pulled in by the graphical boot, and ordered after it (After= above).
+WantedBy=graphical.target

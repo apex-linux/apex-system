@@ -1,0 +1,146 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Apex dependency updates. Every input is pinned: actions by commit SHA, container images by digest, release binaries by SHA-256, crates by Cargo.lock.",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    ":dependencyDashboard"
+  ],
+  "timezone": "Etc/UTC",
+  "labels": [
+    "dependencies"
+  ],
+  "minimumReleaseAge": "3 days",
+  "packageRules": [
+    {
+      "description": "Rust crates: minor and patch updates in one PR, once a week.",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "cargo minor and patch",
+      "schedule": [
+        "* 0-5 * * 1"
+      ]
+    },
+    {
+      "description": "GitHub Actions: full commit SHAs with the version as a comment, once a week.",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true,
+      "groupName": "github actions",
+      "schedule": [
+        "* 0-5 * * 1"
+      ]
+    },
+    {
+      "description": "Container images are always referenced by digest.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": true
+    },
+    {
+      "description": "Fedora images never jump to the next release; major upgrades follow the manual runbook (ADR 0008).",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "registry.fedoraproject.org/fedora",
+        "registry.fedoraproject.org/fedora-bootc"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Fedora 45 image digests (ARG BASE and ARG REPOS_BASE in image/Containerfile, and the CI containers) move together, daily, with no release-age wait: Fedora is the trusted root and rebuilds these tags daily. The pins live on registry.fedoraproject.org, which keeps old digests.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "registry.fedoraproject.org/fedora",
+        "registry.fedoraproject.org/fedora-bootc"
+      ],
+      "matchUpdateTypes": [
+        "digest",
+        "pinDigest"
+      ],
+      "groupName": "fedora 45 images",
+      "minimumReleaseAge": "0 days",
+      "schedule": [
+        "* 0-5 * * *"
+      ]
+    },
+    {
+      "description": "image/Containerfile is updated only by the custom managers for ARG BASE and ARG REPOS_BASE below. The Dockerfile manager would try to rewrite FROM lines built from ARGs (FROM ${BASE}, FROM ${REPOS_BASE}), so it stays off for this file.",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchFileNames": [
+        "image/Containerfile"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Pinned release binaries in .github/scripts/install-tool.sh: version and SHA-256 move together.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchFileNames": [
+        ".github/scripts/install-tool.sh"
+      ],
+      "groupName": "ci tool binaries",
+      "schedule": [
+        "* 0-5 * * 1"
+      ]
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "ARG BASE=registry.fedoraproject.org/fedora-bootc@sha256:... in image/Containerfile (digest only; the tag it follows is 45).",
+      "managerFilePatterns": [
+        "/^image/Containerfile$/"
+      ],
+      "matchStrings": [
+        "ARG BASE=(?<depName>registry\\.fedoraproject\\.org/fedora-bootc)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker",
+      "currentValueTemplate": "45",
+      "autoReplaceStringTemplate": "ARG BASE={{{depName}}}@{{{newDigest}}}"
+    },
+    {
+      "customType": "regex",
+      "description": "ARG REPOS_BASE=registry.fedoraproject.org/fedora@sha256:... in image/Containerfile, the repos stage base (digest only; tag 45). A separate manager because the replacement template names the ARG.",
+      "managerFilePatterns": [
+        "/^image/Containerfile$/"
+      ],
+      "matchStrings": [
+        "ARG REPOS_BASE=(?<depName>registry\\.fedoraproject\\.org/fedora)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker",
+      "currentValueTemplate": "45",
+      "autoReplaceStringTemplate": "ARG REPOS_BASE={{{depName}}}@{{{newDigest}}}"
+    },
+    {
+      "customType": "regex",
+      "description": "VERSION and SHA256 pairs after a '# renovate:' comment in install-tool.sh.",
+      "managerFilePatterns": [
+        "/^\\.github/scripts/install-tool\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n[A-Z_]+_VERSION=(?<currentValue>\\S+)\\n[A-Z_]+_SHA256=(?<currentDigest>[a-f0-9]{64})"
+      ]
+    }
+  ]
+}

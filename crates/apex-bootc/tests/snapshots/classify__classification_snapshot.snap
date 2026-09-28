@@ -1,0 +1,35 @@
+---
+source: crates/apex-bootc/tests/classify.rs
+expression: out
+---
+NotBootcHost: this system is not booted from a bootc image: Upgrading: Initializing storage: System not booted via bootc
+NotBootcHost: this system is not booted from a bootc image: Rolling back: Not currently booted into an OSTree system
+Busy: another operation holds the system update lock: Upgrading: interrupted
+Busy: another operation holds the system update lock: Transaction in progress: deploy
+NoSpace: not enough disk space: Upgrading: Pulling: Importing: Writing content object: No space left on device (os error 28)
+NoSpace: not enough disk space: Upgrading: Pulling: Insufficient free space for ghcr.io/sekirokenjii/apex:45 (available: 1.2 GB required: 3.4 GB)
+NoSpace: not enough disk space: Upgrading: Staging: min-free-space-percent '3%' would be exceeded, at least 13.2 MB requested
+NoSpace: not enough disk space: Upgrading: Staging: min-free-space-size 500MB would be exceeded
+SignatureRejected: image rejected by the signature policy: Upgrading: Pulling: Creating importer: failed to invoke method OpenImage: A signature was required, but no signature exists
+SignatureRejected: image rejected by the signature policy: Switching (ostree): Pulling: failed to invoke method OpenImage: Source image rejected: Running image docker://ghcr.io/evil/apex:45 is rejected by policy.
+SignatureRejected: image rejected by the signature policy: Upgrading: Pulling: failed to invoke method OpenImage: None of the signatures were accepted, reasons: cryptographic signature verification failed: invalid signature when validating ASN.1 encoded signature
+SignatureRejected: image rejected by the signature policy: Upgrading: Pulling: failed to invoke method OpenImage: Signature for identity "ghcr.io/sekirokenjii/apex:45" is not accepted
+SignatureRejected: image rejected by the signature policy: Switching (ostree): failed to invoke method OpenImage: No signature verification policy found for image docker://quay.io/x/y:1
+SignatureRejected: image rejected by the signature policy: Upgrading: Pulling: containers-policy.json specifies a default of `insecureAcceptAnything`; refusing usage
+Network: network error: Upgrading: Pulling: failed to invoke method OpenImage: pinging container registry ghcr.io: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io on 127.0.0.53:53: server misbehaving
+Network: network error: Upgrading: Pulling: reading blob sha256:ab: Get "https://pkg-containers.githubusercontent.com/…": read tcp 10.0.0.2:44310->185.199.108.154:443: read: connection reset by peer
+Network: network error: Upgrading: Pulling: failed to invoke method OpenImage: reading manifest 45 in ghcr.io/sekirokenjii/apex: too many requests to registry
+Network: network error: Upgrading: Pulling: fetching blob: received unexpected HTTP status: 503 Service Unavailable
+Network: network error: Upgrading: Pulling: Get "https://ghcr.io/v2/": net/http: TLS handshake timeout
+Network: network error: Upgrading: Pulling: dial tcp 140.82.114.33:443: connect: network is unreachable
+Unsupported: the installed bootc does not support `bootc upgrade --download-only`: unexpected argument '--progress-fd' found
+Unsupported: the installed bootc does not support `bootc upgrade --download-only`: unrecognized subcommand 'usr-overlay'
+Other: `bootc upgrade --download-only` failed (exit status 1): unexpected argument '--progress-fd' found
+Other: `bootc upgrade --download-only` failed (exit status 1): Upgrading: Deployment contains local rpm-ostree modifications; cannot upgrade via bootc. You can run `rpm-ostree reset` to undo the modifications.
+Other: `bootc upgrade --download-only` failed (exit status 1): Upgrading: No staged deployment found
+Other: `bootc upgrade --download-only` failed (exit status 1): Upgrading: Cannot perform this operation: /sysroot is on a read-only block device (e.g. a live ISO)
+Other: `bootc upgrade --download-only` failed (killed by signal 9): no error output
+Other: `bootc upgrade --download-only` failed (exit status 1): no error output
+NoSpace: not enough disk space: Upgrading: Pulling: NO SPACE LEFT ON DEVICE
+NoSpace: not enough disk space: Upgrading: pinging container registry ghcr.io: write /var/tmp/x: no space left on device
+SignatureRejected: image rejected by the signature policy: Upgrading: reading manifest in ghcr.io/x: A signature was required, but no signature exists

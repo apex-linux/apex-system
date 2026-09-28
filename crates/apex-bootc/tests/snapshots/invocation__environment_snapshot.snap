@@ -1,0 +1,8 @@
+---
+source: crates/apex-bootc/tests/invocation.rs
+expression: out
+---
+env_clear(), then:
+PATH=/usr/bin:/usr/sbin
+LANG=C.UTF-8
+CONTAINERS_POLICY_JSON=/usr/share/apex/containers/policy.json

@@ -1,0 +1,27 @@
+---
+source: crates/apex-updated/tests/engine.rs
+expression: changes
+---
+[
+    (
+        "bash",
+        "x86_64",
+        "removed",
+        "5.3.0-2.fc45",
+        "",
+    ),
+    (
+        "kernel",
+        "x86_64",
+        "upgraded",
+        "6.17.1-300.fc45",
+        "6.17.2-300.fc45",
+    ),
+    (
+        "mutter",
+        "x86_64",
+        "added",
+        "",
+        "51.0-1.fc45",
+    ),
+]

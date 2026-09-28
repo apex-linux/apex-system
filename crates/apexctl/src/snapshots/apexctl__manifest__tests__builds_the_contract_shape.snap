@@ -1,0 +1,60 @@
+---
+source: crates/apexctl/src/manifest.rs
+expression: "String::from_utf8(m.to_json().unwrap()).unwrap()"
+---
+{
+  "schema": 1,
+  "name": "apex",
+  "version": "45.20260924.117",
+  "fedora": 45,
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "base_image": "quay.io/fedora/fedora-bootc@sha256:5555555555555555555555555555555555555555555555555555555555555555",
+  "degraded": [
+    "audio",
+    "fingerprint"
+  ],
+  "packages": [
+    {
+      "name": "NetworkManager",
+      "epoch": 1,
+      "version": "1.54.0",
+      "release": "1.fc45",
+      "arch": "x86_64"
+    },
+    {
+      "name": "bash",
+      "epoch": 0,
+      "version": "5.3.0",
+      "release": "2.fc45",
+      "arch": "x86_64"
+    },
+    {
+      "name": "glibc",
+      "epoch": 0,
+      "version": "2.42",
+      "release": "4.fc45",
+      "arch": "i686"
+    },
+    {
+      "name": "glibc",
+      "epoch": 0,
+      "version": "2.42",
+      "release": "4.fc45",
+      "arch": "x86_64"
+    },
+    {
+      "name": "kernel-core",
+      "epoch": 0,
+      "version": "7.2.9",
+      "release": "300.fc45",
+      "arch": "x86_64"
+    },
+    {
+      "name": "zsh",
+      "epoch": 0,
+      "version": "5.9",
+      "release": "14.fc45",
+      "arch": "x86_64"
+    }
+  ]
+}

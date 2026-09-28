@@ -1,0 +1,36 @@
+[package]
+name = "apex-dbus"
+description = "The io.github.sekirokenjii.Apex.Update1 D-Bus contract and its zbus proxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Also compile zbus's async-io backend. Clients driven by the GLib main loop (the M2 Updates
+# app) enable this: zbus 5.19 then uses async-io for every connection built outside a tokio
+# runtime, so no tokio runtime is needed. See the "Runtime" section of the crate docs.
+async-io = ["zbus/async-io"]
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+# The workspace entry selects zbus's tokio backend (default-features = false): zbus 5.19 does not
+# compile without a backend, and daemons/CLIs run on tokio current_thread.
+zbus.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+# Well-formedness pass over the contract XML (zbus_xml's own parser skips comments unchecked).
+quick-xml = "0.42.0"
+tokio = { workspace = true, features = ["net"] }
+# Peer-to-peer connections let the wire tests run the real proxy without a bus daemon.
+zbus = { workspace = true, features = ["p2p"] }
+zbus_xml = "5.2.1"
+
+[lints]
+workspace = true

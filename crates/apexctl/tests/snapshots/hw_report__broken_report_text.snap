@@ -1,0 +1,17 @@
+---
+source: crates/apexctl/tests/hw_report.rs
+expression: render(&report)
+---
+FAIL  Audio fix     hwC1D0 does not hold the patch firmware's verbs: the kernel did not load it (journalctl -k | grep 'patch firmware')
+WARN  Charge limit  BAT0 charges to 100 %: the limit is off (Settings > Power > Preserve Battery Health)
+FAIL  UPower        UPower does not see the charge limit (the BAT0 udev re-trigger did not run)
+FAIL  dGPU          runtime power management is off (power/control = on); the dGPU never sleeps
+FAIL  Fingerprint   ELAN reader 04f3:0c6e is not on the USB bus
+WARN  Secure Boot   Secure Boot is disabled
+
+Expected in init_verbs:
+  0x20 0x500 0x001b
+  0x20 0x400 0x4e4b
+Loaded:
+  (none)
+snd_hda_intel patch=apex/alc294-m7400qc.fw,apex/alc294-m7400qc.fw,apex/alc294-m7400qc.fw,apex/alc294-m7400qc.fw

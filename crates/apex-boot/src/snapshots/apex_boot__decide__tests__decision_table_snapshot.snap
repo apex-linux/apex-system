@@ -1,0 +1,285 @@
+---
+source: crates/apex-boot/src/decide.rs
+expression: table
+---
+armed | counter | booted | entry0 | checks | session => decision
+false | None | target | target | green | false => green (report green T)
+false | None | target | target | green | true => green (report green T)
+false | None | target | target | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | None | target | target | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | None | target | previous | green | false => green (report green T)
+false | None | target | previous | green | true => green (report green T)
+false | None | target | previous | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | None | target | previous | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | None | target | ? | green | false => green (report green T)
+false | None | target | ? | green | true => green (report green T)
+false | None | target | ? | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | None | target | ? | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | None | previous | target | green | false => green (report green P)
+false | None | previous | target | green | true => green (report green P)
+false | None | previous | target | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | None | previous | target | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | None | previous | previous | green | false => green (report green P)
+false | None | previous | previous | green | true => green (report green P)
+false | None | previous | previous | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | None | previous | previous | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | None | previous | ? | green | false => green (report green P)
+false | None | previous | ? | green | true => green (report green P)
+false | None | previous | ? | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | None | previous | ? | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | None | unknown | ? | green | false => green (report green)
+false | None | unknown | ? | green | true => green (report green)
+false | None | unknown | ? | red | false => red-unarmed (report red-unarmed); failed: session, failed-units
+false | None | unknown | ? | red | true => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(3) | target | target | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(3) | target | target | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(3) | target | target | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(3) | target | target | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(3) | target | previous | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(3) | target | previous | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(3) | target | previous | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(3) | target | previous | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(3) | target | ? | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(3) | target | ? | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(3) | target | ? | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(3) | target | ? | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(3) | previous | target | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(3) | previous | target | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(3) | previous | target | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(3) | previous | target | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(3) | previous | previous | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(3) | previous | previous | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(3) | previous | previous | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(3) | previous | previous | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(3) | previous | ? | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(3) | previous | ? | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(3) | previous | ? | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(3) | previous | ? | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(3) | unknown | ? | green | false => green (report green); grubenv: unset apex_counter
+false | Some(3) | unknown | ? | green | true => green (report green); grubenv: unset apex_counter
+false | Some(3) | unknown | ? | red | false => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(3) | unknown | ? | red | true => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(2) | target | target | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(2) | target | target | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(2) | target | target | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(2) | target | target | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(2) | target | previous | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(2) | target | previous | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(2) | target | previous | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(2) | target | previous | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(2) | target | ? | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(2) | target | ? | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(2) | target | ? | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(2) | target | ? | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(2) | previous | target | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(2) | previous | target | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(2) | previous | target | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(2) | previous | target | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(2) | previous | previous | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(2) | previous | previous | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(2) | previous | previous | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(2) | previous | previous | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(2) | previous | ? | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(2) | previous | ? | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(2) | previous | ? | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(2) | previous | ? | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(2) | unknown | ? | green | false => green (report green); grubenv: unset apex_counter
+false | Some(2) | unknown | ? | green | true => green (report green); grubenv: unset apex_counter
+false | Some(2) | unknown | ? | red | false => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(2) | unknown | ? | red | true => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(0) | target | target | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(0) | target | target | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(0) | target | target | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(0) | target | target | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(0) | target | previous | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(0) | target | previous | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(0) | target | previous | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(0) | target | previous | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(0) | target | ? | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(0) | target | ? | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(0) | target | ? | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(0) | target | ? | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(0) | previous | target | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(0) | previous | target | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(0) | previous | target | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(0) | previous | target | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(0) | previous | previous | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(0) | previous | previous | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(0) | previous | previous | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(0) | previous | previous | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(0) | previous | ? | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(0) | previous | ? | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(0) | previous | ? | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(0) | previous | ? | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(0) | unknown | ? | green | false => green (report green); grubenv: unset apex_counter
+false | Some(0) | unknown | ? | green | true => green (report green); grubenv: unset apex_counter
+false | Some(0) | unknown | ? | red | false => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(0) | unknown | ? | red | true => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(-1) | target | target | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(-1) | target | target | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(-1) | target | target | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(-1) | target | target | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(-1) | target | previous | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(-1) | target | previous | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(-1) | target | previous | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(-1) | target | previous | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(-1) | target | ? | green | false => green (report green T); grubenv: unset apex_counter
+false | Some(-1) | target | ? | green | true => green (report green T); grubenv: unset apex_counter
+false | Some(-1) | target | ? | red | false => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(-1) | target | ? | red | true => red-unarmed (report red-unarmed T); failed: session, failed-units
+false | Some(-1) | previous | target | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(-1) | previous | target | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(-1) | previous | target | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(-1) | previous | target | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(-1) | previous | previous | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(-1) | previous | previous | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(-1) | previous | previous | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(-1) | previous | previous | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(-1) | previous | ? | green | false => green (report green P); grubenv: unset apex_counter
+false | Some(-1) | previous | ? | green | true => green (report green P); grubenv: unset apex_counter
+false | Some(-1) | previous | ? | red | false => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(-1) | previous | ? | red | true => red-unarmed (report red-unarmed P); failed: session, failed-units
+false | Some(-1) | unknown | ? | green | false => green (report green); grubenv: unset apex_counter
+false | Some(-1) | unknown | ? | green | true => green (report green); grubenv: unset apex_counter
+false | Some(-1) | unknown | ? | red | false => red-unarmed (report red-unarmed); failed: session, failed-units
+false | Some(-1) | unknown | ? | red | true => red-unarmed (report red-unarmed); failed: session, failed-units
+true | None | target | target | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target
+true | None | target | target | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target
+true | None | target | target | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units
+true | None | target | target | red | true => red-armed-session (report red T); failed: session, failed-units
+true | None | target | previous | green | false => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target
+true | None | target | previous | green | true => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target
+true | None | target | previous | red | false => inconsistent (report red-unarmed T); grubenv: unset apex_target; failed: session, failed-units
+true | None | target | previous | red | true => inconsistent (report red-unarmed T); grubenv: unset apex_target; failed: session, failed-units
+true | None | target | ? | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target
+true | None | target | ? | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target
+true | None | target | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units
+true | None | target | ? | red | true => red-armed-session (report red T); failed: session, failed-units
+true | None | previous | target | green | false => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target
+true | None | previous | target | green | true => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target
+true | None | previous | target | red | false => inconsistent (report red-unarmed P); grubenv: unset apex_target; failed: session, failed-units
+true | None | previous | target | red | true => inconsistent (report red-unarmed P); grubenv: unset apex_target; failed: session, failed-units
+true | None | previous | previous | green | false => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target
+true | None | previous | previous | green | true => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target
+true | None | previous | previous | red | false => inconsistent (report red-unarmed P); grubenv: unset apex_target; failed: session, failed-units
+true | None | previous | previous | red | true => inconsistent (report red-unarmed P); grubenv: unset apex_target; failed: session, failed-units
+true | None | previous | ? | green | false => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target
+true | None | previous | ? | green | true => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target
+true | None | previous | ? | red | false => inconsistent (report red-unarmed P); grubenv: unset apex_target; failed: session, failed-units
+true | None | previous | ? | red | true => inconsistent (report red-unarmed P); grubenv: unset apex_target; failed: session, failed-units
+true | None | unknown | ? | green | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: booted-digest
+true | None | unknown | ? | green | true => red-armed-session (report red T); failed: booted-digest
+true | None | unknown | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units, booted-digest
+true | None | unknown | ? | red | true => red-armed-session (report red T); failed: session, failed-units, booted-digest
+true | Some(3) | target | target | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(3) | target | target | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(3) | target | target | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units
+true | Some(3) | target | target | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(3) | target | previous | green | false => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(3) | target | previous | green | true => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(3) | target | previous | red | false => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(3) | target | previous | red | true => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(3) | target | ? | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(3) | target | ? | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(3) | target | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units
+true | Some(3) | target | ? | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(3) | previous | target | green | false => armed-for-next-boot (report green P)
+true | Some(3) | previous | target | green | true => armed-for-next-boot (report green P)
+true | Some(3) | previous | target | red | false => armed-for-next-boot (report red-unarmed P); failed: session, failed-units
+true | Some(3) | previous | target | red | true => armed-for-next-boot (report red-unarmed P); failed: session, failed-units
+true | Some(3) | previous | previous | green | false => armed-for-next-boot (report green P)
+true | Some(3) | previous | previous | green | true => armed-for-next-boot (report green P)
+true | Some(3) | previous | previous | red | false => armed-for-next-boot (report red-unarmed P); failed: session, failed-units
+true | Some(3) | previous | previous | red | true => armed-for-next-boot (report red-unarmed P); failed: session, failed-units
+true | Some(3) | previous | ? | green | false => armed-for-next-boot (report green P)
+true | Some(3) | previous | ? | green | true => armed-for-next-boot (report green P)
+true | Some(3) | previous | ? | red | false => armed-for-next-boot (report red-unarmed P); failed: session, failed-units
+true | Some(3) | previous | ? | red | true => armed-for-next-boot (report red-unarmed P); failed: session, failed-units
+true | Some(3) | unknown | ? | green | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: booted-digest
+true | Some(3) | unknown | ? | green | true => red-armed-session (report red T); failed: booted-digest
+true | Some(3) | unknown | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units, booted-digest
+true | Some(3) | unknown | ? | red | true => red-armed-session (report red T); failed: session, failed-units, booted-digest
+true | Some(2) | target | target | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | target | target | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | target | target | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units; reboot
+true | Some(2) | target | target | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(2) | target | previous | green | false => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | target | previous | green | true => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | target | previous | red | false => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(2) | target | previous | red | true => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(2) | target | ? | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | target | ? | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | target | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units; reboot
+true | Some(2) | target | ? | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(2) | previous | target | green | false => target-skipped (report green P)
+true | Some(2) | previous | target | green | true => target-skipped (report green P)
+true | Some(2) | previous | target | red | false => target-skipped (report red-unarmed P); failed: session, failed-units
+true | Some(2) | previous | target | red | true => target-skipped (report red-unarmed P); failed: session, failed-units
+true | Some(2) | previous | previous | green | false => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | previous | previous | green | true => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(2) | previous | previous | red | false => inconsistent (report red-unarmed P); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(2) | previous | previous | red | true => inconsistent (report red-unarmed P); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(2) | previous | ? | green | false => target-skipped (report green P)
+true | Some(2) | previous | ? | green | true => target-skipped (report green P)
+true | Some(2) | previous | ? | red | false => target-skipped (report red-unarmed P); failed: session, failed-units
+true | Some(2) | previous | ? | red | true => target-skipped (report red-unarmed P); failed: session, failed-units
+true | Some(2) | unknown | ? | green | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: booted-digest
+true | Some(2) | unknown | ? | green | true => red-armed-session (report red T); failed: booted-digest
+true | Some(2) | unknown | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units, booted-digest
+true | Some(2) | unknown | ? | red | true => red-armed-session (report red T); failed: session, failed-units, booted-digest
+true | Some(0) | target | target | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | target | target | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | target | target | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units; reboot
+true | Some(0) | target | target | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(0) | target | previous | green | false => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | target | previous | green | true => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | target | previous | red | false => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(0) | target | previous | red | true => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(0) | target | ? | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | target | ? | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | target | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units; reboot
+true | Some(0) | target | ? | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(0) | previous | target | green | false => target-skipped (report green P)
+true | Some(0) | previous | target | green | true => target-skipped (report green P)
+true | Some(0) | previous | target | red | false => target-skipped (report red-unarmed P); failed: session, failed-units
+true | Some(0) | previous | target | red | true => target-skipped (report red-unarmed P); failed: session, failed-units
+true | Some(0) | previous | previous | green | false => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | previous | previous | green | true => inconsistent (report green P); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(0) | previous | previous | red | false => inconsistent (report red-unarmed P); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(0) | previous | previous | red | true => inconsistent (report red-unarmed P); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(0) | previous | ? | green | false => target-skipped (report green P); grubenv: set apex_counter=3
+true | Some(0) | previous | ? | green | true => target-skipped (report green P); grubenv: set apex_counter=3
+true | Some(0) | previous | ? | red | false => target-skipped (report red-unarmed P); grubenv: set apex_counter=3; failed: session, failed-units
+true | Some(0) | previous | ? | red | true => target-skipped (report red-unarmed P); grubenv: set apex_counter=3; failed: session, failed-units
+true | Some(0) | unknown | ? | green | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: booted-digest
+true | Some(0) | unknown | ? | green | true => red-armed-session (report red T); failed: booted-digest
+true | Some(0) | unknown | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units, booted-digest
+true | Some(0) | unknown | ? | red | true => red-armed-session (report red T); failed: session, failed-units, booted-digest
+true | Some(-1) | target | target | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(-1) | target | target | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(-1) | target | target | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units
+true | Some(-1) | target | target | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(-1) | target | previous | green | false => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(-1) | target | previous | green | true => inconsistent (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(-1) | target | previous | red | false => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(-1) | target | previous | red | true => inconsistent (report red-unarmed T); grubenv: unset apex_target, unset apex_counter; failed: session, failed-units
+true | Some(-1) | target | ? | green | false => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(-1) | target | ? | green | true => green (report green T); grubenv: set apex_ok=1, unset apex_target, unset apex_counter
+true | Some(-1) | target | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units
+true | Some(-1) | target | ? | red | true => red-armed-session (report red T); failed: session, failed-units
+true | Some(-1) | previous | target | green | false => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | target | green | true => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | target | red | false => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | target | red | true => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | previous | green | false => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | previous | green | true => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | previous | red | false => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | previous | red | true => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | ? | green | false => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | ? | green | true => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | ? | red | false => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | previous | ? | red | true => fallback (report fallback T); grubenv: set apex_counter=3, unset apex_target, unset apex_counter
+true | Some(-1) | unknown | ? | green | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: booted-digest
+true | Some(-1) | unknown | ? | green | true => red-armed-session (report red T); failed: booted-digest
+true | Some(-1) | unknown | ? | red | false => red-armed-no-session (report red T); grubenv: set apex_ok=0; failed: session, failed-units, booted-digest
+true | Some(-1) | unknown | ? | red | true => red-armed-session (report red T); failed: session, failed-units, booted-digest

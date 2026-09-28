@@ -1,0 +1,659 @@
+---
+source: crates/apexctl/tests/codec_fixture.rs
+expression: dump
+---
+{
+  "codec": "Realtek ALC294",
+  "address": 0,
+  "vendor_id": 283902612,
+  "subsystem_id": 272833202,
+  "revision_id": 1048580,
+  "nodes": [
+    {
+      "nid": 2,
+      "kind": "Audio Output",
+      "wcaps": 1053,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 3,
+      "kind": "Audio Output",
+      "wcaps": 1053,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 4,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 5,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 6,
+      "kind": "Audio Output",
+      "wcaps": 1041,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 7,
+      "kind": "Audio Input",
+      "wcaps": 1049883,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        36
+      ],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 8,
+      "kind": "Audio Input",
+      "wcaps": 1049883,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        35
+      ],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 9,
+      "kind": "Audio Input",
+      "wcaps": 1049883,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        34
+      ],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 10,
+      "kind": "Audio Input",
+      "wcaps": 1050385,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        31
+      ],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 11,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 12,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 13,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 14,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 15,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 16,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 17,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 18,
+      "kind": "Pin Complex",
+      "wcaps": 4195339,
+      "pin_caps": 32,
+      "pin_default": {
+        "value": 2426798384,
+        "description": "[Fixed] Mic at Int N/A"
+      },
+      "pin_ctls": {
+        "value": 32,
+        "flags": [
+          "IN"
+        ]
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 19,
+      "kind": "Pin Complex",
+      "wcaps": 4195339,
+      "pin_caps": 32,
+      "pin_default": {
+        "value": 1073741824,
+        "description": "[N/A] Line Out at Ext N/A"
+      },
+      "pin_ctls": {
+        "value": 0,
+        "flags": []
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 20,
+      "kind": "Pin Complex",
+      "wcaps": 4195725,
+      "pin_caps": 65552,
+      "pin_default": {
+        "value": 2417426704,
+        "description": "[Fixed] Speaker at Int N/A"
+      },
+      "pin_ctls": {
+        "value": 64,
+        "flags": [
+          "OUT"
+        ]
+      },
+      "eapd": {
+        "value": 2,
+        "flags": [
+          "EAPD"
+        ]
+      },
+      "connections": [
+        2
+      ],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 21,
+      "kind": "Pin Complex",
+      "wcaps": 4195725,
+      "pin_caps": 65564,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 0,
+        "flags": []
+      },
+      "eapd": {
+        "value": 2,
+        "flags": [
+          "EAPD"
+        ]
+      },
+      "connections": [
+        2,
+        3,
+        6
+      ],
+      "selected_connection": 2,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 22,
+      "kind": "Pin Complex",
+      "wcaps": 4195725,
+      "pin_caps": 65556,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 0,
+        "flags": []
+      },
+      "eapd": {
+        "value": 2,
+        "flags": [
+          "EAPD"
+        ]
+      },
+      "connections": [
+        2,
+        3
+      ],
+      "selected_connection": 2,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 23,
+      "kind": "Pin Complex",
+      "wcaps": 4195725,
+      "pin_caps": 65564,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 0,
+        "flags": []
+      },
+      "eapd": {
+        "value": 2,
+        "flags": [
+          "EAPD"
+        ]
+      },
+      "connections": [
+        2,
+        3,
+        6
+      ],
+      "selected_connection": 2,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 24,
+      "kind": "Pin Complex",
+      "wcaps": 4195457,
+      "pin_caps": 36,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 0,
+        "flags": []
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 25,
+      "kind": "Pin Complex",
+      "wcaps": 4195467,
+      "pin_caps": 14116,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 32,
+        "flags": [
+          "IN",
+          "VREF_HIZ"
+        ]
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 26,
+      "kind": "Pin Complex",
+      "wcaps": 4195467,
+      "pin_caps": 14116,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 0,
+        "flags": [
+          "VREF_HIZ"
+        ]
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 27,
+      "kind": "Pin Complex",
+      "wcaps": 4195727,
+      "pin_caps": 79668,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 32,
+        "flags": [
+          "IN",
+          "VREF_HIZ"
+        ]
+      },
+      "eapd": {
+        "value": 2,
+        "flags": [
+          "EAPD"
+        ]
+      },
+      "connections": [
+        2,
+        3
+      ],
+      "selected_connection": 2,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 28,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 29,
+      "kind": "Pin Complex",
+      "wcaps": 4195328,
+      "pin_caps": 32,
+      "pin_default": {
+        "value": 1080441605,
+        "description": "[N/A] Modem Line at Ext N/A"
+      },
+      "pin_ctls": {
+        "value": 32,
+        "flags": [
+          "IN"
+        ]
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 30,
+      "kind": "Pin Complex",
+      "wcaps": 4195713,
+      "pin_caps": 20,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 64,
+        "flags": [
+          "OUT"
+        ]
+      },
+      "eapd": null,
+      "connections": [
+        6
+      ],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 31,
+      "kind": "Pin Complex",
+      "wcaps": 4195969,
+      "pin_caps": 36,
+      "pin_default": {
+        "value": 1091637744,
+        "description": "[N/A] Speaker at Ext Rear"
+      },
+      "pin_ctls": {
+        "value": 32,
+        "flags": [
+          "IN"
+        ]
+      },
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 32,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728704,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": 130,
+      "coefs": []
+    },
+    {
+      "nid": 33,
+      "kind": "Pin Complex",
+      "wcaps": 4195725,
+      "pin_caps": 65564,
+      "pin_default": {
+        "value": 69275680,
+        "description": "[Jack] HP Out at Ext Right"
+      },
+      "pin_ctls": {
+        "value": 192,
+        "flags": [
+          "OUT",
+          "HP"
+        ]
+      },
+      "eapd": {
+        "value": 2,
+        "flags": [
+          "EAPD"
+        ]
+      },
+      "connections": [
+        2,
+        3
+      ],
+      "selected_connection": 3,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 34,
+      "kind": "Audio Selector",
+      "wcaps": 3145985,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        25,
+        26,
+        27,
+        18
+      ],
+      "selected_connection": 25,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 35,
+      "kind": "Audio Selector",
+      "wcaps": 3145985,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        25,
+        26,
+        27,
+        19
+      ],
+      "selected_connection": 25,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 36,
+      "kind": "Audio Selector",
+      "wcaps": 3145985,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [
+        18,
+        19,
+        24
+      ],
+      "selected_connection": 18,
+      "ncoeff": null,
+      "coefs": []
+    },
+    {
+      "nid": 37,
+      "kind": "Vendor Defined Widget",
+      "wcaps": 15728640,
+      "pin_caps": null,
+      "pin_default": null,
+      "pin_ctls": null,
+      "eapd": null,
+      "connections": [],
+      "selected_connection": null,
+      "ncoeff": null,
+      "coefs": []
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Polkit actions of the Apex update service (M1 contract §8). Installed in
+  /usr/share/polkit-1/actions/.
+
+  Routine actions (check, download, apply, discard) are allowed for the active local user
+  without a password: they only move the system between versions the channel signed and
+  the user reviewed, like a reboot would. The discard action also guards
+  AcknowledgeHealthFailure (M1 contract §8): dismissing the warning about a failed update
+  is as routine as cancelling one. Rollback, changing the channel and downgrading
+  need an administrator every time (auth_admin, never auth_admin_keep, so one prompt in a
+  shared process such as gnome-shell does not authorize later calls). Inactive and remote
+  sessions get nothing. apex-updated checks the caller's system bus name, never a PID.
+-->
+<policyconfig>
+  <vendor>Apex</vendor>
+  <vendor_url>https://github.com/SekiroKenjii/apex-fedora</vendor_url>
+  <icon_name>system-software-update</icon_name>
+
+  <action id="io.github.sekirokenjii.apex.update.check">
+    <description>Check for system updates</description>
+    <message>Authentication is required to check for system updates</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.sekirokenjii.apex.update.download">
+    <description>Download system updates</description>
+    <message>Authentication is required to download system updates</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.sekirokenjii.apex.update.apply">
+    <description>Install a downloaded system update at the next restart</description>
+    <message>Authentication is required to install the downloaded system update</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <!-- DiscardStaged and AcknowledgeHealthFailure. -->
+  <action id="io.github.sekirokenjii.apex.update.discard">
+    <description>Cancel the installation of a downloaded system update, or dismiss the warning about a failed one</description>
+    <message>Authentication is required to cancel the system update or dismiss its warning</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.sekirokenjii.apex.update.rollback">
+    <description>Go back to the previous system version</description>
+    <message>Authentication is required to go back to the previous system version</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.sekirokenjii.apex.update.switch-channel">
+    <description>Change the system update channel</description>
+    <message>Authentication is required to change the system update channel</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
+  <action id="io.github.sekirokenjii.apex.update.downgrade">
+    <description>Install an older system version</description>
+    <message>Authentication is required to install an older system version</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

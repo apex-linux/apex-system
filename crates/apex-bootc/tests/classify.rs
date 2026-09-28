@@ -1,0 +1,215 @@
+//! Error classification from exit status and stderr, with stderr in the shape bootc
+//! prints it (`error: <context>: <cause>`, one line) wrapping the library messages the
+//! classifier recognises. See `src/error.rs` for where each message comes from.
+
+use std::fmt::Write as _;
+
+use apex_bootc::{CommandKind, ErrorKind, ExitState, classify_failure};
+
+const ONE: ExitState = ExitState::Code(1);
+
+/// `(exit, stderr, expected kind)`.
+const CASES: &[(ExitState, &str, ErrorKind)] = &[
+    // Not a bootc host
+    (
+        ONE,
+        "error: Upgrading: Initializing storage: System not booted via bootc",
+        ErrorKind::NotBootcHost,
+    ),
+    (
+        ONE,
+        "error: Rolling back: Not currently booted into an OSTree system",
+        ErrorKind::NotBootcHost,
+    ),
+    // Lock contention (only visible if a future bootc or an ostree CLI prints it)
+    (
+        ONE,
+        "Waiting for sysroot lock...\nerror: Upgrading: interrupted",
+        ErrorKind::Busy,
+    ),
+    (
+        ONE,
+        "error: Transaction in progress: deploy\n You can cancel the current transaction with `rpm-ostree cancel`",
+        ErrorKind::Busy,
+    ),
+    // Disk space
+    (
+        ONE,
+        "error: Upgrading: Pulling: Importing: Writing content object: No space left on device (os error 28)",
+        ErrorKind::NoSpace,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Pulling: Insufficient free space for ghcr.io/sekirokenjii/apex:45 (available: 1.2 GB required: 3.4 GB)",
+        ErrorKind::NoSpace,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Staging: min-free-space-percent '3%' would be exceeded, at least 13.2 MB requested",
+        ErrorKind::NoSpace,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Staging: min-free-space-size 500MB would be exceeded",
+        ErrorKind::NoSpace,
+    ),
+    // Signature policy (containers/image via the image proxy)
+    (
+        ONE,
+        "error: Upgrading: Pulling: Creating importer: failed to invoke method OpenImage: A signature was required, but no signature exists",
+        ErrorKind::SignatureRejected,
+    ),
+    (
+        ONE,
+        "error: Switching (ostree): Pulling: failed to invoke method OpenImage: Source image rejected: Running image docker://ghcr.io/evil/apex:45 is rejected by policy.",
+        ErrorKind::SignatureRejected,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Pulling: failed to invoke method OpenImage: None of the signatures were accepted, reasons: cryptographic signature verification failed: invalid signature when validating ASN.1 encoded signature",
+        ErrorKind::SignatureRejected,
+    ),
+    (
+        ONE,
+        r#"error: Upgrading: Pulling: failed to invoke method OpenImage: Signature for identity "ghcr.io/sekirokenjii/apex:45" is not accepted"#,
+        ErrorKind::SignatureRejected,
+    ),
+    (
+        ONE,
+        "error: Switching (ostree): failed to invoke method OpenImage: No signature verification policy found for image docker://quay.io/x/y:1",
+        ErrorKind::SignatureRejected,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Pulling: containers-policy.json specifies a default of `insecureAcceptAnything`; refusing usage",
+        ErrorKind::SignatureRejected,
+    ),
+    // Network
+    (
+        ONE,
+        r#"error: Upgrading: Pulling: failed to invoke method OpenImage: pinging container registry ghcr.io: Get "https://ghcr.io/v2/": dial tcp: lookup ghcr.io on 127.0.0.53:53: server misbehaving"#,
+        ErrorKind::Network,
+    ),
+    (
+        ONE,
+        r#"error: Upgrading: Pulling: reading blob sha256:ab: Get "https://pkg-containers.githubusercontent.com/…": read tcp 10.0.0.2:44310->185.199.108.154:443: read: connection reset by peer"#,
+        ErrorKind::Network,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Pulling: failed to invoke method OpenImage: reading manifest 45 in ghcr.io/sekirokenjii/apex: too many requests to registry",
+        ErrorKind::Network,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Pulling: fetching blob: received unexpected HTTP status: 503 Service Unavailable",
+        ErrorKind::Network,
+    ),
+    (
+        ONE,
+        r#"error: Upgrading: Pulling: Get "https://ghcr.io/v2/": net/http: TLS handshake timeout"#,
+        ErrorKind::Network,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Pulling: dial tcp 140.82.114.33:443: connect: network is unreachable",
+        ErrorKind::Network,
+    ),
+    // Usage errors (clap, exit status 2) only count as unsupported with status 2
+    (
+        ExitState::Code(2),
+        "error: unexpected argument '--progress-fd' found\n\n  tip: to pass '--progress-fd' as a value, use '-- --progress-fd'\n\nUsage: bootc upgrade [OPTIONS]\n\nFor more information, try '--help'.\n",
+        ErrorKind::Unsupported,
+    ),
+    (
+        ExitState::Code(2),
+        "error: unrecognized subcommand 'usr-overlay'\n\nUsage: bootc <COMMAND>\n",
+        ErrorKind::Unsupported,
+    ),
+    (
+        ONE,
+        "error: unexpected argument '--progress-fd' found",
+        ErrorKind::Other,
+    ),
+    // Everything else
+    (
+        ONE,
+        "error: Upgrading: Deployment contains local rpm-ostree modifications; cannot upgrade via bootc. You can run `rpm-ostree reset` to undo the modifications.",
+        ErrorKind::Other,
+    ),
+    (
+        ONE,
+        "error: Upgrading: No staged deployment found",
+        ErrorKind::Other,
+    ),
+    (
+        ONE,
+        "error: Upgrading: Cannot perform this operation: /sysroot is on a read-only block device (e.g. a live ISO)",
+        ErrorKind::Other,
+    ),
+    (ExitState::Signal(9), "", ErrorKind::Other),
+    (ONE, "", ErrorKind::Other),
+    // Colour codes and case do not matter
+    (
+        ONE,
+        "\u{1b}[31merror: \u{1b}[0mUpgrading: Pulling: NO SPACE LEFT ON DEVICE",
+        ErrorKind::NoSpace,
+    ),
+    // Precedence: a disk-full error during a network fetch is about disk space; a
+    // signature rejection mentioning the registry is about the signature.
+    (
+        ONE,
+        "error: Upgrading: pinging container registry ghcr.io: write /var/tmp/x: no space left on device",
+        ErrorKind::NoSpace,
+    ),
+    (
+        ONE,
+        "error: Upgrading: reading manifest in ghcr.io/x: A signature was required, but no signature exists",
+        ErrorKind::SignatureRejected,
+    ),
+];
+
+#[test]
+fn classifies_sample_stderr() {
+    for (exit, stderr, expected) in CASES {
+        let err = classify_failure(CommandKind::UpgradeDownloadOnly, *exit, stderr.as_bytes());
+        assert_eq!(err.kind(), *expected, "{stderr:?} ({exit}) -> {err}");
+    }
+}
+
+#[test]
+fn classification_snapshot() {
+    let mut out = String::new();
+    for (exit, stderr, _) in CASES {
+        let err = classify_failure(CommandKind::UpgradeDownloadOnly, *exit, stderr.as_bytes());
+        writeln!(out, "{:?}: {err}", err.kind()).unwrap();
+    }
+    insta::assert_snapshot!(out);
+}
+
+#[test]
+fn invalid_utf8_and_huge_stderr_are_handled() {
+    let mut bytes = b"error: Upgrading: \xff\xfe No space left on device".to_vec();
+    let err = classify_failure(CommandKind::Status, ONE, &bytes);
+    assert_eq!(err.kind(), ErrorKind::NoSpace);
+    bytes = vec![b'x'; 2 << 20];
+    let err = classify_failure(CommandKind::Status, ONE, &bytes);
+    assert_eq!(err.kind(), ErrorKind::Other);
+    assert!(err.to_string().len() < 1024);
+}
+
+#[test]
+fn transient_errors() {
+    let network = classify_failure(
+        CommandKind::UpgradeCheck,
+        ONE,
+        b"error: dial tcp: i/o timeout",
+    );
+    assert!(network.is_transient());
+    let signature = classify_failure(
+        CommandKind::UpgradeCheck,
+        ONE,
+        b"error: A signature was required, but no signature exists",
+    );
+    assert!(!signature.is_transient());
+}

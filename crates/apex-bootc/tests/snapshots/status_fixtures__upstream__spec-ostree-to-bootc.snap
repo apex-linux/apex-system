@@ -1,0 +1,42 @@
+---
+source: crates/apex-bootc/tests/status_fixtures.rs
+expression: project(&host)
+---
+{
+  "api_version": "org.containers.bootc/v1alpha1",
+  "boot_order": "Default",
+  "bootc_host": false,
+  "booted": {
+    "cached_update": null,
+    "digest": null,
+    "download_only": false,
+    "image": null,
+    "incompatible": false,
+    "pinned": false,
+    "root": "/sysroot/ostree/deploy/default/deploy/f9fa3a553ceaaaf30cf85bfe7eed46a822f7b8fd7e14c1e3389cbc3f6d27f791.0",
+    "soft_reboot_capable": false,
+    "timestamp_unix": null,
+    "version": null
+  },
+  "incompatible": false,
+  "other_deployments": [],
+  "rollback": null,
+  "rollback_queued": false,
+  "spec_image": "registry:quay.io/centos-bootc/centos-bootc:stream9",
+  "spec_signature": null,
+  "staged": {
+    "cached_update": null,
+    "digest": "sha256:47e5ed613a970b6574bfa954ab25bb6e85656552899aa518b5961d9645102b38",
+    "download_only": false,
+    "image": "quay.io/centos-bootc/centos-bootc:stream9",
+    "incompatible": false,
+    "pinned": false,
+    "root": "/sysroot/ostree/deploy/default/deploy/05cbf6dcae32e7a1c5a0774a648a073a5834a305ca92204b53fb6c281fe49db1.0",
+    "soft_reboot_capable": false,
+    "timestamp_unix": null,
+    "version": "stream9.20240807.0"
+  },
+  "staged_download_only": false,
+  "type": null,
+  "usr_overlay": null
+}

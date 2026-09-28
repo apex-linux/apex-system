@@ -1,0 +1,84 @@
+---
+source: crates/apex-updated/tests/engine.rs
+expression: h.properties()
+---
+Properties {
+    state: Available,
+    progress: -1.0,
+    booted: Deployment {
+        image: Some(
+            "ghcr.io/sekirokenjii/apex:45",
+        ),
+        digest: Some(
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ),
+        version: Some(
+            "45.20260920.1",
+        ),
+        timestamp: Some(
+            1790219565,
+        ),
+        pinned: Some(
+            false,
+        ),
+        download_only: None,
+        degraded: Some(
+            [
+                "audio",
+            ],
+        ),
+    },
+    staged: Deployment {
+        image: None,
+        digest: None,
+        version: None,
+        timestamp: None,
+        pinned: None,
+        download_only: None,
+        degraded: None,
+    },
+    rollback: Deployment {
+        image: Some(
+            "ghcr.io/sekirokenjii/apex:45",
+        ),
+        digest: Some(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+        version: Some(
+            "45.20260918.1",
+        ),
+        timestamp: Some(
+            1790219565,
+        ),
+        pinned: Some(
+            false,
+        ),
+        download_only: None,
+        degraded: Some(
+            [
+                "audio",
+            ],
+        ),
+    },
+    available: Deployment {
+        image: Some(
+            "ghcr.io/sekirokenjii/apex:45",
+        ),
+        digest: Some(
+            "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ),
+        version: Some(
+            "45.20260924.9",
+        ),
+        timestamp: None,
+        pinned: None,
+        download_only: None,
+        degraded: None,
+    },
+    channel: Stable,
+    last_check: 1790299880,
+    deferred_reason: "",
+    last_error: "",
+    stale: false,
+    health_failure: "",
+}

@@ -1,0 +1,208 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  Apex update service contract (ADR 0008, ADR 0009). apex-updated is the only process
+  that runs bootc; every client (apexctl, apex-boot-assess, the Updates app and the
+  session notifier) uses this interface.
+
+  Object path: /io/github/sekirokenjii/Apex/Update1
+  Bus:         system bus, well-known name io.github.sekirokenjii.Apex.Update1
+  Activation:  D-Bus activated (SystemdService=apex-updated.service); exits when idle.
+
+  There are NO writable properties. Every mutation is a method guarded by polkit
+  (subject = the caller's system-bus-name, never a PID).
+
+  Deployment dictionaries (a{sv}) use these keys, all optional:
+    "image"      s  image reference, e.g. "ghcr.io/sekirokenjii/apex:45"
+    "digest"     s  manifest digest "sha256:..."
+    "version"    s  org.opencontainers.image.version, e.g. "45.20260924.1"
+    "timestamp"  t  build time, seconds since the Unix epoch
+    "pinned"     b  deployment is pinned
+    "download-only" b  (staged only) the stage is locked and will not be booted
+    "degraded"   as components shipped in degraded form ("audio", "fingerprint", ...),
+                    read from the deployment's /usr/share/apex/manifest.json (the same
+                    values as the io.github.sekirokenjii.apex.degraded label); absent for
+                    Available, which has no local manifest
+  An empty dictionary means "no such deployment".
+
+  Errors are D-Bus errors named io.github.sekirokenjii.Apex.Update1.Error.<Kind>, with
+  Kind one of: Busy, NotAuthorized, PolicyDenied, NothingToDo, InvalidArgument,
+  DigestMismatch, Bootc, Network, Internal. For PolicyDenied the message is a
+  human-readable gate reason suitable for display.
+
+  Polkit actions (defaults for an active local session):
+    io.github.sekirokenjii.apex.update.check     yes
+    io.github.sekirokenjii.apex.update.download  yes
+    io.github.sekirokenjii.apex.update.apply     yes   (applies an already verified, reviewed digest)
+    io.github.sekirokenjii.apex.update.discard   yes   (also guards AcknowledgeHealthFailure)
+    io.github.sekirokenjii.apex.update.rollback  auth_admin
+    io.github.sekirokenjii.apex.update.switch-channel  auth_admin
+    io.github.sekirokenjii.apex.update.downgrade auth_admin  (reserved: no method checks it at M1;
+                                                           a same-channel downgrade is refused)
+  Inactive and remote sessions get "no" for everything. uid 0 is always allowed (checked
+  with the bus credentials, not polkit).
+
+  Method replies: every method replies when its operation has finished (a download can take
+  a long time), so clients must not use short call timeouts. Progress is observable through
+  State and Progress while a call is pending. A call identical to one that is running or
+  waiting (the same Check, Apply, Rollback or fallback report) waits for it and gets its
+  result. Right after activation, Ping, GetChanges and property reads wait until the state
+  is known (at most 20 s after the service started).
+
+  Property change signals: every property emits PropertiesChanged when its value changes
+  (the D-Bus default when EmitsChangedSignal is not annotated). When the service starts
+  (it is activated on demand and exits when idle), it first signals every property with
+  its current value, so values a client cached from an earlier instance are replaced.
+
+  Messages and string values never contain control characters: text from bootc, the
+  registry or image labels has them replaced.
+
+  Note: XML comments cannot contain a double hyphen, so bootc flags are spelled out.
+-->
+<node>
+  <interface name="io.github.sekirokenjii.Apex.Update1">
+
+    <!-- Derived state, one of: "up-to-date", "available", "downloading", "staged",
+         "ready-for-reboot", "rollback-queued", "incompatible", "usr-overlay",
+         "finalize-failed", "health-failure", "error", "unknown". -->
+    <property name="State" type="s" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+
+    <!-- Download progress in [0, 1] while State is "downloading"; -1 when unknown
+         (the installed bootc has no progress support). -->
+    <property name="Progress" type="d" access="read">
+      <annotation name="org.freedesktop.DBus.Property.EmitsChangedSignal" value="true"/>
+    </property>
+
+    <property name="Booted" type="a{sv}" access="read"/>
+    <property name="Staged" type="a{sv}" access="read"/>
+    <property name="Rollback" type="a{sv}" access="read"/>
+
+    <!-- Newer image found by the last check and not yet staged; empty otherwise. -->
+    <property name="Available" type="a{sv}" access="read"/>
+
+    <!-- Channel followed by the booted deployment: "stable" or "testing". -->
+    <property name="Channel" type="s" access="read"/>
+
+    <!-- Unix time (seconds) of the last successful check; 0 if never. -->
+    <property name="LastCheck" type="t" access="read"/>
+
+    <!-- Human-readable reason the available update is not being downloaded or applied
+         automatically (a policy gate), or why a staged image was refused (denylisted or
+         not newer), or "". -->
+    <property name="DeferredReason" type="s" access="read"/>
+
+    <!-- Message of the last failed operation, or "". Cleared by the next success. -->
+    <property name="LastError" type="s" access="read"/>
+
+    <!-- True while the channel has not published a newer build for more than 7 days. -->
+    <property name="Stale" type="b" access="read"/>
+
+    <!-- Set for any armed boot that failed its required health checks (from
+         /var/lib/apex/health-failure.json, written by apex-boot-assess, or by the daemon on
+         a "red" report); cleared by AcknowledgeHealthFailure or by a green boot.
+         Value: the failed digest, or "". -->
+    <property name="HealthFailure" type="s" access="read"/>
+
+    <!-- Liveness probe used by the boot health check. No polkit check. Fails with Internal
+         when bootc cannot be used or the service can no longer run operations. -->
+    <method name="Ping"/>
+
+    <!-- Query the registry for a newer image on the current channel.
+         Rate-limited: calls within 60 s of the last successful check return immediately.
+         A call while another Check runs or waits gets that check's result. While a
+         Download, SwitchChannel, Automatic or DiscardStaged runs or waits it fails with
+         Busy: those need not contact the registry for the current channel. -->
+    <method name="Check"/>
+
+    <!-- Download and stage the available update, locked (bootc upgrade, download-only
+         mode). Gates are evaluated; PolicyDenied carries the reason. A user call may
+         override the power and metered gates but never the space, denylist or bootc-flag
+         gates. The tag can move between Check and Download: the digest actually staged is
+         screened again (denylist, version) and a refused stage stays locked, with
+         PolicyDenied. -->
+    <method name="Download">
+      <arg name="override_soft_gates" type="b" direction="in"/>
+    </method>
+
+    <!-- Unlock the staged deployment so the next boot uses it, and arm the boot counter.
+         Fails with DigestMismatch unless the staged digest equals expected_digest.
+         The daemon never reboots; the caller's session requests the reboot.
+         A stage made by SwitchChannel is installed even when it holds the running build or
+         an older one: the administrator confirmed following that channel. When it is the
+         running image under the other channel reference, nothing new boots and the counter
+         is not armed. Every other stage must be newer than the running version.
+         Busy while another Apply or Rollback, or a download, runs or waits. -->
+    <method name="Apply">
+      <arg name="expected_digest" type="s" direction="in"/>
+    </method>
+
+    <!-- Re-lock a staged update that was applied but not yet booted, and disarm the
+         boot counter. Never calls bootc rollback.
+         bootc cannot re-lock a stage in place: the re-lock is bootc upgrade in download-only
+         mode, which pulls the channel tag again. It therefore needs the registry (Network
+         when offline), and if the tag has moved on, the newer image is downloaded and staged,
+         still locked, in place of the applied one, so Staged may name another digest
+         afterwards. On success nothing boots next and the counter is disarmed. If the call
+         fails while the applied update would still boot next (offline, or the tag points
+         back at the running image), the update stays applied and the counter stays armed. -->
+    <method name="DiscardStaged"/>
+
+    <!-- Queue the rollback deployment for the next boot (bootc rollback). If
+         mark_bad is true, the currently booted digest is added to the denylist.
+         Fails with PolicyDenied when the rollback deployment is on the denylist: it failed
+         to start, or failed its health checks, before (after a fallback it is the failed
+         update, still installed). -->
+    <method name="Rollback">
+      <arg name="mark_bad" type="b" direction="in"/>
+    </method>
+
+    <!-- Package changes between the booted and the staged image, computed from
+         /usr/share/apex/manifest.json in each deployment. Entries:
+         (name, arch, kind, from_evr, to_evr), kind one of "added", "removed", "upgraded",
+         "downgraded"; from_evr is "" for added packages and to_evr is "" for removed ones.
+         Sorted by (name, arch). Empty when nothing is staged. Fails while the state of the
+         system is not known (Busy, or Internal when bootc cannot be used). -->
+    <method name="GetChanges">
+      <arg name="changes" type="a(sssss)" direction="out"/>
+    </method>
+
+    <!-- Follow "stable" or "testing" (same Fedora major). Major upgrades are a manual
+         runbook until Fedora 46 branches. Downloads the channel's image and stages it
+         locked, like Download; the switch takes effect with Apply and a restart, until
+         then Channel names the old channel. Polkit: switch-channel (auth_admin). -->
+    <method name="SwitchChannel">
+      <arg name="channel" type="s" direction="in"/>
+    </method>
+
+    <method name="AcknowledgeHealthFailure"/>
+
+    <!-- Automatic run for the systemd timer: check, then download if every gate
+         passes and no user intent exists. Allowed for uid 0 only. -->
+    <method name="Automatic"/>
+
+    <!-- Called by apex-boot-assess (uid 0 only) after it assessed the current boot.
+         verdict:
+           "green"        all required checks passed; digest = booted digest
+           "red"          the armed target failed its required checks. apex-boot-assess
+                          records it and may reboot on its own when nobody is logged in (so
+                          the GRUB counter moves); the daemon publishes HealthFailure and
+                          never reboots
+           "red-unarmed"  ordinary boot failed a required check; report only
+           "fallback"     GRUB fell back to the previous deployment; digest = the failed
+                          target. The daemon runs bootc rollback so the running deployment
+                          becomes the default, and denylists digest.
+         apex-boot-assess also writes /var/lib/apex/health-failure.json for "red", so the
+         failure is not lost if the daemon cannot be reached. digest may be the empty string
+         for "green" and "red-unarmed" when the booted digest is unknown; "red" and
+         "fallback" need it.
+         For "fallback" the daemon also unsets apex_target and apex_counter before replying.
+         A fallback report runs ahead of every other waiting operation and is never Busy. -->
+
+    <method name="ReportBoot">
+      <arg name="verdict" type="s" direction="in"/>
+      <arg name="digest" type="s" direction="in"/>
+    </method>
+  </interface>
+</node>

@@ -1,0 +1,47 @@
+---
+source: crates/apex-update/tests/manifest_diff.rs
+expression: "&changes[..3]"
+---
+[
+  {
+    "name": "gnome-shell",
+    "arch": "x86_64",
+    "kind": "upgraded",
+    "from_evr": {
+      "epoch": 0,
+      "version": "51.0",
+      "release": "1.fc45"
+    },
+    "to_evr": {
+      "epoch": 0,
+      "version": "51.1",
+      "release": "1.fc45"
+    }
+  },
+  {
+    "name": "gnome-tour",
+    "arch": "x86_64",
+    "kind": "removed",
+    "from_evr": {
+      "epoch": 0,
+      "version": "51.0",
+      "release": "1.fc45"
+    },
+    "to_evr": null
+  },
+  {
+    "name": "kernel",
+    "arch": "x86_64",
+    "kind": "upgraded",
+    "from_evr": {
+      "epoch": 0,
+      "version": "7.2.7",
+      "release": "200.fc45"
+    },
+    "to_evr": {
+      "epoch": 0,
+      "version": "7.2.9",
+      "release": "200.fc45"
+    }
+  }
+]

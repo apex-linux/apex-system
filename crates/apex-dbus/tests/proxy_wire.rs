@@ -1,0 +1,287 @@
+//! The proxy and the server-side types against the contract, over a real D-Bus connection.
+//!
+//! A peer-to-peer connection pair stands in for the system bus. On one end, `MockDaemon`
+//! serves Update1 through `#[zbus::interface]` with this crate's types; on the other end,
+//! `Update1Proxy` calls it.
+//!
+//! - The mock's generated introspection must equal the contract XML member by member (names,
+//!   argument names, signatures, directions, access, change signals).
+//! - Every proxy method and property is exercised against the mock. zbus rejects a call whose
+//!   body signature differs from the handler's arguments, and the proxy fails to decode a reply
+//!   or property of another type, so with the first check this ties the proxy to the XML.
+//! - The coverage checks fail when the XML gains a member the proxy (or this test) lacks.
+//! - Every error kind makes the round trip daemon → wire → client.
+
+#![allow(
+    clippy::expect_used,
+    reason = "integration test helpers: a failed expectation is the test failure"
+)]
+
+mod common;
+
+use std::collections::BTreeSet;
+use std::future::poll_fn;
+use std::pin::Pin;
+
+use apex_dbus::{
+    ApexError, BUS_NAME, BootVerdict, Channel, Deployment, ErrorKind, INTERFACE, INTROSPECTION_XML,
+    OBJECT_PATH, PolkitAction, State, Update1Proxy,
+};
+use common::{Log, MockDaemon, STAGED_DIGEST};
+use zbus::{
+    Connection, Guid, connection, export::futures_core::Stream, fdo::IntrospectableProxy,
+    proxy::CacheProperties,
+};
+
+/// A connected (server, client) pair; the server serves `daemon` at the contract path.
+async fn connect(daemon: MockDaemon) -> (Connection, Connection) {
+    let (server_socket, client_socket) = tokio::net::UnixStream::pair().expect("socket pair");
+    let server = connection::Builder::unix_stream(server_socket)
+        .server(Guid::generate())
+        .expect("guid")
+        .p2p()
+        .serve_at(OBJECT_PATH, daemon)
+        .expect("serve")
+        .build();
+    let client = connection::Builder::unix_stream(client_socket)
+        .p2p()
+        .build();
+    tokio::try_join!(server, client).expect("peer-to-peer handshake")
+}
+
+async fn proxy(client: &Connection, cache: CacheProperties) -> Update1Proxy<'static> {
+    Update1Proxy::builder(client)
+        .cache_properties(cache)
+        .build()
+        .await
+        .expect("proxy")
+}
+
+/// The contract's member names of one kind (`"method"` or `"property"`).
+fn contract_members(kind: &str) -> BTreeSet<String> {
+    common::interface_description(INTROSPECTION_XML)
+        .into_keys()
+        .filter_map(|key| key.strip_prefix(&format!("{kind} ")).map(str::to_owned))
+        .collect()
+}
+
+#[tokio::test]
+async fn server_types_produce_the_contract_introspection() {
+    let (_server, client) = connect(MockDaemon::new(Log::default())).await;
+    let introspectable = IntrospectableProxy::builder(&client)
+        .destination(BUS_NAME)
+        .expect("destination")
+        .path(OBJECT_PATH)
+        .expect("path")
+        .build()
+        .await
+        .expect("introspectable proxy");
+    let generated = introspectable.introspect().await.expect("introspect");
+
+    let differences = common::diff(
+        &common::interface_description(INTROSPECTION_XML),
+        &common::interface_description(&generated),
+    );
+    assert!(
+        differences.is_empty(),
+        "the interface generated from apex-dbus types differs from the contract XML:\n{}\n\n\
+         generated XML:\n{generated}",
+        differences.join("\n")
+    );
+}
+
+#[tokio::test]
+async fn every_method_matches_the_contract_on_the_wire() {
+    let log = Log::default();
+    let (_server, client) = connect(MockDaemon::new(log.clone())).await;
+    let proxy = proxy(&client, CacheProperties::No).await;
+
+    proxy.ping().await.expect("Ping");
+    proxy.check().await.expect("Check");
+    proxy.download(true).await.expect("Download");
+    proxy.apply(STAGED_DIGEST).await.expect("Apply");
+    proxy.discard_staged().await.expect("DiscardStaged");
+    proxy.rollback(true).await.expect("Rollback");
+    assert_eq!(
+        proxy.get_changes().await.expect("GetChanges"),
+        common::changes()
+    );
+    proxy
+        .switch_channel(Channel::Testing)
+        .await
+        .expect("SwitchChannel");
+    proxy
+        .acknowledge_health_failure()
+        .await
+        .expect("AcknowledgeHealthFailure");
+    assert!(matches!(
+        proxy.automatic().await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    proxy
+        .report_boot(BootVerdict::Green, STAGED_DIGEST)
+        .await
+        .expect("ReportBoot");
+
+    let calls = log.calls();
+    let called: BTreeSet<String> = calls.iter().map(|call| call.member.clone()).collect();
+    assert_eq!(
+        called,
+        contract_members("method"),
+        "every contract method must be exposed by Update1Proxy and exercised here"
+    );
+
+    // Polkit-guarded methods let polkit ask the authentication agent; the others must not.
+    let interactive: BTreeSet<&str> = calls
+        .iter()
+        .filter(|call| call.interactive)
+        .map(|call| call.member.as_str())
+        .collect();
+    let expected: BTreeSet<&str> = [
+        "Check",
+        "Download",
+        "Apply",
+        "DiscardStaged",
+        "Rollback",
+        "SwitchChannel",
+        "AcknowledgeHealthFailure",
+    ]
+    .into();
+    assert_eq!(interactive, expected);
+    // Exactly the methods polkit guards (contract §8) may prompt.
+    let guarded: BTreeSet<&str> = calls
+        .iter()
+        .map(|call| call.member.as_str())
+        .filter(|member| PolkitAction::guarding(member).is_some())
+        .collect();
+    assert_eq!(guarded, expected);
+}
+
+#[tokio::test]
+async fn every_property_matches_the_contract_on_the_wire() {
+    let log = Log::default();
+    let (_server, client) = connect(MockDaemon::new(log.clone())).await;
+    let proxy = proxy(&client, CacheProperties::No).await;
+
+    assert_eq!(proxy.state().await.expect("State"), State::Staged);
+    assert!((proxy.progress().await.expect("Progress") + 1.0).abs() < f64::EPSILON);
+    assert_eq!(proxy.booted().await.expect("Booted"), common::booted());
+    assert_eq!(proxy.staged().await.expect("Staged"), common::staged());
+    let rollback = proxy.rollback_deployment().await.expect("Rollback");
+    assert!(rollback.is_empty());
+    assert_eq!(
+        proxy.available().await.expect("Available").into_option(),
+        None
+    );
+    assert_eq!(proxy.channel().await.expect("Channel"), Channel::Stable);
+    assert_eq!(proxy.last_check().await.expect("LastCheck"), 1_790_400_000);
+    assert_eq!(
+        proxy.deferred_reason().await.expect("DeferredReason"),
+        "Metered network"
+    );
+    assert_eq!(proxy.last_error().await.expect("LastError"), "");
+    assert!(proxy.stale().await.expect("Stale"));
+    assert_eq!(proxy.health_failure().await.expect("HealthFailure"), "");
+
+    let read: BTreeSet<String> = log.properties().into_iter().collect();
+    assert_eq!(
+        read,
+        contract_members("property"),
+        "every contract property must be exposed by Update1Proxy and exercised here"
+    );
+}
+
+#[tokio::test]
+async fn every_error_kind_round_trips() {
+    let (_server, client) = connect(MockDaemon::new(Log::default())).await;
+    let proxy = proxy(&client, CacheProperties::No).await;
+
+    for kind in ErrorKind::ALL {
+        let error = proxy
+            .apply(&format!("error:{}", kind.as_str()))
+            .await
+            .expect_err("scripted error");
+        assert_eq!(error.kind(), Some(kind), "{error}");
+        assert_eq!(error.message(), format!("{} from the mock", kind.as_str()));
+        assert_eq!(
+            error.to_string(),
+            format!("{}: {} from the mock", kind.error_name(), kind.as_str())
+        );
+    }
+
+    // `into_contract` turns a stray zbus error into Internal before it reaches the wire...
+    let error = proxy.apply("error:zbus").await.expect_err("scripted error");
+    assert_eq!(error.kind(), Some(ErrorKind::Internal));
+    assert!(error.message().contains("socket closed"), "{error}");
+    // ...without it the client sees a non-contract error name.
+    let error = proxy
+        .apply("error:unconverted")
+        .await
+        .expect_err("scripted error");
+    assert_eq!(error.kind(), None);
+    match error {
+        ApexError::ZBus(zbus::Error::MethodError(name, ..)) => {
+            assert_eq!(name.as_str(), "org.freedesktop.zbus.Error");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    // Ordinary contract failures carry their message to the client.
+    match proxy.apply("sha256:0000").await {
+        Err(ApexError::DigestMismatch(message)) => assert!(message.contains(STAGED_DIGEST)),
+        other => panic!("unexpected {other:?}"),
+    }
+    match proxy.download(false).await {
+        Err(ApexError::PolicyDenied(reason)) => assert_eq!(reason, "On battery below 50 %"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn invalid_strings_are_the_daemons_to_reject() {
+    // The proxy only sends valid channels and verdicts; a raw caller can send anything, and
+    // the daemon answers with the contract's InvalidArgument.
+    let (_server, client) = connect(MockDaemon::new(Log::default())).await;
+    let raw = zbus::Proxy::new(&client, BUS_NAME, OBJECT_PATH, INTERFACE)
+        .await
+        .expect("raw proxy");
+    let error: ApexError = raw
+        .call::<_, _, ()>("SwitchChannel", &("beta",))
+        .await
+        .expect_err("invalid channel")
+        .into();
+    match error {
+        ApexError::InvalidArgument(message) => {
+            assert_eq!(message, "\"beta\" is not a valid Channel");
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Polls the next item of a stream (the tests avoid a futures-util dependency).
+async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
+    poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
+}
+
+#[tokio::test]
+async fn cached_properties_follow_change_signals() {
+    let (_server, client) = connect(MockDaemon::new(Log::default())).await;
+    let proxy = proxy(&client, CacheProperties::Yes).await;
+    assert_eq!(proxy.cached_state().expect("cache"), Some(State::Staged));
+    assert_eq!(
+        proxy
+            .cached_booted()
+            .expect("cache")
+            .and_then(Deployment::into_option),
+        Some(common::booted())
+    );
+
+    let mut changes = proxy.receive_state_changed().await;
+    // The stream first yields the current value.
+    let first = next(&mut changes).await.expect("current value");
+    assert_eq!(first.get().await.expect("value"), State::Staged);
+    proxy.check().await.expect("Check");
+    let update = next(&mut changes).await.expect("change signal");
+    assert_eq!(update.get().await.expect("value"), State::Available);
+    assert_eq!(proxy.cached_state().expect("cache"), Some(State::Available));
+}

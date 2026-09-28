@@ -1,0 +1,14 @@
+---
+source: crates/apex-bootc/tests/invocation.rs
+expression: out
+---
+/usr/bin/bootc status --format=json --format-version=1
+/usr/bin/bootc upgrade --check
+/usr/bin/bootc upgrade --download-only
+/usr/bin/bootc upgrade --download-only --progress-fd 3  [fd 3 = progress pipe]
+/usr/bin/bootc upgrade --from-downloaded
+/usr/bin/bootc rollback
+/usr/bin/bootc switch --enforce-container-sigpolicy --download-only ghcr.io/sekirokenjii/apex:45
+/usr/bin/bootc switch --enforce-container-sigpolicy --download-only ghcr.io/sekirokenjii/apex-testing:45
+/usr/bin/bootc switch --enforce-container-sigpolicy --download-only ghcr.io/sekirokenjii/apex@sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0
+/usr/bin/bootc switch --enforce-container-sigpolicy --download-only localhost:5000/apex:45

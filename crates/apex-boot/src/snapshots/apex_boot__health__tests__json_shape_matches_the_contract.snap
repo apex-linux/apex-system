@@ -1,0 +1,12 @@
+---
+source: crates/apex-boot/src/health.rs
+expression: json
+---
+{
+  "at": 1790000000,
+  "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "failed_checks": [
+    "session",
+    "failed-units"
+  ]
+}

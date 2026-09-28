@@ -1,0 +1,10 @@
+---
+source: crates/apexctl/tests/hw_report.rs
+expression: render(&report)
+---
+PASS  Audio fix     hwC1D0 holds the 2 verbs of the patch firmware
+PASS  Charge limit  BAT0 stops charging at 80 %
+PASS  UPower        UPower sees the charge limit and it is on
+PASS  dGPU          suspended in D3cold, no driver; suspended 97.5 % since boot
+PASS  Fingerprint   ELAN reader 04f3:0c6e present at 3-1
+PASS  Secure Boot   Secure Boot is enabled

@@ -1,0 +1,46 @@
+[package]
+name = "apexctl"
+description = "The Apex command-line tool: update control through apex-updated, read-only hardware reports, hardware-profile rendering and image build helpers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# A library plus a thin binary, so that every parser, renderer and report is testable
+# without a bus, a codec or an rpm database.
+[lib]
+name = "apexctl"
+path = "src/lib.rs"
+
+[[bin]]
+name = "apexctl"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+# Types only (contract §9): `Digest` validates `apply --digest`.
+apex-bootc.workspace = true
+apex-dbus.workspace = true
+# Manifest model, package diff summary and the version type (contract §3, §9).
+apex-update.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Unified diffs for `profile render --check`. 2.7.0 on purpose: insta already pulls exactly
+# this version into the graph, and 3.x would add a second copy (deny.toml warns on that).
+similar = "2.7.0"
+thiserror.workspace = true
+# current_thread runtime for zbus (contract §9); no extra features beyond the workspace set.
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

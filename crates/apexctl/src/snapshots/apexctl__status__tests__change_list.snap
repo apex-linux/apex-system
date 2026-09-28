@@ -1,0 +1,14 @@
+---
+source: crates/apexctl/src/status.rs
+expression: render_changes(&changes)
+---
+GNOME 51.0 → 51.1, Linux 7.2.7 → 7.2.9, Mesa 26.1.0 → 26.1.2, 5 other packages
+
+  upgraded    glibc.i686             2.42-3.fc45 → 2.42-4.fc45
+  upgraded    glibc                  2.42-3.fc45 → 2.42-4.fc45
+  upgraded    gnome-shell            51.0-1.fc45 → 51.1-1.fc45
+  upgraded    kernel                 7.2.7-300.fc45 → 7.2.9-300.fc45
+  upgraded    mesa-dri-drivers.i686  26.1.0-1.fc45 → 26.1.2-1.fc45
+  upgraded    mesa-dri-drivers       26.1.0-1.fc45 → 26.1.2-1.fc45
+  added       newpkg                 1.0-1.fc45
+  removed     oldpkg                 2.0-1.fc45

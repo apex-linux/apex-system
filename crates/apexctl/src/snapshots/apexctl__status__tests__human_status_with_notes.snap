@@ -1,0 +1,18 @@
+---
+source: crates/apexctl/src/status.rs
+expression: render_status(&status)
+---
+An update is downloading.
+Downloading  42 %
+
+Booted     45.20260924.117  built 2026-09-24
+           sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Available  45.20260925.118  built 2026-09-24
+           sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Channel    stable (running image)
+Checked    never
+Degraded   audio: the speaker fix is not available yet
+
+No newer build was published on this channel for more than 7 days.
+The automatic download is waiting: On battery below 50 %
+Last error: bootc failed: no space

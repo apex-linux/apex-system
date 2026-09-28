@@ -1,0 +1,705 @@
+//! The real interface over a peer-to-peer D-Bus connection (no bus daemon): the served
+//! introspection equals the contract XML, properties and methods work through the
+//! `apex_dbus` proxy, errors keep their contract names, and property changes are signalled.
+//! Authorization uses the allow-all fake (or its refusing variant).
+
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "integration tests: a failed expectation is the test failure"
+)]
+
+mod common;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use apex_bootc::{APEX_TESTING, BootcCommand, FakeRunner, Scripted};
+use apex_dbus::{
+    ApexError, BUS_NAME, BootVerdict, Channel, Deployment, ErrorKind, INTERFACE, INTROSPECTION_XML,
+    OBJECT_PATH, PolkitAction, State, Update1Proxy,
+};
+use apex_updated::queue::Op;
+use apex_updated::service::{Update1Service, emit_property_changes};
+use apex_updated::testing::{FakeAuthorizer, SharedGrubWriter};
+use common::*;
+use zbus::export::futures_core::Stream;
+use zbus::fdo::{IntrospectableProxy, PropertiesChangedStream, PropertiesProxy};
+use zbus::proxy::CacheProperties;
+use zbus::zvariant::OwnedValue;
+use zbus::{Connection, Guid, connection};
+
+/// A connected (server, client) pair; the server serves the harness's daemon.
+///
+/// It returns once the emitter's first signal, which names every property, has arrived, so
+/// the streams a test creates afterwards see only later changes.
+async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
+    let (server, client, first) = connect_announced(h, auth).await;
+    assert_eq!(first.len(), 12, "{first:?}");
+    (server, client)
+}
+
+/// [`connect`], also returning the emitter's first signal: property name → value.
+async fn connect_announced(
+    h: &Harness,
+    auth: FakeAuthorizer,
+) -> (Connection, Connection, BTreeMap<String, OwnedValue>) {
+    let service: Update1Service<Arc<FakeRunner>> =
+        Update1Service::new(h.daemon.clone(), Arc::new(auth));
+    let (server_socket, client_socket) = tokio::net::UnixStream::pair().expect("socket pair");
+    let server = connection::Builder::unix_stream(server_socket)
+        .server(Guid::generate())
+        .expect("guid")
+        .p2p()
+        .serve_at(OBJECT_PATH, service)
+        .expect("serve")
+        .build();
+    let client = connection::Builder::unix_stream(client_socket)
+        .p2p()
+        .build();
+    let (server, client) = tokio::try_join!(server, client).expect("peer-to-peer handshake");
+    let mut stream = properties_proxy(&client)
+        .await
+        .receive_properties_changed()
+        .await
+        .unwrap();
+    tokio::spawn(emit_property_changes(
+        server.clone(),
+        h.daemon.engine().subscribe(),
+    ));
+    let signal = next(&mut stream).await;
+    let args = signal.args().expect("PropertiesChanged arguments");
+    let first = args
+        .changed_properties
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), value.try_to_owned().expect("owned")))
+        .collect();
+    (server, client, first)
+}
+
+async fn properties_proxy(client: &Connection) -> PropertiesProxy<'static> {
+    PropertiesProxy::builder(client)
+        .destination(BUS_NAME)
+        .unwrap()
+        .path(OBJECT_PATH)
+        .unwrap()
+        .build()
+        .await
+        .unwrap()
+}
+
+async fn proxy(client: &Connection) -> Update1Proxy<'static> {
+    Update1Proxy::builder(client)
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await
+        .expect("proxy")
+}
+
+/// Members of the interface in an introspection document, normalized:
+/// `"method Apply" => "in expected_digest s"`, `"property State" => "s read changes=true"`.
+/// A property without the `EmitsChangedSignal` annotation counts as `true`, the D-Bus
+/// default.
+fn members(xml: &str) -> BTreeMap<String, String> {
+    let node = zbus_xml::Node::try_from(xml).expect("introspection XML parses");
+    let interface = node
+        .interfaces()
+        .iter()
+        .find(|i| i.name().as_str() == INTERFACE)
+        .expect("the interface is present");
+    let args = |args: &[zbus_xml::Arg]| {
+        args.iter()
+            .map(|arg| {
+                let direction = match arg.direction() {
+                    Some(zbus_xml::ArgDirection::Out) => "out",
+                    _ => "in",
+                };
+                format!(
+                    "{direction} {} {}",
+                    arg.name().unwrap_or("?"),
+                    arg.ty().to_string()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut out = BTreeMap::new();
+    for method in interface.methods() {
+        out.insert(format!("method {}", method.name()), args(method.args()));
+    }
+    for signal in interface.signals() {
+        out.insert(format!("signal {}", signal.name()), args(signal.args()));
+    }
+    for property in interface.properties() {
+        let access = match property.access() {
+            zbus_xml::PropertyAccess::Read => "read",
+            zbus_xml::PropertyAccess::Write => "write",
+            zbus_xml::PropertyAccess::ReadWrite => "readwrite",
+        };
+        let emits = property
+            .annotations()
+            .iter()
+            .find(|a| a.name() == "org.freedesktop.DBus.Property.EmitsChangedSignal")
+            .map_or("true", zbus_xml::Annotation::value);
+        out.insert(
+            format!("property {}", property.name()),
+            format!("{} {access} changes={emits}", property.ty().to_string()),
+        );
+    }
+    out
+}
+
+#[tokio::test]
+async fn introspection_matches_the_contract() {
+    let h = Harness::new();
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let introspectable = IntrospectableProxy::builder(&client)
+        .destination(BUS_NAME)
+        .unwrap()
+        .path(OBJECT_PATH)
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    let served = introspectable.introspect().await.expect("introspect");
+    assert_eq!(members(&served), members(INTROSPECTION_XML));
+}
+
+#[tokio::test]
+async fn properties_and_methods_over_the_wire() {
+    let h = Harness::new();
+    h.last_check(STAGED, STAGED_VERSION, 3600);
+    h.refresh(&host(booted(), Some(staged(true)), Some(rollback())))
+        .await;
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let p = proxy(&client).await;
+
+    p.ping().await.expect("ping");
+    assert_eq!(p.state().await.unwrap(), State::Staged);
+    assert_eq!(p.channel().await.unwrap(), Channel::Stable);
+    let staged_dict = p.staged().await.unwrap();
+    assert_eq!(staged_dict.digest.as_deref(), Some(STAGED));
+    assert_eq!(staged_dict.download_only, Some(true));
+    assert_eq!(p.booted().await.unwrap().digest.as_deref(), Some(BOOTED));
+    assert_eq!(
+        p.rollback_deployment().await.unwrap().digest.as_deref(),
+        Some(ROLLBACK)
+    );
+    assert!(
+        p.available().await.unwrap().is_empty(),
+        "staged is not available"
+    );
+    assert_eq!(p.last_check().await.unwrap(), NOW - 3600);
+    assert!(p.progress().await.unwrap() < 0.0);
+    assert_eq!(p.deferred_reason().await.unwrap(), "");
+    assert_eq!(p.last_error().await.unwrap(), "");
+    assert_eq!(p.health_failure().await.unwrap(), "");
+    assert!(!p.stale().await.unwrap());
+
+    let changes = p.get_changes().await.expect("changes");
+    assert!(changes.contains(&(
+        "kernel".to_owned(),
+        "x86_64".to_owned(),
+        "upgraded".to_owned(),
+        "6.17.1-300.fc45".to_owned(),
+        "6.17.2-300.fc45".to_owned()
+    )));
+    let keys: Vec<(&str, &str)> = changes
+        .iter()
+        .map(|(name, arch, ..)| (name.as_str(), arch.as_str()))
+        .collect();
+    assert!(keys.is_sorted(), "sorted by (name, arch): {keys:?}");
+
+    // Errors keep their contract names. The state is fresh, so an Apply of a digest that
+    // is not staged is refused without queueing (no bootc status runs).
+    match p.apply(REMOTE).await {
+        Err(ApexError::DigestMismatch(message)) => assert!(message.contains(STAGED)),
+        other => panic!("expected DigestMismatch, got {other:?}"),
+    }
+    assert!(matches!(
+        p.apply("latest; rm -rf /").await,
+        Err(ApexError::InvalidArgument(_))
+    ));
+
+    // Root reports: green clears nothing here but must be accepted.
+    p.report_boot(BootVerdict::Green, BOOTED)
+        .await
+        .expect("green from root");
+    assert!(matches!(
+        p.report_boot(BootVerdict::Fallback, "").await,
+        Err(ApexError::InvalidArgument(_))
+    ));
+    h.fake.assert_finished();
+}
+
+#[tokio::test]
+async fn invalid_strings_are_invalid_arguments() {
+    let h = Harness::new();
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let channel = client
+        .call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "SwitchChannel",
+            &("beta",),
+        )
+        .await;
+    let verdict = client
+        .call_method(
+            Some(BUS_NAME),
+            OBJECT_PATH,
+            Some(INTERFACE),
+            "ReportBoot",
+            &("purple", ""),
+        )
+        .await;
+    for (member, reply) in [("SwitchChannel", channel), ("ReportBoot", verdict)] {
+        let error = ApexError::from(reply.expect_err("refused"));
+        assert_eq!(error.kind(), Some(ErrorKind::InvalidArgument), "{member}");
+        assert!(
+            error.message().contains("is not a valid"),
+            "{}",
+            error.message()
+        );
+    }
+    h.fake.assert_finished();
+}
+
+#[tokio::test]
+async fn callers_are_authorized() {
+    let h = Harness::new();
+    h.refresh(&host(booted(), None, None)).await;
+    let (_server, client) = connect(&h, FakeAuthorizer::deny_user(1000)).await;
+    let p = proxy(&client).await;
+    match p.check().await {
+        Err(ApexError::NotAuthorized(message)) => {
+            assert_eq!(message, "You are not allowed to check for updates.");
+        }
+        other => panic!("expected NotAuthorized, got {other:?}"),
+    }
+    assert!(matches!(
+        p.rollback(true).await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    assert!(matches!(
+        p.switch_channel(Channel::Testing).await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    // Root-only methods check the uid, not polkit.
+    assert!(matches!(
+        p.automatic().await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    assert!(matches!(
+        p.report_boot(BootVerdict::Green, BOOTED).await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    // Read-only calls need no authorization.
+    p.ping().await.expect("ping");
+    p.get_changes().await.expect("changes");
+    h.fake.assert_finished();
+
+    let h = Harness::new();
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_user(1000)).await;
+    let p = proxy(&client).await;
+    assert!(matches!(
+        p.automatic().await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    h.fake.assert_finished();
+}
+
+#[tokio::test]
+async fn property_changes_are_signalled() {
+    let h = Harness::new();
+    // Fresh state, so reading the properties does not queue a refresh of its own.
+    h.refresh(&host(booted(), None, None)).await;
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let p = Update1Proxy::builder(&client).build().await.expect("proxy");
+    let mut changes = p.receive_state_changed().await;
+    // The first item is the current value.
+    let first = next(&mut changes).await;
+    assert_eq!(first.get().await.unwrap(), State::UpToDate);
+
+    h.push(status(&host(booted(), Some(staged(true)), None)));
+    h.daemon.submit(Op::Refresh).await.expect("refresh");
+    let update = next(&mut changes).await;
+    assert_eq!(update.get().await.unwrap(), State::Staged);
+    assert_eq!(p.cached_state().unwrap(), Some(State::Staged));
+    h.fake.assert_finished();
+}
+
+async fn next<S: Stream + Unpin>(stream: &mut S) -> S::Item {
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut *stream).poll_next(cx)),
+    )
+    .await
+    .expect("a signal in time")
+    .expect("stream open")
+}
+
+#[tokio::test]
+async fn automatic_runs_for_root() {
+    let h = Harness::new();
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let p = proxy(&client).await;
+    let current = host(booted(), None, None);
+    h.push(status(&current))
+        .push(Scripted::new(BootcCommand::UpgradeCheck).stdout("No changes in: x\n"))
+        .push(status(&current));
+    p.automatic().await.expect("automatic");
+    assert_eq!(p.state().await.unwrap(), State::UpToDate);
+    assert_eq!(p.last_check().await.unwrap(), NOW);
+    h.fake.assert_finished();
+}
+
+/// Each polkit-guarded method asks for the action contract §8 assigns it
+/// (`PolkitAction::guarding`), in particular `AcknowledgeHealthFailure` for `discard`, not
+/// `apply`. The other methods ask polkit nothing.
+#[tokio::test]
+async fn each_method_asks_polkit_for_its_contract_action() {
+    let h = Harness::new();
+    h.refresh(&host(booted(), None, None)).await;
+    let auth = FakeAuthorizer::deny_user(1000);
+    let (_server, client) = connect(&h, auth.clone()).await;
+    let p = proxy(&client).await;
+
+    // Every guarded method is refused, so none of them reaches bootc.
+    let refused = [
+        ("Check", p.check().await),
+        ("Download", p.download(false).await),
+        ("Apply", p.apply(STAGED).await),
+        ("DiscardStaged", p.discard_staged().await),
+        ("Rollback", p.rollback(false).await),
+        ("SwitchChannel", p.switch_channel(Channel::Testing).await),
+        (
+            "AcknowledgeHealthFailure",
+            p.acknowledge_health_failure().await,
+        ),
+    ];
+    for (member, result) in &refused {
+        assert!(
+            matches!(result, Err(ApexError::NotAuthorized(_))),
+            "{member}: {result:?}"
+        );
+    }
+    // Not polkit: read-only, or uid 0 only.
+    p.ping().await.expect("ping");
+    p.get_changes().await.expect("changes");
+    assert!(matches!(
+        p.automatic().await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+    assert!(matches!(
+        p.report_boot(BootVerdict::Green, BOOTED).await,
+        Err(ApexError::NotAuthorized(_))
+    ));
+
+    let expected: Vec<(String, PolkitAction)> = refused
+        .iter()
+        .map(|(member, _)| {
+            let action = PolkitAction::guarding(member).expect("a guarded method");
+            ((*member).to_owned(), action)
+        })
+        .collect();
+    assert_eq!(auth.requests(), expected);
+    assert!(
+        auth.requests()
+            .contains(&("AcknowledgeHealthFailure".to_owned(), PolkitAction::Discard))
+    );
+    h.fake.assert_finished();
+}
+
+/// Every `PropertiesChanged` of the interface seen so far: property name → the values
+/// signalled, in order.
+type Seen = BTreeMap<String, Vec<OwnedValue>>;
+
+/// Reads signals into `seen` until `done` holds (at most 10 s).
+async fn watch_until(
+    stream: &mut PropertiesChangedStream,
+    seen: &mut Seen,
+    done: impl Fn(&Seen) -> bool,
+) {
+    let read = async {
+        while !done(seen) {
+            let signal = next(stream).await;
+            let args = signal.args().expect("PropertiesChanged arguments");
+            assert_eq!(args.interface_name.as_str(), INTERFACE);
+            assert!(
+                args.invalidated_properties.is_empty(),
+                "values are sent, never only invalidated"
+            );
+            for (name, value) in &args.changed_properties {
+                seen.entry((*name).to_owned())
+                    .or_default()
+                    .push(value.try_to_owned().expect("owned value"));
+            }
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(10), read)
+        .await
+        .is_err()
+    {
+        panic!("the expected signals did not arrive; seen: {seen:?}");
+    }
+}
+
+fn texts(seen: &Seen, name: &str) -> Vec<String> {
+    seen.get(name)
+        .into_iter()
+        .flatten()
+        .map(|value| String::try_from(value.try_clone().expect("clone")).expect("a string"))
+        .collect()
+}
+
+fn digests(seen: &Seen, name: &str) -> Vec<Option<String>> {
+    seen.get(name)
+        .into_iter()
+        .flatten()
+        .map(|value| {
+            Deployment::try_from(value.try_clone().expect("clone"))
+                .expect("a deployment")
+                .digest
+        })
+        .collect()
+}
+
+fn progress(seen: &Seen) -> Vec<f64> {
+    seen.get("Progress")
+        .into_iter()
+        .flatten()
+        .map(|value| f64::try_from(value.try_clone().expect("clone")).expect("a double"))
+        .collect()
+}
+
+/// The booted deployment, following the testing channel.
+fn testing_booted() -> apex_bootc::BootEntry {
+    let mut entry = booted();
+    if let Some(image) = &mut entry.image {
+        image.image.image = APEX_TESTING.to_string();
+    }
+    entry
+}
+
+/// Every property emits `PropertiesChanged` when its value changes (the XML header): a run
+/// through refresh, download, a failed check, a red boot report and its acknowledgement
+/// changes all twelve, and each change arrives as a signal over the wire, observed here
+/// with a plain `org.freedesktop.DBus.Properties` proxy (no cache, no property reads).
+#[tokio::test]
+async fn every_property_signals_its_changes() {
+    const DAY: u64 = 86_400;
+    const REMOTE_VERSION: &str = "45.20260924.9";
+    let mut state = fake_state();
+    // Metered: the automatic download is deferred, so DeferredReason is set.
+    state.metered = Some(true);
+    // A month later: the newest known build is more than seven days old, so Stale is set.
+    state.now = NOW + 30 * DAY;
+    let h = Harness::with(state, SharedGrubWriter::new());
+    h.last_check(REMOTE, REMOTE_VERSION, 120);
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let properties = properties_proxy(&client).await;
+    let mut stream = properties.receive_properties_changed().await.unwrap();
+    let p = proxy(&client).await;
+    let mut seen = Seen::new();
+
+    // The first refresh: State, Booted, Rollback, Available, Channel, LastCheck,
+    // DeferredReason and Stale leave their defaults.
+    let before = host(testing_booted(), None, Some(rollback()));
+    h.refresh(&before).await;
+    watch_until(&mut stream, &mut seen, |s| {
+        [
+            "State",
+            "Booted",
+            "Rollback",
+            "Available",
+            "Channel",
+            "LastCheck",
+            "DeferredReason",
+            "Stale",
+        ]
+        .iter()
+        .all(|name| s.contains_key(*name))
+    })
+    .await;
+    assert_eq!(texts(&seen, "State"), ["available"]);
+    assert_eq!(texts(&seen, "Channel"), ["testing"]);
+    assert_eq!(digests(&seen, "Available"), [Some(REMOTE.to_owned())]);
+
+    // A download with progress: State, Progress, Staged and Available.
+    let staged_remote = apex_bootc::BootEntry {
+        download_only: true,
+        ..entry(REMOTE, REMOTE_VERSION, STAGED_CSUM)
+    };
+    h.push(status(&before))
+        .push(
+            Scripted::new(BootcCommand::UpgradeDownloadOnly { progress: true })
+                .progress_bytes(50, 100)
+                .delay(Duration::from_secs(1)),
+        )
+        .push(status(&host(
+            testing_booted(),
+            Some(staged_remote),
+            Some(rollback()),
+        )));
+    p.download(true).await.expect("download");
+    watch_until(&mut stream, &mut seen, |s| {
+        digests(s, "Staged").last() == Some(&Some(REMOTE.to_owned()))
+            && progress(s).last().is_some_and(|p| *p < 0.0)
+    })
+    .await;
+    assert!(
+        progress(&seen).iter().any(|p| (p - 0.45).abs() < 1e-9),
+        "{:?}",
+        progress(&seen)
+    );
+    assert!(texts(&seen, "State").contains(&"downloading".to_owned()));
+    assert_eq!(digests(&seen, "Available").last(), Some(&None));
+
+    // A failed check: LastError.
+    h.push(
+        Scripted::new(BootcCommand::UpgradeCheck)
+            .exit_code(1)
+            .stderr("error: Fetching: dial tcp: lookup ghcr.io: no such host\n"),
+    );
+    assert!(matches!(p.check().await, Err(ApexError::Network(_))));
+    watch_until(&mut stream, &mut seen, |s| s.contains_key("LastError")).await;
+    assert!(texts(&seen, "LastError")[0].contains("no such host"));
+
+    // A red boot report, then its acknowledgement: HealthFailure there and back.
+    p.report_boot(BootVerdict::Red, BOOTED).await.expect("red");
+    watch_until(&mut stream, &mut seen, |s| {
+        texts(s, "HealthFailure").last().map(String::as_str) == Some(BOOTED)
+    })
+    .await;
+    p.acknowledge_health_failure().await.expect("acknowledge");
+    watch_until(&mut stream, &mut seen, |s| {
+        texts(s, "HealthFailure").last().map(String::as_str) == Some("")
+    })
+    .await;
+    assert_eq!(texts(&seen, "HealthFailure"), [BOOTED, ""]);
+    assert_eq!(
+        texts(&seen, "State").last().map(String::as_str),
+        Some("staged")
+    );
+
+    // All twelve properties of the contract were signalled.
+    let signalled: BTreeSet<String> = seen.keys().cloned().collect();
+    let contract: BTreeSet<String> = members(INTROSPECTION_XML)
+        .into_keys()
+        .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
+        .collect();
+    assert_eq!(contract.len(), 12);
+    assert_eq!(signalled, contract);
+    h.fake.assert_finished();
+}
+
+/// D-Bus activation delivers the call that started the service as soon as it owns its name,
+/// long before the first `bootc status` has returned. Property reads and `GetChanges` must
+/// answer with the real state, not the placeholders (`unknown`, `{}` = "no such
+/// deployment", `[]` = "nothing staged").
+#[tokio::test]
+async fn reads_right_after_activation_wait_for_the_first_refresh() {
+    let h = Harness::new();
+    h.push(
+        status(&host(booted(), Some(staged(true)), Some(rollback())))
+            .delay(Duration::from_millis(500)),
+    );
+    // As main does: the startup refresh is queued, and a client arrives meanwhile.
+    drop(h.daemon.queue().submit(Op::Refresh));
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let p = proxy(&client).await;
+    assert_eq!(p.state().await.unwrap(), State::Staged);
+    assert_eq!(p.staged().await.unwrap().digest.as_deref(), Some(STAGED));
+    assert_eq!(p.booted().await.unwrap().digest.as_deref(), Some(BOOTED));
+    assert!(!p.get_changes().await.unwrap().is_empty());
+    h.fake.assert_finished();
+
+    // The same through a caching proxy, whose first read fills its cache with GetAll.
+    let h = Harness::new();
+    h.push(status(&host(booted(), Some(staged(true)), None)).delay(Duration::from_millis(500)));
+    drop(h.daemon.queue().submit(Op::Refresh));
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let cached = Update1Proxy::builder(&client).build().await.expect("proxy");
+    assert_eq!(cached.state().await.unwrap(), State::Staged);
+    assert_eq!(cached.cached_state().unwrap(), Some(State::Staged));
+    assert_eq!(
+        cached.cached_staged().unwrap().and_then(|s| s.digest),
+        Some(STAGED.to_owned())
+    );
+    h.fake.assert_finished();
+}
+
+/// A client's property cache survives the service's idle exit and is updated only by
+/// signals. A new instance therefore signals every property once, including those at their
+/// default (`LastError` "", `HealthFailure` "", empty dictionaries), so values cached from
+/// the previous instance are replaced.
+#[tokio::test]
+async fn a_new_instance_signals_every_property_once() {
+    let h = Harness::new();
+    h.refresh(&host(booted(), None, None)).await;
+    let (_server, _client, first) = connect_announced(&h, FakeAuthorizer::allow_all()).await;
+    let contract: BTreeSet<String> = members(INTROSPECTION_XML)
+        .into_keys()
+        .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
+        .collect();
+    assert_eq!(first.keys().cloned().collect::<BTreeSet<_>>(), contract);
+    let text = |name: &str| String::try_from(first[name].try_clone().unwrap()).unwrap();
+    assert_eq!(text("LastError"), "");
+    assert_eq!(text("HealthFailure"), "");
+    assert_eq!(text("State"), "up-to-date");
+    let staged = Deployment::try_from(first["Staged"].try_clone().unwrap()).unwrap();
+    assert!(staged.is_empty());
+    h.fake.assert_finished();
+}
+
+/// Text a registry controls reaches clients as valid D-Bus strings: without the fix a NUL
+/// in bootc's error line made both the error reply and `LastError` undecodable for zbus.
+#[tokio::test]
+async fn control_characters_never_reach_the_wire() {
+    let h = Harness::new();
+    h.refresh(&host(booted(), None, None)).await;
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let p = proxy(&client).await;
+    h.push(
+        Scripted::new(BootcCommand::UpgradeCheck)
+            .exit_code(1)
+            .stderr("error: Fetching: manifest unknown: x\0\r\u{9b}2J\u{7}y\n"),
+    );
+    let message = match p.check().await {
+        Err(ApexError::Bootc(message) | ApexError::Network(message)) => message,
+        other => panic!("expected a contract error, got {other:?}"),
+    };
+    assert!(message.contains("manifest unknown"), "{message:?}");
+    assert!(!message.chars().any(char::is_control), "{message:?}");
+    let last_error = p.last_error().await.expect("LastError decodes");
+    assert!(last_error.contains("manifest unknown"), "{last_error:?}");
+    assert!(!last_error.chars().any(char::is_control), "{last_error:?}");
+    h.fake.assert_finished();
+}
+
+/// A burst of `Apply` calls with made-up digests (any active-session process may send
+/// them without a prompt) runs no bootc command, and the daily automatic run still gets in.
+#[tokio::test]
+async fn a_burst_of_bogus_applies_neither_queues_nor_starves_the_automatic_run() {
+    let h = Harness::new();
+    let current = host(booted(), Some(staged(true)), None);
+    h.refresh(&current).await;
+    let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
+    let p = proxy(&client).await;
+    for i in 0..50u8 {
+        let digest = format!("sha256:{i:064x}");
+        assert!(matches!(
+            p.apply(&digest).await,
+            Err(ApexError::DigestMismatch(_))
+        ));
+    }
+    assert_eq!(h.fake.calls().len(), 1, "only the refresh ran");
+    h.push(status(&current))
+        .push(Scripted::new(BootcCommand::UpgradeCheck).stdout("No changes in: x\n"))
+        .push(status(&current));
+    p.automatic().await.expect("automatic");
+    h.fake.assert_finished();
+}

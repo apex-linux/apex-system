@@ -1,0 +1,178 @@
+# M1 implementation contract
+
+This file fixes every name, path and format that more than one component relies on.
+Change it first (in the same change) whenever a contract changes. The reasoning lives
+in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
+
+## 1. Identifiers
+
+| What | Value |
+|---|---|
+| Image repositories | `ghcr.io/sekirokenjii/apex` (stable, release key), `ghcr.io/sekirokenjii/apex-testing` (CI key) |
+| Channel tags | `45` in both repositories; immutable `45.YYYYMMDD.RUN` in `apex`; `sha-<git12>-<run>` in `apex-testing` |
+| Version string | `<fedora>.<yyyymmdd>.<run>`, e.g. `45.20260924.117`; compared numerically field by field |
+| System bus name / object | `io.github.sekirokenjii.Apex.Update1` at `/io/github/sekirokenjii/Apex/Update1` |
+| Interface XML | `crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml` (authoritative) |
+| Polkit action ids (lowercase) | `io.github.sekirokenjii.apex.update.{check,download,apply,discard,rollback,switch-channel,downgrade}` |
+| OCI label prefix | `io.github.sekirokenjii.apex.` (`degraded`, `content-key`, `fedora`) plus standard `org.opencontainers.image.{version,revision,source,created}` |
+| GSettings schema prefix | `io.github.sekirokenjii.Apex` (M2) |
+| State directory | `/var/lib/apex` (0700 root) |
+
+## 2. Installed files (produced by `make install DESTDIR=… PREFIX=/usr`)
+
+| Source | Installed as |
+|---|---|
+| `target/release/apexctl` | `/usr/bin/apexctl` |
+| `target/release/apex-updated` | `/usr/libexec/apex/apex-updated` |
+| `target/release/apex-boot-assess` | `/usr/libexec/apex/apex-boot-assess` |
+| `crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml` | `/usr/share/dbus-1/interfaces/` |
+| `crates/apex-updated/data/apex-updated.service` | `/usr/lib/systemd/system/` |
+| `crates/apex-updated/data/apex-update-auto.service`, `.timer` | `/usr/lib/systemd/system/` |
+| `crates/apex-updated/data/io.github.sekirokenjii.Apex.Update1.service` | `/usr/share/dbus-1/system-services/` |
+| `crates/apex-updated/data/io.github.sekirokenjii.Apex.Update1.conf` | `/usr/share/dbus-1/system.d/` |
+| `crates/apex-updated/data/io.github.sekirokenjii.apex.update.policy` | `/usr/share/polkit-1/actions/` |
+| `crates/apex-updated/data/apex.tmpfiles.conf` | `/usr/lib/tmpfiles.d/apex.conf` |
+| `crates/apex-boot/data/apex-boot-assess.service` | `/usr/lib/systemd/system/` |
+| `crates/apex-boot/data/08_apex-bootcount.cfg` | `/usr/lib/bootupd/grub2-static/configs.d/08_apex-bootcount.cfg` |
+| `crates/apex-boot/data/emergency.service.d/50-apex-bootcount.conf` | `/usr/lib/systemd/system/emergency.service.d/` |
+| `crates/apex-boot/data/rescue.service.d/50-apex-bootcount.conf` | `/usr/lib/systemd/system/rescue.service.d/` |
+
+Image-owned files (not in the RPM) live under `image/system_files/` and are copied into
+the rootfs by the Containerfile. The strict bootc policy is one of them:
+`/usr/share/apex/containers/policy.json` plus the public keys in
+`/usr/share/apex/keys/{release,release-backup,ci}.pub`.
+
+## 3. `manifest.json` (written into every image at `/usr/share/apex/manifest.json`)
+
+Produced in the final image stage by `apexctl build manifest --root / --version … --revision … --base …`.
+
+```json
+{
+  "schema": 1,
+  "name": "apex",
+  "version": "45.20260924.117",
+  "fedora": 45,
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "base_image": "registry.fedoraproject.org/fedora-bootc@sha256:…",
+  "degraded": ["audio"],
+  "packages": [
+    { "name": "bash", "epoch": 0, "version": "5.3.0", "release": "2.fc45", "arch": "x86_64" }
+  ]
+}
+```
+
+- `packages` is sorted by `(name, arch)` in byte order and is unique on that key.
+- `degraded` is sorted and holds any of `audio`, `fingerprint` (later `nvidia`).
+- Consumers must ignore unknown fields. `schema` increases only on breaking change.
+- The image build copies `degraded` into the `io.github.sekirokenjii.apex.degraded`
+  label (comma-separated) at rechunk time.
+
+## 4. Persisted daemon state (`/var/lib/apex`, JSON, atomic write = temp file + fsync + rename)
+
+| File | Content |
+|---|---|
+| `intent.json` | `{ "digest": "sha256:…", "created": <unix seconds> }`, present only between `Apply` and the boot assessment of that digest |
+| `denylist.json` | `{ "digests": [ { "digest": "sha256:…", "reason": "…", "at": <unix seconds> } ] }` |
+| `last-check.json` | `{ "at": <unix>, "remote_digest": "sha256:…" or null, "remote_version": "…" or null }` |
+| `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; removed by `AcknowledgeHealthFailure` and by a green boot |
+| `force-red` | qualification hook only: a root-owned regular file (mode 0600, at most 4 KiB) holding one digest; when it names the booted digest, `apex-boot-assess` adds the failing required check `forced-red` |
+
+Everything else is derived from `bootc status --format=json --format-version=1`.
+
+## 5. GRUB environment variables (owned by `apex-boot`)
+
+Apex uses its own variable names. Fedora's `grub2-set-bootflag` and
+`grub-boot-success.timer` write `boot_success`, and greenboot uses `boot_counter`;
+sharing those names would let a login mark a failed armed boot as good.
+
+| Variable | Set by | Meaning |
+|---|---|---|
+| `apex_target` | set by `apex-updated` on `Apply`; unset by `apex-boot-assess` (green, inconsistent, fallback after the report) and by `apex-updated` (`DiscardStaged`, after its own fallback rollback) | digest of the deployment that must prove itself |
+| `apex_counter` | 3 from `apex-updated` on `Apply`; decremented by the GRUB snippet; 3 again as the fallback hedge written by `apex-boot-assess`; unset together with `apex_target` | remaining attempts; `-1` after GRUB fell back |
+| `apex_ok` | 1 from `apex-boot-assess` on green; 0 from `apex-boot-assess` before a red reboot; reset to 0 by the GRUB snippet at every boot, after the counting | userspace confirmation |
+
+While armed, the snippet also sets GRUB's `fallback=1`, so a kernel that GRUB cannot
+load falls through to the previous deployment immediately.
+
+Arming precondition (the daemon's arming precondition plus `apex_boot::check_arming`):
+- the booted deployment comes from an image;
+- a different image is staged;
+- grubenv is not armed for the booted digest;
+- `health-failure.json` does not name the booted digest.
+
+After finalization ostree makes the staged deployment entry 0 and keeps only the booted
+one as entry 1. Entry 1 therefore always exists, and it must be a confirmed deployment.
+
+A stage made by `SwitchChannel` is applied even when it is not newer, because the
+auth_admin prompt of the switch is the explicit confirmation. An origin-only switch (the
+same digest) is unlocked without arming.
+
+Writes use `grub2-editenv /boot/grub2/grubenv set|unset …`. bootc mounts `/boot`
+read-only, so every write runs in a private mount namespace:
+`unshare --mount --propagation private` → `mount -o remount,rw /boot` →
+`grub2-editenv`. The host never sees a writable `/boot`. Reads parse the environment
+block directly (`# GRUB Environment Block` header, `key=value` lines, `#` padding).
+
+## 6. bootc invocation rules (`apex-bootc`)
+
+- Executable `/usr/bin/bootc`, overridable only in debug builds via `APEX_BOOTC`.
+- `env_clear()`, then `PATH=/usr/bin:/usr/sbin`, `LANG=C.UTF-8`,
+  `CONTAINERS_POLICY_JSON=/usr/share/apex/containers/policy.json`.
+- argv is built only from enum variants and compile-time constants:
+  `status --format=json --format-version=1`, `upgrade --check`,
+  `upgrade --download-only [--progress-fd 3]`, `upgrade --from-downloaded`,
+  `rollback`, `switch --enforce-container-sigpolicy --download-only <compile-time ref>`.
+- Re-locking (`DiscardStaged`) uses `upgrade --download-only`, which pulls the channel tag.
+  It therefore needs the network, and it may stage a newer build, still locked. The
+  daemon accepts the result only when bootc reports a locked stage.
+- Timeouts: status 30 s, check 5 min, download 2 h, others 10 min. Cancellation
+  kills the process group.
+
+## 7. `apexctl` command surface (M1)
+
+```
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, stale
+apexctl update check
+apexctl update download [--force]         --force overrides power/metered gates only
+apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"
+apexctl update discard
+apexctl update rollback [--mark-bad]
+apexctl update changes                    package diff booted → staged
+apexctl update acknowledge                clear HealthFailure after reading it
+apexctl update channel stable|testing     follow another channel (auth_admin)
+apexctl update automatic                  (root, used by the timer)
+apexctl hw report [--json]                read-only: audio init_verbs, charge threshold, dGPU runtime PM, fingerprint device
+apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
+apexctl profile render [--profile P] [--out DIR] [--check]
+apexctl build manifest --root DIR --version V --revision R --base B [--degraded X]...
+```
+
+`profile render` writes into `hardware/<machine>/generated/`:
+`monitors.xml` always; `alc294-<machine>.fw` and `apex-audio.conf` only when audio
+measurements exist. `--check` exits 1 and prints a diff when committed files differ.
+
+## 8. Polkit table
+
+| Action | allow_any | allow_inactive | allow_active |
+|---|---|---|---|
+| check, download, apply, discard (also AcknowledgeHealthFailure) | no | no | yes |
+| rollback, switch-channel, downgrade | no | no | auth_admin |
+
+`Automatic` and `ReportBoot` are accepted only from uid 0 (checked with the bus
+credentials, not polkit). uid 0 is allowed every action without polkit. `downgrade` is
+reserved: no method checks it at M1, a same-channel downgrade is refused, and a channel
+switch is confirmed by the `switch-channel` prompt.
+
+## 9. Crate ownership and boundaries
+
+| Crate | Depends on (internal) | May use tokio | May use GTK |
+|---|---|---|---|
+| `apex-bootc` | — | yes (process runner) | no |
+| `apex-update` | — (pure; its own input types) | no | no |
+| `apex-boot` | `apex-bootc`, `apex-dbus` (used by the binary; the package depends on them, the library code does not use them) | binary only | no |
+| `apex-dbus` | — | no (zbus proxy is runtime-agnostic) | no |
+| `apex-updated` | all of the above | yes (current_thread) | no |
+| `apexctl` | `apex-dbus`, `apex-update` (for `changes` formatting), `apex-bootc` (types only) | yes (current_thread, for zbus) | no |
+
+Rendered hardware files live in `hardware/<machine>/generated/`. The legacy allowlist is
+`image/audit/legacy-allowlist.txt` (`name<TAB>milestone<TAB>reason`).

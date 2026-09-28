@@ -1,0 +1,40 @@
+[package]
+name = "apex-bootc"
+description = "bootc for Apex: lenient status v1 model, progress JSON Lines, argv/env built from enums, process runner with a scripted fake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "apex_bootc"
+
+[features]
+# Exposes `FakeRunner`, a scripted `CommandRunner` for downstream tests.
+testing = []
+
+[dependencies]
+# Maps the progress pipe to fd 3 in the child. Its `pre_exec` hook is the only
+# unsafe code involved, and it lives in that crate (Apache-2.0, by Google), not here.
+command-fds = { version = "0.3.3", features = ["tokio"] }
+nix = { workspace = true, features = ["signal", "process"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+# `net` provides tokio::net::unix::pipe for the progress pipe.
+tokio = { workspace = true, features = ["net"] }
+tracing.workspace = true
+
+[dev-dependencies]
+# Self dev-dependency so the integration tests can use the `testing` feature.
+apex-bootc = { path = ".", features = ["testing"] }
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

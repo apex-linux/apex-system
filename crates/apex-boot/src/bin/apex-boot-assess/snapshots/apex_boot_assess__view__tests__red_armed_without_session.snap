@@ -1,0 +1,83 @@
+---
+source: crates/apex-boot/src/bin/apex-boot-assess/view.rs
+expression: json
+---
+{
+  "decision": "red-armed-no-session",
+  "summary": "red-armed-no-session (report red sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa); grubenv: set apex_ok=0; failed: apex-updated-ping, failed-units; reboot",
+  "verdict": "red",
+  "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reboot": true,
+  "failed_checks": [
+    "apex-updated-ping",
+    "failed-units"
+  ],
+  "steps": [
+    {
+      "step": "apply-env",
+      "ops": [
+        "set apex_ok=0"
+      ]
+    },
+    {
+      "step": "record-health-failure",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "failed_checks": [
+        "apex-updated-ping",
+        "failed-units"
+      ]
+    },
+    {
+      "step": "report",
+      "verdict": "red",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "must_succeed": false
+    },
+    {
+      "step": "reboot"
+    }
+  ],
+  "input": {
+    "apex_target": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "apex_counter": 1,
+    "apex_ok": false,
+    "booted_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "booted_source": "bootc",
+    "default_deployment": "booted",
+    "user_session_active": false,
+    "required": [
+      {
+        "name": "session",
+        "outcome": "pass"
+      },
+      {
+        "name": "core-units-active",
+        "outcome": "pass"
+      },
+      {
+        "name": "apex-updated-ping",
+        "outcome": "timeout"
+      },
+      {
+        "name": "failed-units",
+        "outcome": "fail",
+        "reason": "failed units: gdm.service"
+      },
+      {
+        "name": "grub-cfg-marker",
+        "outcome": "pass"
+      }
+    ],
+    "reported": [
+      {
+        "name": "charge-threshold",
+        "outcome": "pass"
+      },
+      {
+        "name": "fingerprint-device",
+        "outcome": "fail",
+        "reason": "no USB device 04f3:0c6e"
+      }
+    ]
+  }
+}

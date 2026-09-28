@@ -1,0 +1,65 @@
+---
+source: crates/apexctl/tests/hw_report.rs
+expression: report
+---
+{
+  "schema": 1,
+  "machine": "m7400qc",
+  "audio": {
+    "status": "pass",
+    "summary": "hwC1D0 holds the 2 verbs of the patch firmware",
+    "hwdep": "hwC1D0",
+    "patch_firmware": "/usr/lib/firmware/apex/alc294-m7400qc.fw",
+    "expected_verbs": [
+      "0x20 0x500 0x001b",
+      "0x20 0x400 0x4e4b"
+    ],
+    "init_verbs": [
+      "0x20 0x500 0x001b",
+      "0x20 0x400 0x4e4b"
+    ],
+    "patch_parameter": "apex/alc294-m7400qc.fw,apex/alc294-m7400qc.fw,apex/alc294-m7400qc.fw,apex/alc294-m7400qc.fw"
+  },
+  "battery": {
+    "status": "pass",
+    "summary": "BAT0 stops charging at 80 %",
+    "battery": "BAT0",
+    "expected_end_threshold": 80,
+    "end_threshold": 80
+  },
+  "upower": {
+    "status": "pass",
+    "summary": "UPower sees the charge limit and it is on",
+    "threshold_supported": true,
+    "threshold_enabled": true,
+    "end_threshold": 80
+  },
+  "dgpu": {
+    "status": "pass",
+    "summary": "suspended in D3cold, no driver; suspended 97.5 % since boot",
+    "pci": "0000:01:00.0",
+    "present": true,
+    "driver": null,
+    "runtime_status": "suspended",
+    "power_state": "D3cold",
+    "control": "auto",
+    "runtime_active_ms": 2500,
+    "runtime_suspended_ms": 97500,
+    "suspended_percent": 97.5
+  },
+  "fingerprint": {
+    "status": "pass",
+    "summary": "ELAN reader 04f3:0c6e present at 3-1",
+    "usb_id": "04f3:0c6e",
+    "devices": [
+      "3-1"
+    ]
+  },
+  "secure_boot": {
+    "status": "pass",
+    "summary": "Secure Boot is enabled",
+    "uefi": true,
+    "enabled": true,
+    "setup_mode": false
+  }
+}

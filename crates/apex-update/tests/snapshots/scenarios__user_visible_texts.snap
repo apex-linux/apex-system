@@ -1,0 +1,31 @@
+---
+source: crates/apex-update/tests/scenarios.rs
+expression: "lines.join(\"\\n\")"
+---
+power       The battery is below 50%. Connect the charger to download the update.
+power       The battery is below 20%. Connect the charger to install the update.
+power       The battery level is unknown. Connect the charger to download the update.
+power       The battery level is unknown. Connect the charger to install the update.
+metered     The network connection is metered. Connect to a network without data limits to download the update.
+disk-space  There is not enough free disk space. Free up 6.4 GB to download the update.
+disk-space  There is not enough free disk space. Free up 1.1 GB to install the update.
+boot-space  The boot partition is too full for this update. It needs 46.1 MB more free space.
+denylist    This update failed to start correctly before. Waiting for a newer update.
+bootc-flags The system has local package changes that block updates.
+bootc-flags System files are unlocked for temporary changes. Restart to lock them again.
+bootc-flags The previous version is set to start at the next restart. Restart before updating.
+version     The offered version 45.20260920.1 is not newer than the installed version 45.20260924.117.
+version     The update has no version number, so it is not downloaded automatically.
+version     The installed version is unknown, so updates are not downloaded automatically.
+intent      An update is already set to install at the next restart.
+intent      An update is already set to install at the next restart. Cancel it first to download a different one.
+metered     The update channel has a newer update, and cancelling downloads it. The network connection is metered. Connect to a network without data limits to download the update.
+metered     Cancelling may download a newer update from the update channel. The network connection is metered. Connect to a network without data limits to download the update.
+error       The downloaded update has no version number, so it cannot be installed.
+error       There is no downloaded update to install.
+error       The downloaded update changed since it was shown. Review it again.
+error       The update is already set to install at the next restart.
+error       The downloaded version 45.20260920.1 is not newer than the installed version 45.20260924.117.
+error       There is no update to download.
+error       There is no update to cancel.
+error       The update is not set to install, so there is nothing to cancel.

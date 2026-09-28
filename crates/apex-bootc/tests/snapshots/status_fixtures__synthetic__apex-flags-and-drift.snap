@@ -1,0 +1,66 @@
+---
+source: crates/apex-bootc/tests/status_fixtures.rs
+expression: project(&host)
+---
+{
+  "api_version": "org.containers.bootc/v1",
+  "boot_order": "Rollback",
+  "bootc_host": true,
+  "booted": {
+    "cached_update": null,
+    "digest": "sha256:9f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "download_only": false,
+    "image": "ghcr.io/sekirokenjii/apex-testing:45",
+    "incompatible": false,
+    "pinned": false,
+    "root": "/sysroot/ostree/deploy/default/deploy/5d2c1b0a9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706f5e4.1",
+    "soft_reboot_capable": true,
+    "timestamp_unix": 1790125802,
+    "version": "45.20260923.114"
+  },
+  "incompatible": true,
+  "other_deployments": [
+    {
+      "cached_update": null,
+      "digest": "sha256:aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+      "download_only": false,
+      "image": "ghcr.io/sekirokenjii/apex:45",
+      "incompatible": false,
+      "pinned": true,
+      "root": "/sysroot/ostree/deploy/default/deploy/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.0",
+      "soft_reboot_capable": false,
+      "timestamp_unix": null,
+      "version": "45.20260901.12"
+    }
+  ],
+  "rollback": {
+    "cached_update": null,
+    "digest": "sha256:1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+    "download_only": false,
+    "image": "ghcr.io/sekirokenjii/apex:45",
+    "incompatible": false,
+    "pinned": false,
+    "root": "/sysroot/ostree/deploy/default/deploy/e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5.0",
+    "soft_reboot_capable": false,
+    "timestamp_unix": 1789873780,
+    "version": "45.20260920.103"
+  },
+  "rollback_queued": true,
+  "spec_image": "registry:ghcr.io/sekirokenjii/apex-testing:45",
+  "spec_signature": "ContainerPolicy",
+  "staged": {
+    "cached_update": null,
+    "digest": null,
+    "download_only": false,
+    "image": null,
+    "incompatible": true,
+    "pinned": false,
+    "root": "/sysroot/ostree/deploy/default/deploy/c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00.0",
+    "soft_reboot_capable": false,
+    "timestamp_unix": null,
+    "version": null
+  },
+  "staged_download_only": false,
+  "type": "BootcHost",
+  "usr_overlay": "ReadWrite/Transient"
+}
