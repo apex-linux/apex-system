@@ -3,7 +3,7 @@
 #
 # Assert that the rustc on PATH is the release pinned in rust-toolchain.toml.
 #
-#   rust-toolchain-check.sh              fail on a mismatch (rust.yml)
+#   rust-toolchain-check.sh              fail on a mismatch (ci.yml)
 #   rust-toolchain-check.sh --warn-only  report a mismatch as a warning (rpms.sh build:
 #                                        the RPM is built with Fedora's current rust
 #                                        anyway, and OS updates must not stop for it)

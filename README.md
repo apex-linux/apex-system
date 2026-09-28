@@ -8,7 +8,7 @@ ELAN fingerprint reader, Samsung 2880×1800 OLED at 90 Hz).
   never reboots behind your back, and a bad update rolls back after a counted number of
   failed boots.
 - **Desktop:** GNOME 51 on Wayland only, with GTK4/libadwaita apps. Legacy components
-  are removed and kept out by a CI gate.
+  are removed and kept out by a build gate.
 - **Display:** pixel-exact by default (integer scale 2 on the built-in panel).
 - **Hardware:** fixes for this machine: ALC294 speakers, the ELAN `04f3:0c6e` reader,
   firmware, dGPU power gating and the battery charge limit. Each fix is meant to go
@@ -34,8 +34,8 @@ ELAN fingerprint reader, Samsung 2880×1800 OLED at 90 Hz).
 crates/     Rust: apex-bootc, apex-update, apex-boot, apex-dbus, apex-updated, apexctl
 hardware/   machine profile (single source of truth) and rendered drop-ins
 image/      Containerfile, package lists, rootfs overlay, image checks
-packaging/  RPM spec, libfprint patch series, kernel overlay (M2)
-.github/    CI: rust, rpms, libfprint, image, qualify, canaries
+packaging/  RPM spec, libfprint patch series, the kernel lane's patches (S1c)
+.github/    ci.yml, the only workflow; the scripts of ci.yml and the builder VM
 ```
 
 ## Development
@@ -51,9 +51,11 @@ just check
 just render
 ```
 
-Image builds run in CI, or in a Fedora 45 builder VM (see ADR 0013). Hardware
-measurements need root and are run by hand. Nothing in this repository runs `sudo` for
-you.
+Packages and images build in a Fedora 45 builder VM
+([ARCHITECTURE §4](docs/ARCHITECTURE.md#4-build-and-publish)). GitHub runs only
+`ci.yml`, which checks the code on every pull request and every push to `main`.
+Hardware measurements need root and are run by hand. Nothing in this repository runs
+`sudo` for you.
 
 ## License
 

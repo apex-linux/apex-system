@@ -561,7 +561,7 @@ fi
 mkdir -p "$TMP/rustc-bin"
 printf '#!/usr/bin/env bash\nprintf "rustc 9.9.9\\nrelease: 9.9.9\\n"\n' >"$TMP/rustc-bin/rustc"
 chmod +x "$TMP/rustc-bin/rustc"
-check "toolchain mismatch fails rust.yml" 1 \
+check "toolchain mismatch fails ci.yml" 1 \
     "$(PATH="$TMP/rustc-bin:$PATH" GITHUB_STEP_SUMMARY=/dev/null rc_of "$APEX_ROOT/.github/scripts/rust-toolchain-check.sh")"
 check "toolchain mismatch only warns in rpms.sh build" 0 \
     "$(PATH="$TMP/rustc-bin:$PATH" GITHUB_STEP_SUMMARY=/dev/null rc_of "$APEX_ROOT/.github/scripts/rust-toolchain-check.sh" --warn-only)"
@@ -618,7 +618,8 @@ check "image.sh build refuses a floating BASE tag" 1 "$ib_rc"
 # The unedited Containerfile gets past the check: to git (for the revision), which fails.
 image_build_with 's|^$||'
 check_true "the committed Containerfile passes the check" grep -q 'unexpected: .*git' <<<"$ib_log"
-# Every Fedora container of the workflows is a digest pin on registry.fedoraproject.org.
+# Every Fedora container of the workflows (ci.yml) is a digest pin on
+# registry.fedoraproject.org.
 wf_quay=$(grep -rhoE 'quay\.io/fedora/[a-z0-9._-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}' \
     "$APEX_ROOT/.github/workflows" || true)
 check "no workflow pins a Fedora image by digest on quay.io" "" "$wf_quay"
@@ -749,7 +750,7 @@ check_false "a pull request run may not" replay_run_ok "$R" <<<"$(run_json pull_
 check_false "a fork's run may not" replay_run_ok "$R" <<<"$(run_json pull_request main evil/apex-fedora)"
 check_false "a dispatch on another branch may not" replay_run_ok "$R" <<<"$(run_json workflow_dispatch wip "$R")"
 check_false "another workflow's run may not" replay_run_ok "$R" \
-    <<<"$(run_json push main "$R" .github/workflows/spike.yml)"
+    <<<"$(run_json push main "$R" .github/workflows/ci.yml)"
 check_false "a run still in progress may not" replay_run_ok "$R" \
     <<<"$(run_json push main "$R" | jq '.status = "in_progress"')"
 check_false "a run without a head repository may not" replay_run_ok "$R" \

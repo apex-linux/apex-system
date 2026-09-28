@@ -327,7 +327,7 @@ containerfile_from_images() {
 }
 
 # ga_reached: 0 or 1. APEX_GA_REACHED overrides the Containerfile's ARG GA_REACHED
-# default, which is the reviewed switch (canaries.yml opens an issue at Fedora GA).
+# default, which is the reviewed switch (set it to 1 at Fedora GA).
 ga_reached() {
     local v=${APEX_GA_REACHED:-}
     [[ -n $v ]] || v=$(containerfile_arg GA_REACHED)
@@ -372,13 +372,14 @@ is_fedora_pin() {
 # ---------------------------------------------------------------------------------------
 # Provenance and replay checks (JSON on stdin), kept here so selftest.sh covers them.
 
-# The repository whose workflows publish Apex artifacts (attestation identity).
+# The GitHub repository of Apex (the attestation identity of oci-artifact.sh lookup).
 readonly APEX_GITHUB_REPO=${APEX_SOURCE_URL#https://github.com/}
 
 # replay_run_ok REPO: true when the Actions run JSON on stdin (GET
 # /repos/REPO/actions/runs/ID) is a finished image.yml run of REPO's own main branch
 # that was not triggered by a pull request, so its `lock` artifact was written by
-# reviewed code (image.yml replays it into a signed build).
+# reviewed code. ci.yml replaced image.yml and builds nothing, so no run passes now;
+# lock replay goes in S2c.
 replay_run_ok() {
     jq -e --arg repo "$1" '
         .path == ".github/workflows/image.yml"

@@ -13,7 +13,7 @@ generated := "hardware/m7400qc/generated"
 default:
     @just --list
 
-# fmt --check, clippy with warnings denied, and the tests: what rust.yml runs.
+# fmt --check, clippy with warnings denied, and the tests, as ci.yml runs them.
 check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -27,11 +27,11 @@ fmt:
 deny:
     cargo deny --locked check
 
-# privacy-guard.yml on tracked and untracked files: run it before `git add` after fingerprint work.
+# ci.yml's privacy guard on tracked and untracked files: run it before `git add` after fingerprint work.
 privacy:
     .github/scripts/privacy-guard.sh --untracked
 
-# image-tests.yml: the image checks' tests (files needing bwrap or systemd tools skip without them).
+# The image checks' tests, also run by ci.yml (files needing bwrap or systemd tools skip here without them).
 image-test:
     image/tests/run.sh
 
@@ -51,7 +51,7 @@ rpm:
     if [[ $id != fedora ]]; then
         echo "'make rpm' needs Fedora 45 (rpmbuild, Fedora's rust and cargo-rpm-macros)." >&2
         echo "Run it in the builder VM, or: toolbox create -i registry.fedoraproject.org/fedora-toolbox:45" >&2
-        echo "CI builds it with: .github/scripts/rpms.sh build OUTDIR (as root in fedora:45)." >&2
+        echo "The builder VM builds it with: .github/scripts/rpms.sh build OUTDIR (as root in fedora:45)." >&2
         exit 1
     fi
     make rpm
@@ -62,7 +62,7 @@ image:
     @echo 'In the VM, from a checkout of this repository:'
     @echo ''
     @echo '  sudo dnf install podman skopeo jq git-core'
-    @echo '  # RPM inputs: build them, or reuse the published artifacts of the same keys'
+    @echo '  # RPM inputs: build them'
     @echo '  sudo podman run --rm -v "$PWD:/src:z" -w /src registry.fedoraproject.org/fedora:45 .github/scripts/rpms.sh build /src/_build/rpms'
     @echo '  sudo podman run --rm -v "$PWD:/src:z" -w /src registry.fedoraproject.org/fedora:45 .github/scripts/libfprint.sh build /src/_build/libfprint   # exit 3 = degraded'
     @echo '  .github/scripts/image.sh context --rpms-dir _build/rpms --libfprint-dir _build/libfprint'
@@ -70,8 +70,8 @@ image:
     @echo '  .github/scripts/image.sh inspect'
     @echo '  .github/scripts/image.sh rechunk      # optional locally; output in _build/image/oci'
     @echo ''
-    @echo 'The same script runs in image.yml; publishing (push, sign, tag) happens only in CI.'
-    @echo 'Faster loop for system_files-only changes: FROM ghcr.io/sekirokenjii/apex-testing:45 plus COPY, tested with bcvk ephemeral.'
+    @echo 'Nothing publishes yet: `just publish` (push, sign, tag) comes in roadmap S1d. GitHub runs only ci.yml.'
+    @echo 'Faster loop for system_files-only changes: FROM localhost/apex:build (the last image.sh build) plus COPY, tested with bcvk ephemeral.'
 
 # Print the sudo command that dumps the ALC294 COEFs for PHASE (A-E, see coef-dump.sh).
 audio-dump phase="A":
@@ -89,7 +89,7 @@ audio-dump phase="A":
 
 # How to run the KVM qualification locally (in the builder VM, with nested KVM).
 qualify-local:
-    @echo 'qualify.yml runs .github/scripts/qualify.sh; the builder VM can run it too:'
+    @echo 'Qualification runs .github/scripts/qualify.sh in the builder VM; GitHub does not run it:'
     @echo ''
     @echo '  sudo dnf install qemu-system-x86 edk2-ovmf dosfstools btrfs-progs openssh-clients jq skopeo podman openssl'
     @echo '  test -w /dev/kvm   # nested KVM must be on (kvm_amd nested=1 on the host)'

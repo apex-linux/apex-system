@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Content key and build of the apex RPM (ADR 0013, rpms.yml).
+# Content key and build of the apex RPM (ADR 0013). The builder VM runs `build`; ci.yml
+# runs `toolchain`.
 #
 #   rpms.sh key                  print the content key of the apex RPM for git HEAD
 #   rpms.sh build OUTDIR [KEY]   install build deps, `make rpm`, copy the binary RPMs to
 #                                OUTDIR; with KEY, fail if the key changed meanwhile
 #   rpms.sh toolchain            install Fedora's rust, cargo, clippy, rustfmt and gcc
-#                                from the same repositories (rust.yml)
+#                                from the same repositories (ci.yml)
 #
-# Run them inside registry.fedoraproject.org/fedora:45 as root (CI does, and so can the
-# builder VM with `podman run --rm -v "$PWD:/src:Z" -w /src
+# Run them inside registry.fedoraproject.org/fedora:45 as root (ci.yml does, and so
+# does the builder VM with `podman run --rm -v "$PWD:/src:Z" -w /src
 # registry.fedoraproject.org/fedora:45 ...`).
 #
 # Repositories: every dnf5 call passes lib.sh's dnf_repo_args, the image compose's set
@@ -28,8 +29,7 @@
 #   - `git ls-tree -r HEAD crates packaging/apex.spec Makefile Cargo.lock Cargo.toml
 #     LICENSE README.md` (blob hashes of every committed input of the RPM; the last two
 #     are packaged as %license and %doc).
-# It is also the tag of ghcr.io/sekirokenjii/apex-rpms, so a key hit reuses the RPMs
-# (after oci-artifact.sh lookup has checked that rpms.yml on main attested them).
+# It is also the tag of ghcr.io/sekirokenjii/apex-rpms (lib.sh APEX_REPO_RPMS).
 #
 # The build also runs `packaging/licenses.py --check` first, so an RPM whose License tag
 # no longer matches the linked crates is never built or published.
@@ -39,7 +39,7 @@ set -euo pipefail
 
 readonly KEY_SCHEMA=3
 readonly KEY_PATHS=(crates packaging/apex.spec Makefile Cargo.lock Cargo.toml LICENSE README.md)
-# The build recipe; the workflow only runs `rpms.sh build` in the pinned fedora:45.
+# The build recipe; the caller only runs `rpms.sh build` in fedora:45.
 readonly RECIPE_PATHS=(.github/scripts/rpms.sh)
 readonly SPEC="$APEX_ROOT/packaging/apex.spec"
 readonly INSTALL_TOOL="$APEX_ROOT/.github/scripts/install-tool.sh"
@@ -168,9 +168,9 @@ cmd_build() {
     key=$(compute_key "$installed")
     if [[ -n $expected && $key != "$expected" ]]; then
         die "content key changed between resolve and build ($expected -> $key, rust now \
-$installed); the Fedora repositories moved in between. Re-run the workflow."
+$installed); the Fedora repositories moved in between. Build again."
     fi
-    # rust.yml tests with the rust-toolchain.toml release. A Fedora rust update that
+    # ci.yml tests with the rust-toolchain.toml release. A Fedora rust update that
     # rust-toolchain.toml does not follow yet is reported, not fatal: failing here would
     # hold back every OS security update until the pin moves.
     "$APEX_ROOT/.github/scripts/rust-toolchain-check.sh" --warn-only
