@@ -1,5 +1,3 @@
-//! The command line (contract §7), defined with clap's derive API.
-
 use std::path::PathBuf;
 
 use apex_dbus::Channel;
@@ -20,12 +18,10 @@ system bus; polkit may ask for a password.";
 #[derive(Debug, Parser)]
 #[command(name = "apexctl", version, after_help = AFTER_HELP, propagate_version = false)]
 pub struct Cli {
-    /// What to do.
     #[command(subcommand)]
     pub command: Command,
 }
 
-/// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Show the update state: booted, staged and rollback images, degraded parts, staleness.
@@ -49,7 +45,6 @@ pub enum Command {
     Build(BuildCommand),
 }
 
-/// `apexctl update …`.
 #[derive(Debug, Subcommand)]
 pub enum UpdateCommand {
     /// Check whether a newer version of Apex is available on the followed channel.
@@ -113,20 +108,17 @@ pub enum UpdateCommand {
     Automatic,
 }
 
-/// Validates `apply --digest` while parsing, so a typo is a usage error before the update
-/// service is started (D-Bus activation runs `bootc status`, which can take 30 s).
+/// Validated while parsing: D-Bus activation of the update service runs `bootc status`,
+/// which can take 30 s before a typo would be reported.
 fn digest_arg(text: &str) -> Result<String, apex_bootc::DigestError> {
     apex_bootc::Digest::parse(text).map(|digest| digest.as_str().to_owned())
 }
 
-/// Parses a channel name into the typed [`Channel`] that `SwitchChannel` takes, offering
-/// exactly the contract strings (`stable`, `testing`) in `--help` and in errors.
 fn channel_parser() -> impl TypedValueParser<Value = Channel> {
     PossibleValuesParser::new(Channel::ALL.iter().copied().map(Channel::as_str))
         .try_map(|name| name.parse::<Channel>())
 }
 
-/// `apexctl hw …`.
 #[derive(Debug, Subcommand)]
 pub enum HwCommand {
     /// Check audio init verbs, charge limit, dGPU power state, fingerprint reader and Secure
@@ -135,7 +127,6 @@ pub enum HwCommand {
         /// Print JSON.
         #[arg(long)]
         json: bool,
-        /// Hidden root prefix for tests.
         #[command(flatten)]
         root: RootArg,
     },
@@ -144,7 +135,6 @@ pub enum HwCommand {
     Audio(AudioCommand),
 }
 
-/// `apexctl hw audio …`.
 #[derive(Debug, Subcommand)]
 pub enum AudioCommand {
     /// Parse the ALC294's /proc/asound codec dump: pins, COEFs (when the kernel's COEF
@@ -156,13 +146,11 @@ pub enum AudioCommand {
         /// Print JSON.
         #[arg(long)]
         json: bool,
-        /// Hidden root prefix for tests.
         #[command(flatten)]
         root: RootArg,
     },
 }
 
-/// A hidden root prefix for `/sys` and `/proc`, for tests against a fake tree.
 #[derive(Debug, Args)]
 pub struct RootArg {
     /// Read /sys, /proc and /usr under this directory instead of /.
@@ -170,7 +158,6 @@ pub struct RootArg {
     pub sysroot: PathBuf,
 }
 
-/// `apexctl profile …`.
 #[derive(Debug, Subcommand)]
 pub enum ProfileCommand {
     /// Render monitors.xml (always) and the ALC294 patch firmware and modprobe file (once
@@ -189,7 +176,6 @@ pub enum ProfileCommand {
     },
 }
 
-/// `apexctl build …`.
 #[derive(Debug, Subcommand)]
 pub enum BuildCommand {
     /// Write DIR/usr/share/apex/manifest.json from the rpm database under DIR.
@@ -340,7 +326,6 @@ mod tests {
         assert!(help.contains("testing"), "{help}");
     }
 
-    /// A well-formed digest for the parser tests.
     static VALID_DIGEST: std::sync::LazyLock<String> =
         std::sync::LazyLock::new(|| format!("sha256:{}", "5".repeat(64)));
 
@@ -384,7 +369,6 @@ mod tests {
             help.contains(STATUS_JSON_HELP.lines().next().unwrap()),
             "{help}"
         );
-        // Every key of the real output, top level and deployment, has a line in the help.
         let json = serde_json::to_value(StatusJson::new(&staged_status())).unwrap();
         let keys = json
             .as_object()
@@ -392,7 +376,6 @@ mod tests {
             .keys()
             .chain(json["booted"].as_object().unwrap().keys());
         for key in keys {
-            // A key line is "  key  description" or "  key, key, key".
             let documented = STATUS_JSON_HELP.lines().any(|line| {
                 let line = line.trim_start();
                 let names = line.split_once("  ").map_or(line, |(names, _)| names);
@@ -402,8 +385,7 @@ mod tests {
         }
     }
 
-    /// The long help of `apexctl update <name>`, with clap's line wrapping undone.
-    fn update_help(name: &str) -> String {
+    fn unwrapped_update_help(name: &str) -> String {
         let help = Cli::command()
             .find_subcommand_mut("update")
             .and_then(|update| update.find_subcommand_mut(name))
@@ -414,25 +396,23 @@ mod tests {
 
     #[test]
     fn update_help_documents_the_busy_and_channel_behaviour() {
-        // `update check` exits 0 when the service is busy (a download runs): the exit code
-        // is part of the interface, so the help says it.
-        let check = update_help("check");
+        let check = unwrapped_update_help("check");
         assert!(
             check.contains("Exits 0 without checking when the update service is busy"),
             "{check}"
         );
-        let changes = update_help("changes");
+        let changes = unwrapped_update_help("changes");
         assert!(
             changes.contains("Fails (exit 1) while the update service"),
             "{changes}"
         );
-        let channel = update_help("channel");
+        let channel = unwrapped_update_help("channel");
         assert!(
             channel.contains("run `apexctl update apply` and restart"),
             "{channel}"
         );
         assert!(channel.contains("no boot check is armed"), "{channel}");
-        let discard = update_help("discard");
+        let discard = unwrapped_update_help("discard");
         assert!(discard.contains("needs the network"), "{discard}");
     }
 

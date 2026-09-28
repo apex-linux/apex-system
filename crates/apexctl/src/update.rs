@@ -1,11 +1,3 @@
-//! `apexctl update …`: each subcommand as a function over [`UpdateService`].
-//!
-//! Every function returns the text for stdout or a [`ClientError`] whose
-//! [`exit`](ClientError::exit) gives the process exit code (0 ok, 1 error, 2 policy denied,
-//! 3 nothing to do). None of them reboots: `apply` and `rollback` only say that a reboot
-//! finishes the job, because the daemon never reboots and the desktop session owns that
-//! decision (ADR 0008).
-
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 
@@ -20,30 +12,19 @@ use crate::status::{
     short_digest, status_sentence, version_label,
 };
 
-/// `update automatic` refused as not authorized: the daemon accepts it from uid 0 only.
 const AUTOMATIC_ROOT_HINT: &str = "This command is for the system timer \
 (apex-update-auto.service) and runs as root: sudo apexctl update automatic";
 
-/// `update discard` failed because the registry cannot be reached.
 const DISCARD_NETWORK_HINT: &str = "The update is still set to install at the next restart. \
 Discarding locks it again by downloading from the update channel, which needs the network; \
 try again once online.";
 
-/// `update discard` failed in bootc, or the service could not confirm the outcome.
 const DISCARD_STATUS_HINT: &str =
     "Check with apexctl status whether the update is still set to install at the next restart.";
 
-/// The follow-up line printed after `command` failed with `error`: [`ClientError::hint`],
-/// with these exceptions:
-///
-/// - the `--force` advice for a refused gate follows only a plain `update download`, the
-///   one command whose power and metered gates `--force` overrides. After any other
-///   command (or `download --force`) the refusal came from a gate that nothing overrides;
-/// - `update automatic` is root-only (checked by uid, not polkit), so the desktop-session
-///   advice for `NotAuthorized` would be wrong;
-/// - a failed `update discard` says whether the update may still install.
 pub fn hint(command: &UpdateCommand, error: &ClientError) -> Option<&'static str> {
     match (command, daemon_kind(error)) {
+        // Root-only by uid, so the polkit advice of the generic hint would be wrong.
         (UpdateCommand::Automatic, Some(ErrorKind::NotAuthorized)) => {
             return Some(AUTOMATIC_ROOT_HINT);
         }
@@ -53,15 +34,13 @@ pub fn hint(command: &UpdateCommand, error: &ClientError) -> Option<&'static str
         }
         _ => {}
     }
-    if error.exit() == Exit::PolicyDenied
-        && !matches!(command, UpdateCommand::Download { force: false })
-    {
+    let force_advice_applies = matches!(command, UpdateCommand::Download { force: false });
+    if error.exit() == Exit::PolicyDenied && !force_advice_applies {
         return None;
     }
     error.hint()
 }
 
-/// The kind of a contract error reply from the daemon; `None` for any other failure.
 fn daemon_kind(error: &ClientError) -> Option<ErrorKind> {
     match error {
         ClientError::Daemon(error) => error.kind(),
@@ -69,29 +48,23 @@ fn daemon_kind(error: &ClientError) -> Option<ErrorKind> {
     }
 }
 
-/// The deployment's digest, or a placeholder.
 fn digest_of(deployment: &Deployment) -> &str {
     deployment.digest.as_deref().unwrap_or("unknown digest")
 }
 
-/// `It comes from the testing channel (…).` when `deployment` is not from the running
-/// image's repository (after `apexctl update channel`).
 fn origin_sentence(status: &ServiceStatus, deployment: &Deployment) -> Option<String> {
     other_origin(&status.booted, deployment).map(|origin| format!("It comes from {origin}."))
 }
 
-/// Whether `deployment` is the build that is running: a stage made by `apexctl update
-/// channel` when the other channel offers the same image (an origin-only switch).
 fn is_running_build(status: &ServiceStatus, deployment: &Deployment) -> bool {
     deployment.digest.is_some() && deployment.digest == status.booted.digest
 }
 
-/// What applying an origin-only channel switch does (M1 contract §5).
 const SAME_BUILD_NOTE: &str = "It is the build that is running now, so only the channel \
 changes: the same build starts again, and no boot check is armed for that restart.";
 
-/// A newer build the last check found while an older one is staged: the `staged` and
-/// `ready-for-reboot` states rank before `available`, so the state alone hides it.
+/// The `staged` and `ready-for-reboot` states rank before `available`, so the state alone
+/// hides a newer build.
 fn newer_than_stage(status: &ServiceStatus) -> Option<&Deployment> {
     let available = &status.available;
     (!available.is_empty() && !status.staged.is_empty() && available.digest != status.staged.digest)
@@ -105,8 +78,6 @@ fn version_of(deployment: &apex_dbus::Deployment) -> String {
         .unwrap_or_else(|| "the update".to_owned())
 }
 
-/// `update check` answered `Busy`: the service did not check. The status read afterwards
-/// is best effort, since the skip itself is the answer.
 async fn check_skipped<S: UpdateService>(service: &S, reason: &str) -> String {
     let mut out = String::new();
     match service.status().await {
@@ -126,17 +97,6 @@ async fn check_skipped<S: UpdateService>(service: &S, reason: &str) -> String {
     out
 }
 
-/// `apexctl update check`.
-///
-/// With an older update already staged, a newer build found by the check is named too:
-/// the state stays `staged` (or `ready-for-reboot`), so the state sentence alone would
-/// advise applying the older one.
-///
-/// While a download, a channel switch, the timer's run or a discard runs or waits, the
-/// service answers `Busy` without checking: those fetch from the update channel
-/// themselves. That is not a failure, so the command says that nothing was checked and
-/// exits 0, as `apexctl update check --help` documents. Any other `Busy` (a full queue,
-/// the service stopping) is reported the same way, with the service's reason.
 pub async fn check<S: UpdateService>(service: &S) -> Result<String, ClientError> {
     if let Err(error) = service.check().await {
         return match &error {
@@ -210,7 +170,6 @@ pub async fn check<S: UpdateService>(service: &S) -> Result<String, ClientError>
     Ok(out)
 }
 
-/// `apexctl update download [--force]`. `force` overrides the power and metered gates only.
 pub async fn download<S: UpdateService>(service: &S, force: bool) -> Result<String, ClientError> {
     service.download(force).await?;
     let status = service.status().await?;
@@ -233,7 +192,6 @@ pub async fn download<S: UpdateService>(service: &S, force: bool) -> Result<Stri
     Ok(out)
 }
 
-/// The digest `apply` should confirm: `--digest`, validated, or the staged one.
 fn apply_target(status: &ServiceStatus, digest: Option<&str>) -> Result<String, ClientError> {
     if let Some(digest) = digest {
         return Digest::parse(digest)
@@ -249,8 +207,6 @@ fn apply_target(status: &ServiceStatus, digest: Option<&str>) -> Result<String, 
     }
 }
 
-/// `apexctl update apply [--digest D]`: unlocks the staged update for the next boot.
-/// Without `--digest` it applies the staged digest that `apexctl status` shows.
 pub async fn apply<S: UpdateService>(
     service: &S,
     digest: Option<&str>,
@@ -280,27 +236,22 @@ pub async fn apply<S: UpdateService>(
     Ok(out)
 }
 
-/// `apexctl update discard`: locks an applied, not yet booted update again.
-///
-/// The daemon re-locks by pulling the channel's tag again (Update1 `DiscardStaged`), so
-/// when the channel moved on, another build replaces the applied one, locked. The status
-/// read afterwards says which of the two happened. Either way the locked build is named
-/// with its full digest and the `apply --digest` command for exactly that build: the
-/// automatic download may replace a locked stage with a newer build later, so nothing
-/// promises that this one stays downloaded, and a plain `apply` would take whatever is
-/// staged by then. A replacement is also offered for review first (ADR 0008).
+/// `DiscardStaged` re-locks by pulling the channel's tag again, so a newer build may replace
+/// the applied one; and the timer may replace a locked stage later, hence `apply --digest`.
 pub async fn discard<S: UpdateService>(service: &S) -> Result<String, ClientError> {
     let before = service.status().await?;
     service.discard_staged().await?;
     let after = service.status().await?;
-    // Starts a sentence.
-    let applied = before
+    let applied_subject = before
         .staged
         .version
         .clone()
         .unwrap_or_else(|| "The update".to_owned());
     let mut out = String::new();
-    let _ = writeln!(out, "{applied} will not be installed at the next restart.");
+    let _ = writeln!(
+        out,
+        "{applied_subject} will not be installed at the next restart."
+    );
     let staged = &after.staged;
     if staged.is_empty() {
         let _ = writeln!(
@@ -309,15 +260,14 @@ pub async fn discard<S: UpdateService>(service: &S) -> Result<String, ClientErro
         );
         return Ok(out);
     }
-    // Whether the locked build is the one that was applied; unknown without both digests.
-    let same = match (&before.staged.digest, &staged.digest) {
+    let relocked_the_applied_build = match (&before.staged.digest, &staged.digest) {
         (Some(applied), Some(locked)) => Some(applied == locked),
         _ => None,
     };
     let _ = writeln!(
         out,
         "{}",
-        match same {
+        match relocked_the_applied_build {
             Some(true) => "The update channel still offers it, so it is downloaded and locked:",
             Some(false) => {
                 "The update channel has moved on: cancelling downloaded its current build, \
@@ -330,7 +280,7 @@ pub async fn discard<S: UpdateService>(service: &S) -> Result<String, ClientErro
     if let Some(origin) = origin_sentence(&after, staged) {
         let _ = writeln!(out, "{origin}");
     }
-    if same != Some(true) {
+    if relocked_the_applied_build != Some(true) {
         let _ = writeln!(out, "Review it with: apexctl update changes");
     }
     match &staged.digest {
@@ -354,18 +304,13 @@ pub async fn discard<S: UpdateService>(service: &S) -> Result<String, ClientErro
     Ok(out)
 }
 
-/// `apexctl update rollback [--mark-bad]`.
 pub async fn rollback<S: UpdateService>(
     service: &S,
     mark_bad: bool,
 ) -> Result<String, ClientError> {
     let before = service.status().await?;
     if let Err(error) = service.rollback(mark_bad).await {
-        // The daemon refuses while a rollback is queued. Its message assumes the queued
-        // deployment is the older one; name it, and say what to do instead. When the
-        // running version may be the one to keep, that is the status text's safe path
-        // (RECOVERY.md §1), never a bare `bootc rollback`: the queued deployment may be an
-        // update whose boots are still being counted, which the service does not publish.
+        // The daemon's refusal assumes the queued deployment is the older one.
         if before.state == State::RollbackQueued && error.exit() == Exit::NothingToDo {
             let (sentence, next) = status_sentence(&before);
             let mut text = sentence;
@@ -402,19 +347,8 @@ pub async fn rollback<S: UpdateService>(
     Ok(out)
 }
 
-/// `apexctl update changes`: the package diff from the booted to the staged image, with
-/// the staged version and full digest above it and, below, the `apply --digest` command
-/// that applies exactly that image.
-///
-/// The automatic timer may replace a locked stage at any time, and `apply` without
-/// `--digest` takes whatever is staged then. The status is read before and after
-/// `GetChanges`; if the staged digest changed in between, the list may describe the old
-/// image, so the command fails instead of printing it.
-///
-/// `GetChanges` fails while the service does not know the system's state yet: `Busy` right
-/// after it started (it waits up to 20 s for its first reading) and `Internal` when bootc
-/// cannot be used. Both exit 1 with a message about the package list rather than the
-/// generic "another update operation is running".
+/// The timer may replace a locked stage at any time, so the status is read on both sides of
+/// `GetChanges`, and the exact digest is printed for `apply --digest`.
 pub async fn changes<S: UpdateService>(service: &S) -> Result<String, ClientError> {
     let before = service.status().await?;
     let changes = service.changes().await.map_err(changes_error)?;
@@ -425,7 +359,7 @@ pub async fn changes<S: UpdateService>(service: &S) -> Result<String, ClientErro
         ));
     }
     if before.staged.digest != status.staged.digest {
-        return Err(ClientError::Changed(
+        return Err(ClientError::ChangedWhileReading(
             "The downloaded update was replaced while its package list was read. Run \
              apexctl update changes again."
                 .to_owned(),
@@ -471,7 +405,8 @@ pub async fn changes<S: UpdateService>(service: &S) -> Result<String, ClientErro
     Ok(out)
 }
 
-/// A failed `GetChanges`, phrased for `update changes` (see [`changes`]).
+/// `Busy` from `GetChanges` means the service has not read the system yet, not that another
+/// operation runs.
 fn changes_error(error: ClientError) -> ClientError {
     let ClientError::Daemon(reply) = &error else {
         return error;
@@ -489,11 +424,6 @@ fn changes_error(error: ClientError) -> ClientError {
     }
 }
 
-/// `apexctl update acknowledge`: clears the `HealthFailure` notice once the user has read
-/// it (contract §7; polkit `discard`, contract §8).
-///
-/// Only the notice goes away: nothing is rolled back and the deployment keeps running.
-/// Without a recorded failure this is nothing to do (exit 3) and the daemon is not called.
 pub async fn acknowledge<S: UpdateService>(service: &S) -> Result<String, ClientError> {
     let before = service.status().await?;
     let failed = before.health_failure.as_str();
@@ -511,9 +441,8 @@ pub async fn acknowledge<S: UpdateService>(service: &S) -> Result<String, Client
          rolled back.",
         short_digest(failed)
     );
-    // `rollback --mark-bad` denylists the booted digest, so suggest it only when the failed
-    // update is the one running.
-    if before.booted.digest.as_deref() == Some(failed) {
+    let failed_update_is_running = before.booted.digest.as_deref() == Some(failed);
+    if failed_update_is_running {
         let _ = writeln!(
             out,
             "It is still the running version. To go back to the previous version instead: \
@@ -523,18 +452,8 @@ pub async fn acknowledge<S: UpdateService>(service: &S) -> Result<String, Client
     Ok(out)
 }
 
-/// `apexctl update channel stable|testing`: follow another channel of the same Fedora
-/// release (polkit `switch-channel`, `auth_admin`).
-///
-/// The daemon downloads the channel's image and stages it locked before it replies, so the
-/// running system is unchanged until the user applies the update and restarts. `Apply`
-/// installs such a stage even when it is not newer: choosing the channel was the
-/// confirmation. When the other channel offers the running build (an origin-only switch),
-/// applying it changes only the channel and arms no boot check (M1 contract §5); the
-/// output says both. Asking for the channel already followed is the daemon's `NothingToDo`
-/// (exit 3); the check is left to the daemon because the `Channel` property names the
-/// booted image's channel, which differs from the followed one after an earlier switch
-/// that was not booted yet.
+/// "Already followed" is left to the daemon: the `Channel` property names the booted image's
+/// channel, not the followed one after a switch that has not booted yet.
 pub async fn channel<S: UpdateService>(
     service: &S,
     channel: Channel,
@@ -579,9 +498,6 @@ pub async fn channel<S: UpdateService>(
     Ok(out)
 }
 
-/// Why an automatic run that failed with `error` only waits for the next timer run: another
-/// update operation holds the daemon (`Busy`; a user download can take two hours), or the
-/// registry cannot be reached (`Network`; an offline laptop). `None` for real failures.
 fn automatic_deferral(error: &ClientError) -> Option<String> {
     let ClientError::Daemon(error) = error else {
         return None;
@@ -597,13 +513,7 @@ fn automatic_deferral(error: &ClientError) -> Option<String> {
     ))
 }
 
-/// `apexctl update automatic`: the timer's run (root only; the daemon checks the uid).
-///
-/// The daemon treats a deferral as success ("the timer did its job"). A run that finds
-/// another operation running (`Busy`) or no network (`Network`) is the same kind of
-/// deferral, so it exits 0 with the reason on stdout (the journal of
-/// `apex-update-auto.service`) instead of leaving a failed unit behind. A network failure
-/// is still recorded by the daemon and shown by `apexctl status` as the last error.
+/// `Busy` and `Network` are deferrals like the daemon's own, so the timer unit does not fail.
 pub async fn automatic<S: UpdateService>(service: &S) -> Result<String, ClientError> {
     if let Err(error) = service.automatic().await {
         return automatic_deferral(&error).ok_or(error);
@@ -625,11 +535,9 @@ mod tests {
     use std::cell::RefCell;
     use std::future::{Future, ready};
 
-    /// A scripted service: fixed status, one optional error for the next call, a call log.
     struct Fake {
         status: RefCell<ServiceStatus>,
-        /// The status after the next successful method call (what the daemon changed).
-        after: RefCell<Option<ServiceStatus>>,
+        status_after_next_call: RefCell<Option<ServiceStatus>>,
         fail_with: RefCell<Option<ErrorKind>>,
         changes: Vec<Change>,
         calls: RefCell<Vec<String>>,
@@ -639,17 +547,16 @@ mod tests {
         fn new(status: ServiceStatus) -> Self {
             Self {
                 status: RefCell::new(status),
-                after: RefCell::new(None),
+                status_after_next_call: RefCell::new(None),
                 fail_with: RefCell::new(None),
                 changes: Vec::new(),
                 calls: RefCell::new(Vec::new()),
             }
         }
 
-        /// A fake whose status becomes `after` once a method call succeeds.
         fn changing(before: ServiceStatus, after: ServiceStatus) -> Self {
             let fake = Self::new(before);
-            *fake.after.borrow_mut() = Some(after);
+            *fake.status_after_next_call.borrow_mut() = Some(after);
             fake
         }
 
@@ -658,14 +565,13 @@ mod tests {
             if let Some(kind) = self.fail_with.borrow_mut().take() {
                 return Err(ClientError::Daemon(ApexError::new(kind, "refused")));
             }
-            if let Some(after) = self.after.borrow_mut().take() {
+            if let Some(after) = self.status_after_next_call.borrow_mut().take() {
                 *self.status.borrow_mut() = after;
             }
             Ok(())
         }
     }
 
-    // The fake answers immediately, so every method is a ready future.
     impl UpdateService for Fake {
         fn status(&self) -> impl Future<Output = Result<ServiceStatus, ClientError>> {
             ready(Ok(self.status.borrow().clone()))
@@ -731,7 +637,6 @@ mod tests {
         }
     }
 
-    /// Runs a future on a `current_thread` runtime, like the binary does.
     fn run<F: std::future::Future>(future: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -849,7 +754,6 @@ mod tests {
 
     #[test]
     fn acknowledge_clears_a_recorded_failure() {
-        // The failed update is the running one: rolling back is offered as the alternative.
         let mut s = status(State::HealthFailure);
         s.health_failure = digest('a');
         let fake = Fake::new(s);
@@ -864,7 +768,6 @@ mod tests {
         );
         assert!(out.contains("apexctl update rollback --mark-bad"), "{out}");
 
-        // The failed update is no longer booted: --mark-bad would denylist the wrong image.
         let mut s = status(State::UpToDate);
         s.health_failure = digest('f');
         let out = run(acknowledge(&Fake::new(s))).unwrap();
@@ -923,8 +826,6 @@ mod tests {
 
     #[test]
     fn a_channel_switch_to_the_running_build_changes_only_the_channel() {
-        // The stable channel offers the build that runs now (the testing build was
-        // promoted): applying the stage arms nothing (M1 contract §5).
         let mut s = status(State::Staged);
         s.booted.image = Some("ghcr.io/sekirokenjii/apex-testing:45".to_owned());
         s.staged = Deployment {
@@ -942,7 +843,6 @@ mod tests {
              To finish the switch, run: apexctl update apply\n\
              Then restart the computer; apexctl never restarts it by itself.\n"
         );
-        // `apply` says the same.
         let out = run(apply(&Fake::new(s), None)).unwrap();
         assert_eq!(
             out,
@@ -967,7 +867,6 @@ mod tests {
             "{out}"
         );
         assert!(!out.contains("no boot check"), "{out}");
-        // A newer build gets neither note.
         s.staged = testing_image("45.20260925.7", 'f');
         let out = run(channel(&Fake::new(s), Channel::Testing)).unwrap();
         assert!(!out.contains("older"), "{out}");
@@ -1010,7 +909,6 @@ mod tests {
         ] {
             assert_eq!(hint(&command, &denied), None, "{command:?}");
         }
-        // Other hints are unaffected.
         let busy = ClientError::Daemon(ApexError::new(ErrorKind::Busy, "downloading"));
         assert_eq!(
             hint(
@@ -1051,8 +949,6 @@ mod tests {
         let fake = Fake::changing(applied, status(State::Staged));
         let out = run(discard(&fake)).unwrap();
         assert_eq!(fake.calls.borrow().as_slice(), ["discard"]);
-        // Present tense only, and the exact build to apply: the timer may replace a locked
-        // stage with a newer build, so nothing says that this one stays downloaded.
         assert_eq!(
             out,
             format!(
@@ -1070,7 +966,6 @@ mod tests {
 
     #[test]
     fn discard_never_calls_an_unknown_digest_the_same_update() {
-        // Neither status names a digest: the output cannot claim the same build is locked.
         let mut applied = status(State::ReadyForReboot);
         applied.staged.download_only = Some(false);
         applied.staged.digest = None;
@@ -1141,7 +1036,6 @@ mod tests {
         );
         assert!(network.contains("needs the network"));
         for kind in [ErrorKind::Bootc, ErrorKind::Internal] {
-            // bootc failed, or the service could not confirm what it did.
             assert_eq!(
                 hint(&UpdateCommand::Discard, &error(kind)),
                 Some(DISCARD_STATUS_HINT),
@@ -1149,12 +1043,10 @@ mod tests {
             );
         }
         assert!(DISCARD_STATUS_HINT.contains("apexctl status"));
-        // Other commands keep the generic hints (none for Network).
         assert_eq!(
             hint(&UpdateCommand::Check, &error(ErrorKind::Network)),
             None
         );
-        // The fake: the call fails and the output is only the error.
         let fake = Fake::new(status(State::ReadyForReboot));
         *fake.fail_with.borrow_mut() = Some(ErrorKind::Network);
         let failed = run(discard(&fake)).unwrap_err();
@@ -1182,7 +1074,6 @@ mod tests {
                 )
             );
         }
-        // Real failures still fail the unit.
         for kind in [
             ErrorKind::Bootc,
             ErrorKind::Internal,
@@ -1207,7 +1098,6 @@ mod tests {
         let text = hint(&UpdateCommand::Automatic, &refused).unwrap();
         assert!(text.contains("sudo apexctl update automatic"), "{text}");
         assert!(!text.contains("desktop session"), "{text}");
-        // Every other command keeps the polkit advice.
         let other = hint(&UpdateCommand::Download { force: false }, &refused).unwrap();
         assert!(other.contains("desktop session"), "{other}");
     }
@@ -1227,7 +1117,6 @@ mod tests {
              A newer update is available: 45.20260926.120 (sha256:eeeeeeeeeeee).\n\
              Download it in place of 45.20260925.118 with: apexctl update download\n"
         );
-        // Applied already: a download is refused until the applied update is cancelled.
         s.state = State::ReadyForReboot;
         s.staged.download_only = Some(false);
         let out = run(check(&Fake::new(s))).unwrap();
@@ -1237,15 +1126,12 @@ mod tests {
             ),
             "{out}"
         );
-        // Nothing newer: the usual next step.
         let out = run(check(&Fake::new(status(State::Staged)))).unwrap();
         assert!(out.ends_with("Use it at the next restart with: apexctl update apply\n"));
     }
 
     #[test]
     fn rollback_while_a_rollback_is_queued_explains_how_to_keep_the_running_version() {
-        // The user started the older version from the boot menu: bootc's "rollback"
-        // deployment is the newer one, which the daemon will not queue again.
         let mut s = status(State::RollbackQueued);
         s.booted = Deployment {
             digest: Some(digest('c')),
@@ -1274,8 +1160,6 @@ mod tests {
             text.contains("\napexctl update rollback cannot undo a queued rollback.\n"),
             "{text}"
         );
-        // The newer version may still be armed, which the service does not publish: the
-        // safe path (RECOVERY.md §1), not a bare `bootc rollback`.
         assert!(
             text.contains(
                 "To keep running 45.20260920.110, first check whether 45.20260924.117 is an \
@@ -1286,7 +1170,6 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("bootc rollback"), "{text}");
-        // Any other refusal is passed through unchanged.
         let fake = Fake::new(status(State::UpToDate));
         *fake.fail_with.borrow_mut() = Some(ErrorKind::NothingToDo);
         assert_eq!(
@@ -1297,7 +1180,6 @@ mod tests {
 
     #[test]
     fn rollback_after_a_rollback_says_a_restart_finishes_it() {
-        // `apexctl update rollback` ran already: the older version is queued.
         let mut s = status(State::RollbackQueued);
         s.staged = Deployment::default();
         let fake = Fake::new(s);
@@ -1313,7 +1195,6 @@ mod tests {
 
     #[test]
     fn check_while_the_service_is_busy_exits_0_and_says_nothing_was_checked() {
-        // Check is Busy while a download runs: the download fetches from the channel.
         let mut downloading = status(State::Downloading);
         downloading.staged = Deployment::default();
         downloading.progress = 0.42;
@@ -1327,8 +1208,6 @@ mod tests {
              Downloading  42 %\n\
              Check again when the download has finished; apexctl status shows its progress.\n"
         );
-        // Busy for another reason (a discard re-locking, a full queue): the service's
-        // reason, still exit 0.
         let fake = Fake::new(status(State::ReadyForReboot));
         *fake.fail_with.borrow_mut() = Some(ErrorKind::Busy);
         let out = run(check(&fake)).unwrap();
@@ -1337,7 +1216,6 @@ mod tests {
             "Not checked: the update service is busy. refused\n\
              apexctl status shows what it is doing.\n"
         );
-        // Other failures are still failures.
         for kind in [
             ErrorKind::Network,
             ErrorKind::Internal,
@@ -1355,8 +1233,6 @@ mod tests {
 
     #[test]
     fn changes_before_the_state_is_known_fail_gracefully() {
-        // GetChanges fails with Busy until the service's first reading of the system, and
-        // with Internal when bootc cannot be used.
         let mut unknown = status(State::Unknown);
         unknown.staged = Deployment::default();
         let fake = Fake::new(unknown.clone());
@@ -1384,7 +1260,6 @@ mod tests {
                 .is_some_and(|h| h.contains("journalctl -u apex-updated")),
             "{error}"
         );
-        // Other failures keep their own text.
         let fake = Fake::new(status(State::Staged));
         *fake.fail_with.borrow_mut() = Some(ErrorKind::NotAuthorized);
         let error = run(changes(&fake)).unwrap_err();
@@ -1414,7 +1289,6 @@ mod tests {
                 d = digest('b')
             )
         );
-        // Already applied: nothing to apply.
         let mut applied = status(State::ReadyForReboot);
         applied.staged.download_only = Some(false);
         let out = run(changes(&Fake::new(applied))).unwrap();
@@ -1422,7 +1296,6 @@ mod tests {
             out.ends_with("This update is already set to install at the next restart.\n"),
             "{out}"
         );
-        // A testing build staged under a stable system says so.
         let mut testing = stable_booted(status(State::Staged));
         testing.staged = testing_image("45.20260925.7", 'f');
         let out = run(changes(&Fake::new(testing))).unwrap();
@@ -1434,12 +1307,11 @@ mod tests {
 
     #[test]
     fn changes_refuse_a_list_that_raced_with_a_restage() {
-        // The timer replaced the stage while GetChanges ran.
         let mut restaged = status(State::Staged);
         restaged.staged.digest = Some(digest('e'));
         let fake = Fake::changing(status(State::Staged), restaged);
         let error = run(changes(&fake)).unwrap_err();
-        assert!(matches!(error, ClientError::Changed(_)));
+        assert!(matches!(error, ClientError::ChangedWhileReading(_)));
         assert_eq!(error.exit(), Exit::Error);
         assert!(error.to_string().contains("apexctl update changes again"));
     }
@@ -1458,7 +1330,6 @@ mod tests {
         );
         let out = run(download(&Fake::new(s), false)).unwrap();
         assert!(out.contains("It comes from the testing channel"), "{out}");
-        // Same repository: no note.
         let out = run(apply(
             &Fake::new(stable_booted(status(State::Staged))),
             None,

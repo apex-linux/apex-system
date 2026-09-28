@@ -1,49 +1,32 @@
-//! Display scales as mutter 51 sees them, and the number formatting of `monitors.xml`.
-//!
-//! mutter keeps scales as C `float`s and accepts a configured scale only if it is one of
-//! the scales it offers for the mode (`meta_monitor_calculate_supported_scales`,
-//! `src/backends/meta-monitor.c`). A `monitors.xml` scale is read with `g_ascii_strtod`
-//! and cast to `float`, and mutter writes numbers with `g_ascii_dtostr` (`%.17g`). This
-//! module ports the offered-scale rule (so the renderer can refuse a scale mutter would
-//! silently ignore) and formats numbers exactly like `%.17g`.
-
 use std::fmt;
 
 use serde::Deserialize;
 
-/// Largest scale denominator mutter offers.
 pub const MAX_DENOMINATOR: u32 = 4;
-/// Smallest integer scale.
 pub const MIN_INTEGER_SCALE: u32 = 1;
-/// Largest integer scale.
 pub const MAX_INTEGER_SCALE: u32 = 4;
-/// Smallest logical area mutter 51 accepts (600 × 600, mutter commit 8ade30eb2a42).
+/// mutter commit 8ade30eb2a42.
 pub const MIN_LOGICAL_AREA: u64 = 600 * 600;
 
-/// A scale as an exact fraction, as the hardware profile writes it (`{ num = 5, den = 3 }`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scale {
-    /// Numerator.
     pub num: u32,
-    /// Denominator.
     pub den: u32,
 }
 
 impl Scale {
-    /// The `float` mutter uses: `(float) num / den`.
+    /// mutter keeps scales as C `float`s.
     pub fn as_f32(self) -> f32 {
         self.num as f32 / self.den as f32
     }
 
-    /// `true` when `num/den` is in lowest terms (mutter offers only reduced fractions).
     pub fn is_reduced(self) -> bool {
         gcd(self.num, self.den) == 1
     }
 
-    /// The text for `<scale>` in `monitors.xml`: `2` for integers, otherwise the `float`
-    /// value printed with `%.17g`, which `g_ascii_strtod` followed by a cast to `float`
-    /// turns back into exactly the same `float`.
+    /// mutter reads it with `g_ascii_strtod` and a cast to `float`, which gives back exactly
+    /// [`Self::as_f32`].
     pub fn xml_text(self) -> String {
         format_g17(f64::from(self.as_f32()))
     }
@@ -68,7 +51,7 @@ const fn gcd(mut a: u32, mut b: u32) -> u32 {
     a
 }
 
-/// `is_scale_valid_for_size`: the logical size at `scale` must be large enough.
+/// mutter's `is_scale_valid_for_size`.
 fn is_valid_for_size(width: u32, height: u32, scale: f32) -> bool {
     if scale < MIN_INTEGER_SCALE as f32 || scale > MAX_INTEGER_SCALE as f32 {
         return false;
@@ -79,12 +62,8 @@ fn is_valid_for_size(width: u32, height: u32, scale: f32) -> bool {
     logical_width * logical_height >= MIN_LOGICAL_AREA
 }
 
-/// The scales mutter 51 offers for a `width` × `height` mode with fractional scaling
-/// (the default since mutter 50), sorted by their `float` value.
-///
-/// A scale `num/den` is offered when it divides both dimensions exactly
-/// (`width·den mod num = 0`), is in lowest terms, lies in `[1, 4]` and leaves a logical
-/// area of at least [`MIN_LOGICAL_AREA`]. With no candidate, mutter falls back to 1.
+/// mutter 51's `meta_monitor_calculate_supported_scales` with fractional scaling: mutter
+/// silently ignores a configured scale it does not offer.
 pub fn supported_scales(width: u32, height: u32) -> Vec<Scale> {
     let mut scales = Vec::new();
     for den in 1..=MAX_DENOMINATOR {
@@ -107,15 +86,10 @@ pub fn supported_scales(width: u32, height: u32) -> Vec<Scale> {
     scales
 }
 
-/// Formats `value` like C's `printf("%.17g")` (and so like `g_ascii_dtostr` of `GLib`).
-///
-/// 17 significant digits always identify a `double`, so the text parses back to exactly
-/// `value`. Rust's precision formatting rounds the exact binary value correctly, like
-/// glibc, so the digits match C's.
+/// C's `printf("%.17g")`, as `GLib`'s `g_ascii_dtostr` writes numbers for mutter.
 pub fn format_g17(value: f64) -> String {
     const PRECISION: i32 = 17;
     if value == 0.0 || !value.is_finite() {
-        // %g prints "0" (or "-0"), "inf" and "nan"; none of them is used by the renderer.
         return if value == 0.0 && value.is_sign_negative() {
             "-0".to_owned()
         } else if value == 0.0 {
@@ -140,7 +114,6 @@ pub fn format_g17(value: f64) -> String {
     }
 }
 
-/// Removes trailing zeros of a fraction, and the point if nothing is left after it.
 fn trim_fraction(text: &str) -> &str {
     if text.contains('.') {
         text.trim_end_matches('0').trim_end_matches('.')
@@ -160,7 +133,6 @@ mod tests {
 
     #[test]
     fn scales_offered_for_the_panel_match_mutter_51() {
-        // Test vectors from the display research (mutter 51.0 meta-monitor.c port).
         assert_eq!(
             supported_scales(2880, 1800),
             [

@@ -1,34 +1,3 @@
-//! `apexctl hw report`: the hardware checks ARCHITECTURE §6 and ADR 0004 report on (never
-//! rollback triggers).
-//!
-//! [`gather`] reads the facts (I/O through a [`SysRoot`]); [`assess`] turns them into
-//! verdicts (pure); [`render`] prints them.
-//!
-//! # `apexctl hw report --json` (schema 1)
-//!
-//! ```text
-//! {
-//!   "schema": 1, "machine": "m7400qc",
-//!   "audio":       { "status", "summary", "hwdep": "hwC1D0" | null,
-//!                    "patch_firmware": "/usr/lib/firmware/apex/alc294-m7400qc.fw" | null,
-//!                    "expected_verbs": ["0x20 0x500 0x001b", …], "init_verbs": [...],
-//!                    "patch_parameter": "apex/alc294-m7400qc.fw,…" | null },
-//!   "battery":     { "status", "summary", "battery": "BAT0", "expected_end_threshold": 80,
-//!                    "end_threshold": 80 | null },
-//!   "upower":      { "status", "summary", "threshold_supported": bool | null,
-//!                    "threshold_enabled": bool | null, "end_threshold": 80 | null },
-//!   "dgpu":        { "status", "summary", "pci": "0000:01:00.0", "present": bool,
-//!                    "driver": "nvidia" | null, "runtime_status": "suspended" | null,
-//!                    "power_state": "D3cold" | null, "control": "auto" | null,
-//!                    "runtime_active_ms": n | null, "runtime_suspended_ms": n | null,
-//!                    "suspended_percent": 97.5 | null },
-//!   "fingerprint": { "status", "summary", "usb_id": "04f3:0c6e", "devices": ["3-1"] },
-//!   "secure_boot": { "status", "summary", "uefi": bool, "enabled": bool | null,
-//!                    "setup_mode": bool | null }
-//! }
-//! status = "pass" | "warn" | "fail" | "skip" | "unknown"
-//! ```
-
 use std::fmt::Write as _;
 
 use serde::Serialize;
@@ -42,27 +11,19 @@ use super::upower::UpowerFacts;
 use super::{Attr, SysRoot, parse_hex};
 use crate::hda::InitVerb;
 
-/// Schema number of `hw report --json`.
 pub const REPORT_SCHEMA: u32 = 1;
 
-/// A check's verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
-    /// As expected.
     Pass,
-    /// Works, but not as Apex intends.
     Warn,
-    /// Broken.
     Fail,
-    /// Not applicable to this image.
     Skip,
-    /// Could not be determined.
     Unknown,
 }
 
 impl Status {
-    /// Upper-case label for the text report.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Pass => "PASS",
@@ -74,78 +35,49 @@ impl Status {
     }
 }
 
-/// The ALC294 hwdep and its `init_verbs`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwdep {
-    /// Name, e.g. `hwC1D0`.
     pub name: String,
-    /// Contents of `init_verbs`.
     pub init_verbs: Attr,
 }
 
-/// Raw audio facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioFacts {
-    /// The ALC294 hwdep, if found.
     pub hwdep: Option<Hwdep>,
-    /// The installed patch firmware file.
     pub firmware: Attr,
-    /// `snd_hda_intel` `patch=` parameter.
     pub patch_parameter: Attr,
 }
 
-/// Raw dGPU facts (sysfs attributes of the PCI device).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DgpuFacts {
-    /// The PCI device directory exists.
     pub present: bool,
-    /// `vendor`.
     pub vendor: Attr,
-    /// `device`.
     pub device: Attr,
-    /// Bound driver name.
     pub driver: Option<String>,
-    /// `power/runtime_status`.
     pub runtime_status: Attr,
-    /// `power_state`.
     pub power_state: Attr,
-    /// `power/control`.
     pub control: Attr,
-    /// `power/runtime_active_time` (ms).
     pub active_ms: Attr,
-    /// `power/runtime_suspended_time` (ms).
     pub suspended_ms: Attr,
 }
 
-/// Raw EFI facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecureBootFacts {
-    /// `/sys/firmware/efi` exists.
     pub uefi: bool,
-    /// The `SecureBoot` variable (4 attribute bytes, then the value).
     pub secure_boot: Result<Option<Vec<u8>>, String>,
-    /// The `SetupMode` variable.
     pub setup_mode: Result<Option<Vec<u8>>, String>,
 }
 
-/// Everything [`assess`] looks at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HwFacts {
-    /// Audio.
     pub audio: AudioFacts,
-    /// `charge_control_end_threshold` of the battery.
     pub end_threshold: Attr,
-    /// The view of `UPower`; `None` when it could not be asked.
     pub upower: Option<UpowerFacts>,
-    /// dGPU.
     pub dgpu: DgpuFacts,
-    /// USB device names (`3-1`) with the fingerprint reader's ids.
     pub fingerprint_devices: Vec<String>,
-    /// Secure Boot.
     pub secure_boot: SecureBootFacts,
 }
 
-/// Finds the ALC294 hwdep under `/sys/class/sound` by vendor and subsystem id.
 pub fn find_alc294_hwdep(root: &SysRoot) -> Option<String> {
     root.list("/sys/class/sound").into_iter().find(|name| {
         let is_hwdep = name
@@ -170,7 +102,6 @@ pub fn find_alc294_hwdep(root: &SysRoot) -> Option<String> {
     })
 }
 
-/// Reads every fact from the system (except `UPower`, which needs D-Bus).
 pub fn gather(root: &SysRoot) -> HwFacts {
     let hwdep = find_alc294_hwdep(root).map(|name| Hwdep {
         init_verbs: root.read(&format!("/sys/class/sound/{name}/init_verbs")),
@@ -230,132 +161,79 @@ pub fn gather(root: &SysRoot) -> HwFacts {
     }
 }
 
-/// Audio section of the report.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AudioCheck {
-    /// Verdict.
     pub status: Status,
-    /// One line.
     pub summary: String,
-    /// The ALC294 hwdep.
     pub hwdep: Option<String>,
-    /// The installed patch firmware.
     pub patch_firmware: Option<String>,
-    /// Verbs of the installed firmware.
     pub expected_verbs: Vec<String>,
-    /// Lines of `init_verbs`.
     pub init_verbs: Vec<String>,
-    /// `snd_hda_intel` `patch=`, without the unset slots.
     pub patch_parameter: Option<String>,
 }
 
-/// Battery section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BatteryCheck {
-    /// Verdict.
     pub status: Status,
-    /// One line.
     pub summary: String,
-    /// Battery name.
     pub battery: String,
-    /// The limit Apex expects.
     pub expected_end_threshold: u8,
-    /// The current limit.
     pub end_threshold: Option<u8>,
 }
 
-/// `UPower` section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UpowerCheck {
-    /// Verdict.
     pub status: Status,
-    /// One line.
     pub summary: String,
-    /// `ChargeThresholdSupported`.
     pub threshold_supported: Option<bool>,
-    /// `ChargeThresholdEnabled`.
     pub threshold_enabled: Option<bool>,
-    /// `ChargeEndThreshold`.
     pub end_threshold: Option<u32>,
 }
 
-/// dGPU section.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DgpuCheck {
-    /// Verdict.
     pub status: Status,
-    /// One line.
     pub summary: String,
-    /// PCI address.
     pub pci: String,
-    /// The device exists.
     pub present: bool,
-    /// Bound driver.
     pub driver: Option<String>,
-    /// `power/runtime_status`.
     pub runtime_status: Option<String>,
-    /// `power_state`.
     pub power_state: Option<String>,
-    /// `power/control`.
     pub control: Option<String>,
-    /// Milliseconds active since boot.
     pub runtime_active_ms: Option<u64>,
-    /// Milliseconds suspended since boot.
     pub runtime_suspended_ms: Option<u64>,
-    /// Suspended share since boot, in percent.
     pub suspended_percent: Option<f64>,
 }
 
-/// Fingerprint section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FingerprintCheck {
-    /// Verdict.
     pub status: Status,
-    /// One line.
     pub summary: String,
-    /// `vvvv:pppp`.
     pub usb_id: String,
-    /// USB device names with that id.
     pub devices: Vec<String>,
 }
 
-/// Secure Boot section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SecureBootCheck {
-    /// Verdict.
     pub status: Status,
-    /// One line.
     pub summary: String,
-    /// Booted through UEFI.
     pub uefi: bool,
-    /// `SecureBoot` is 1.
     pub enabled: Option<bool>,
-    /// `SetupMode` is 1.
     pub setup_mode: Option<bool>,
 }
 
-/// The whole report; see the module documentation for the JSON schema.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct HwReport {
-    /// [`REPORT_SCHEMA`].
     pub schema: u32,
-    /// Machine id.
     pub machine: &'static str,
-    /// Audio fix.
     pub audio: AudioCheck,
-    /// Charge limit in sysfs.
     pub battery: BatteryCheck,
-    /// Charge limit in `UPower`.
     pub upower: UpowerCheck,
-    /// dGPU runtime power management.
     pub dgpu: DgpuCheck,
-    /// Fingerprint reader.
     pub fingerprint: FingerprintCheck,
-    /// Secure Boot.
     pub secure_boot: SecureBootCheck,
 }
 
-/// `(null),(null)` slots removed; `None` when no slot is set.
 fn patch_slots(parameter: &str) -> Option<String> {
     let set: Vec<&str> = parameter
         .split(',')
@@ -365,8 +243,7 @@ fn patch_slots(parameter: &str) -> Option<String> {
     (!set.is_empty()).then(|| set.join(","))
 }
 
-/// `true` when `needle` occurs as a contiguous run in `haystack` (the patch loader appends
-/// a file's verbs in order, so the rendered pairs must stay adjacent).
+/// The kernel appends a patch file's verbs in order, so they must form one contiguous run.
 fn contains_run(haystack: &[Option<InitVerb>], needle: &[InitVerb]) -> bool {
     needle.is_empty()
         || haystack.windows(needle.len()).any(|window| {
@@ -541,8 +418,7 @@ fn assess_upower(facts: Option<&UpowerFacts>) -> UpowerCheck {
     check
 }
 
-/// Share of time suspended below which the dGPU line warns (hardware acceptance: at least
-/// 95 % over 10 minutes idle; since boot is only an indication).
+/// The hardware acceptance target while idle.
 pub const MIN_SUSPENDED_PERCENT: f64 = 95.0;
 
 fn number(attr: &Attr) -> Option<u64> {
@@ -607,7 +483,6 @@ fn assess_dgpu(facts: &DgpuFacts) -> DgpuCheck {
                 "runtime power management is off (power/control = {control}); the dGPU never sleeps"
             ),
         ),
-        // Suspended now, but mostly awake since boot: something keeps waking it.
         (_, Some("suspended"))
             if state == "D3cold"
                 && suspended_percent.is_some_and(|p| p < MIN_SUSPENDED_PERCENT) =>
@@ -659,10 +534,13 @@ fn assess_fingerprint(devices: &[String]) -> FingerprintCheck {
     }
 }
 
-/// The value byte of an EFI variable (after the 4 attribute bytes).
+const EFI_VARIABLE_ATTRIBUTES_LEN: usize = 4;
+
 fn efi_flag(variable: &Result<Option<Vec<u8>>, String>) -> Option<bool> {
     match variable {
-        Ok(Some(bytes)) => bytes.get(4).map(|&value| value == 1),
+        Ok(Some(bytes)) => bytes
+            .get(EFI_VARIABLE_ATTRIBUTES_LEN)
+            .map(|&value| value == 1),
         _ => None,
     }
 }
@@ -695,7 +573,6 @@ fn assess_secure_boot(facts: &SecureBootFacts) -> SecureBootCheck {
     }
 }
 
-/// Turns facts into verdicts.
 pub fn assess(facts: &HwFacts) -> HwReport {
     HwReport {
         schema: REPORT_SCHEMA,
@@ -709,7 +586,6 @@ pub fn assess(facts: &HwFacts) -> HwReport {
     }
 }
 
-/// The text report.
 pub fn render(report: &HwReport) -> String {
     let mut out = String::new();
     let rows = [

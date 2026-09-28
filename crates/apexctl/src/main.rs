@@ -1,6 +1,3 @@
-//! `apexctl`: the Apex command-line tool. All logic lives in the `apexctl` library; this
-//! file parses arguments, performs I/O and prints.
-
 use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
@@ -33,12 +30,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// Prints clap's help, version or usage error and picks the exit code. A usage error exits
-/// 1, not clap's default 2: exit status 2 means that an update gate refused (see [`Exit`]),
-/// so a script must be able to trust it.
 fn usage(error: &clap::Error) -> Exit {
-    // Help and version go to stdout, errors to stderr; nothing useful is left to do when
-    // printing them fails.
     if error.print().is_err() {
         return Exit::Error;
     }
@@ -49,7 +41,6 @@ fn usage(error: &clap::Error) -> Exit {
     }
 }
 
-/// Writes to stdout, treating a closed pipe (`apexctl status | head -1`) as success.
 fn emit(text: &str) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout().lock();
     match stdout
@@ -67,7 +58,6 @@ fn emit_json(value: &impl serde::Serialize) -> anyhow::Result<()> {
     emit(&text)
 }
 
-/// The tokio runtime for zbus: one thread, no hidden executor threads (contract §9).
 fn runtime() -> anyhow::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -112,7 +102,6 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
     }
 }
 
-/// Prints a service failure with its follow-up hint and returns its exit code.
 fn report_client_error(error: &ClientError, hint: Option<&str>) -> Exit {
     eprintln!("apexctl: {error}");
     if let Some(hint) = hint {
@@ -158,7 +147,6 @@ async fn update_command(command: UpdateCommand) -> anyhow::Result<Exit> {
 
 fn hw_report(root: &SysRoot, json: bool) -> anyhow::Result<Exit> {
     let mut facts = hw::report::gather(root);
-    // UPower is best effort: no bus, no UPower or a slow answer only make that line unknown.
     if root.is_host() {
         facts.upower = runtime()?.block_on(async {
             let connection = apex_dbus::zbus::Connection::system().await.ok()?;
@@ -196,21 +184,7 @@ fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyho
         || render::default_output_dir(profile_path),
         Path::to_path_buf,
     );
-
-    // The firmware list of the image checks must mirror the profile (same globs, same order).
-    let mut failed = false;
-    if let Some(list_path) = render::firmware_list_path(profile_path).filter(|p| p.is_file()) {
-        let text = std::fs::read_to_string(&list_path)
-            .with_context(|| format!("cannot read {}", list_path.display()))?;
-        if let Some(diff) = render::compare_firmware_list(&profile, &text) {
-            eprintln!(
-                "apexctl: {} differs from [firmware].required_files in {}:\n{diff}",
-                list_path.display(),
-                profile_path.display()
-            );
-            failed = true;
-        }
-    }
+    let firmware_list_drifted = report_firmware_list_drift(profile_path, &profile)?;
 
     if let AudioOutcome::NotMeasured = rendered.audio {
         eprintln!(
@@ -225,7 +199,7 @@ fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyho
         for difference in &differences {
             eprint!("{}", difference.diff);
         }
-        if differences.is_empty() && !failed {
+        if differences.is_empty() && !firmware_list_drifted {
             emit(&format!("{} is up to date.\n", out_dir.display()))?;
             return Ok(Exit::Ok);
         }
@@ -252,7 +226,28 @@ fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyho
         text.push_str(&line);
     }
     emit(&text)?;
-    Ok(if failed { Exit::Error } else { Exit::Ok })
+    Ok(if firmware_list_drifted {
+        Exit::Error
+    } else {
+        Exit::Ok
+    })
+}
+
+fn report_firmware_list_drift(profile_path: &Path, profile: &Profile) -> anyhow::Result<bool> {
+    let Some(list_path) = render::firmware_list_path(profile_path).filter(|p| p.is_file()) else {
+        return Ok(false);
+    };
+    let text = std::fs::read_to_string(&list_path)
+        .with_context(|| format!("cannot read {}", list_path.display()))?;
+    let Some(diff) = render::compare_firmware_list(profile, &text) else {
+        return Ok(false);
+    };
+    eprintln!(
+        "apexctl: {} differs from [firmware].required_files in {}:\n{diff}",
+        list_path.display(),
+        profile_path.display()
+    );
+    Ok(true)
 }
 
 fn build_manifest(root: &Path, input: &ManifestInput) -> anyhow::Result<Exit> {

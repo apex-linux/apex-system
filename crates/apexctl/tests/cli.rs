@@ -1,5 +1,3 @@
-//! End-to-end runs of the `apexctl` binary.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use std::fs;
@@ -26,7 +24,6 @@ fn run(command: &mut Command) -> (i32, String, String) {
     )
 }
 
-/// A copy of the real profile in `<dir>/hardware/m7400qc/`, with the firmware list.
 fn scratch_repo(dir: &Path) -> std::path::PathBuf {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let machine = dir.join("hardware/m7400qc");
@@ -45,7 +42,7 @@ fn scratch_repo(dir: &Path) -> std::path::PathBuf {
     machine.join("profile.toml")
 }
 
-/// Sample COEF measurements (placeholders, not this laptop's values).
+/// Placeholders, not this laptop's values.
 const MEASUREMENTS: &str = "
 [audio.measurements]
 date = 2026-09-25
@@ -79,7 +76,6 @@ fn render_then_check_then_drift() {
     assert_eq!(code, 0);
     assert!(stdout.contains("is up to date"));
 
-    // A hand edit and a stale firmware file are both reported, with a diff, and exit 1.
     let xml = generated.join("monitors.xml");
     let edited = fs::read_to_string(&xml)
         .expect("read")
@@ -101,7 +97,6 @@ fn render_then_check_then_drift() {
     assert!(stderr.contains("+      <scale>2</scale>"), "{stderr}");
     assert!(stderr.contains("+++ /dev/null"), "{stderr}");
 
-    // Rendering repairs both.
     let (code, stdout, _) = run(&mut apexctl(&["profile", "render", "--profile", profile]));
     assert_eq!(code, 0);
     assert!(stdout.contains("removed stale"), "{stdout}");
@@ -160,8 +155,6 @@ fn an_invalid_profile_is_an_error_with_its_field() {
 
 #[test]
 fn a_board_name_with_a_nul_or_a_line_feed_never_reaches_the_firmware() {
-    // Both are valid TOML escapes. A NUL would hang the kernel's patch loader; a line
-    // feed would inject a section ahead of [codec].
     for board in [r"M7400QC\u0000", r"M7400QC\n[pincfg]\n0x19 0x411111f0"] {
         let dir = tempfile::tempdir().expect("tempdir");
         let profile = scratch_repo(dir.path());
@@ -216,7 +209,6 @@ fn a_measured_profile_renders_firmware_the_kernel_reads_back() {
 #[test]
 fn errors_name_their_cause_once() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // A missing profile: the OS error once, not once more as the error's source.
     let missing = dir.path().join("nowhere/profile.toml");
     let (code, _, stderr) = run(&mut apexctl(&[
         "profile",
@@ -227,7 +219,6 @@ fn errors_name_their_cause_once() {
     assert_eq!(code, 1);
     assert_eq!(stderr.matches("(os error 2)").count(), 1, "{stderr}");
 
-    // A typo in the profile: the multi-line TOML report once (the CI render check).
     let profile = scratch_repo(dir.path());
     let typo = fs::read_to_string(&profile)
         .expect("read")
@@ -248,7 +239,6 @@ fn errors_name_their_cause_once() {
     );
     assert_eq!(stderr.matches("TOML parse error").count(), 1, "{stderr}");
 
-    // An output directory that cannot be created (its parent is a file).
     let profile = scratch_repo(&dir.path().join("second"));
     let file = dir.path().join("a-file");
     fs::write(&file, "").expect("write");
@@ -264,7 +254,6 @@ fn errors_name_their_cause_once() {
     assert_eq!(code, 1);
     assert_eq!(stderr.matches("(os error 20)").count(), 1, "{stderr}");
 
-    // A malformed codec dump: the line once.
     let dump = dir.path().join("codec.txt");
     fs::write(
         &dump,
@@ -285,8 +274,6 @@ fn errors_name_their_cause_once() {
 
 #[test]
 fn apply_rejects_a_bad_digest_before_contacting_the_service() {
-    // The bus is unreachable: a service error here would mean the argument was checked
-    // too late (after D-Bus activation, which runs bootc status).
     let (code, stdout, stderr) = run(apexctl(&["update", "apply", "--digest", "nope"]).env(
         "DBUS_SYSTEM_BUS_ADDRESS",
         "unix:path=/nonexistent/apex-test-bus",
@@ -363,7 +350,6 @@ fn build_manifest_with_a_fake_rpm() {
     fs::create_dir_all(&bin).expect("mkdir");
     let root = dir.path().join("root");
     fs::create_dir_all(&root).expect("mkdir");
-    // The fake checks its arguments and prints two packages and a signing key.
     let script = format!(
         "#!/bin/sh\n\
          [ \"$1\" = --root ] && [ \"$2\" = '{}' ] && [ \"$3\" = -qa ] && [ \"$4\" = --qf ] || exit 9\n\
@@ -472,7 +458,6 @@ fn help_names_every_contract_command() {
 
 #[test]
 fn usage_errors_exit_1_because_2_means_a_gate_refused() {
-    // Parsing fails before any bus is touched, so no D-Bus setup is needed.
     for args in [
         &["update", "channel", "beta"][..],
         &["update", "channel"],
@@ -484,7 +469,6 @@ fn usage_errors_exit_1_because_2_means_a_gate_refused() {
         let (code, stdout, stderr) = run(&mut apexctl(args));
         assert_eq!(code, 1, "{args:?}: {stderr}");
         assert!(stdout.is_empty(), "{args:?}");
-        // clap's error, or the full help when no command is given at all.
         assert!(
             stderr.starts_with("error:") || stderr.contains("Usage: apexctl <COMMAND>"),
             "{args:?}: {stderr}"

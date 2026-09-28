@@ -1,12 +1,3 @@
-//! `apexctl build manifest`: writes `/usr/share/apex/manifest.json` (contract §3) in the
-//! final image stage.
-//!
-//! The package list comes from `rpm --root DIR -qa --qf` with [`RPM_QUERY_FORMAT`].
-//! `%{EPOCHNUM}` is rpm's extension tag that prints `0` for a package without an epoch
-//! (`RPMTAG_EPOCHNUM` = 5019 in `include/rpm/rpmtag.h`, still present in rpm 6.1), so no
-//! `(none)` has to be interpreted. The `gpg-pubkey` pseudo packages that an rpmdb keystore
-//! lists are signing keys, not software, and are skipped.
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,88 +7,57 @@ use apex_update::{Manifest, Package, Version};
 
 use crate::render::{OutputError, write_atomic};
 
-/// The `--queryformat` passed to rpm: one tab-separated line per package.
+/// `%{EPOCHNUM}` prints 0 rather than `(none)` for no epoch (`RPMTAG_EPOCHNUM`, rpm 6.1).
 pub const RPM_QUERY_FORMAT: &str = "%{NAME}\\t%{EPOCHNUM}\\t%{VERSION}\\t%{RELEASE}\\t%{ARCH}\\n";
 
-/// Image name recorded in the manifest.
 pub const IMAGE_NAME: &str = "apex";
 
-/// Components the `degraded` list may name (contract §3).
 pub const DEGRADED_COMPONENTS: &[&str] = &["audio", "fingerprint", "nvidia", "shell"];
 
-/// Name of the rpm pseudo packages that hold imported signing keys.
+/// rpm lists imported signing keys as packages of this name.
 const GPG_PUBKEY: &str = "gpg-pubkey";
 
-/// Why a manifest could not be built.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestBuildError {
-    /// The version is not `<fedora>.<yyyymmdd>.<run>`.
     #[error(
         "version {0:?} is not <fedora>.<yyyymmdd>.<run> (e.g. 45.20260924.117) in canonical form"
     )]
     Version(String),
-    /// The revision is not a full lowercase git commit id.
     #[error("revision {0:?} is not a full lowercase git commit id (40 or 64 hex digits)")]
     Revision(String),
-    /// The base image is not pinned by digest.
     #[error("base image {0:?} is not pinned by digest (<repository>@sha256:<64 hex digits>)")]
     Base(String),
-    /// A `--degraded` value outside the contract's list.
     #[error("unknown degraded component {0:?} (known: audio, fingerprint, nvidia, shell)")]
     Degraded(String),
-    /// A `--held` value that is not a lane family name.
     #[error("held family {0:?} is not a package name ([a-z0-9][a-z0-9._+-]*)")]
     Held(String),
-    /// An rpm output line that does not have five fields.
     #[error("rpm output line {line}: {reason}: {text:?}")]
     RpmLine {
-        /// Line number (from 1).
         line: usize,
-        /// What is wrong.
         reason: &'static str,
-        /// The line.
         text: String,
     },
-    /// rpm listed no package at all.
     #[error("rpm listed no packages under {0}")]
     NoPackages(String),
-    /// Running rpm failed.
     #[error("cannot run rpm: {0}")]
     RpmSpawn(std::io::Error),
-    /// rpm exited with an error.
     #[error("rpm failed ({status}): {stderr}")]
-    RpmFailed {
-        /// Exit status.
-        status: String,
-        /// Its stderr, trimmed.
-        stderr: String,
-    },
-    /// Serializing failed. The cause is part of the message, so it is not also the
-    /// `source()` (no `#[from]`): `apexctl` prints the whole chain.
+    RpmFailed { status: String, stderr: String },
     #[error("cannot serialize the manifest: {0}")]
     Encode(apex_update::ManifestError),
-    /// Writing failed.
     #[error(transparent)]
     Write(#[from] OutputError),
 }
 
-/// The command-line inputs of the manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestInput {
-    /// `--version`, e.g. `45.20260924.117`.
     pub version: String,
-    /// `--revision`: the git commit of the Apex repository.
     pub revision: String,
-    /// `--base`: the digest-pinned base image.
     pub base: String,
-    /// `--degraded` values, in any order.
     pub degraded: Vec<String>,
-    /// `--held` values: rebuild-lane families held at their last good build.
     pub held: Vec<String>,
 }
 
-/// Validates a version string: exactly three numeric fields, canonical (no leading zeros),
-/// an 8-digit date with a plausible month and day.
 pub fn validate_version(text: &str) -> Result<Version, ManifestBuildError> {
     let error = || ManifestBuildError::Version(text.to_owned());
     let version = Version::parse(text).ok_or_else(error)?;
@@ -128,7 +88,7 @@ fn validate_revision(text: &str) -> Result<(), ManifestBuildError> {
     }
 }
 
-/// A family name as `apex-lane` and `image.sh` accept it.
+/// Must accept what `apex-lane` and `image.sh` accept as a family name.
 fn is_family_name(text: &str) -> bool {
     let mut bytes = text.bytes();
     bytes
@@ -155,7 +115,6 @@ fn validate_base(text: &str) -> Result<(), ManifestBuildError> {
     }
 }
 
-/// Parses rpm's output for [`RPM_QUERY_FORMAT`], skipping `gpg-pubkey`.
 pub fn parse_rpm_output(output: &str) -> Result<Vec<Package>, ManifestBuildError> {
     let mut packages = Vec::new();
     for (index, text) in output.lines().enumerate() {
@@ -192,17 +151,12 @@ pub fn parse_rpm_output(output: &str) -> Result<Vec<Package>, ManifestBuildError
     Ok(packages)
 }
 
-/// A manifest plus the `(name, arch)` keys that appeared more than once (the newest EVR
-/// is kept; the caller warns about the rest).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuiltManifest {
-    /// The normalized manifest.
     pub manifest: Manifest,
-    /// Keys listed more than once, sorted.
     pub duplicates: Vec<(String, String)>,
 }
 
-/// Builds the manifest from validated inputs and the package list (pure).
 pub fn build(
     input: &ManifestInput,
     packages: Vec<Package>,
@@ -229,8 +183,7 @@ pub fn build(
         schema: MANIFEST_SCHEMA,
         name: IMAGE_NAME.to_owned(),
         version: input.version.clone(),
-        // A version has at least three fields, so fedora() cannot fail; the release fits
-        // u32 for every Fedora there will be.
+        // Unreachable error: every Fedora release fits u32.
         fedora: u32::try_from(version.fedora())
             .map_err(|_| ManifestBuildError::Version(input.version.clone()))?,
         revision: input.revision.clone(),
@@ -246,7 +199,6 @@ pub fn build(
     })
 }
 
-/// Runs `rpm --root ROOT -qa --qf …` and parses its output.
 pub fn query_rpm(root: &Path) -> Result<Vec<Package>, ManifestBuildError> {
     let output = Command::new("rpm")
         .arg("--root")
@@ -268,13 +220,11 @@ pub fn query_rpm(root: &Path) -> Result<Vec<Package>, ManifestBuildError> {
     Ok(packages)
 }
 
-/// `ROOT/usr/share/apex/manifest.json`.
 pub fn manifest_path(root: &Path) -> PathBuf {
     root.join(MANIFEST_PATH.trim_start_matches('/'))
 }
 
-/// Writes the manifest atomically with mode 0644 (readable by the unprivileged Updates
-/// app), creating `/usr/share/apex` when needed. Returns the path written.
+/// Mode 0644: the unprivileged Updates app reads it.
 pub fn write(root: &Path, manifest: &Manifest) -> Result<PathBuf, ManifestBuildError> {
     let path = manifest_path(root);
     if let Some(dir) = path.parent() {
@@ -404,7 +354,6 @@ kernel-core\t0\t7.2.9\t300.fc45\tx86_64
         assert_eq!(Manifest::from_json(&bytes).unwrap(), built.manifest);
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o644);
-        // Nothing else is left in the directory.
         let entries = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
         assert_eq!(entries, 1);
     }

@@ -1,11 +1,9 @@
-//! The real codec dump of this laptop's ALC294 (`/proc/asound/card1/codec#0`, Ubuntu
-//! 7.0.0-31, 2026-09-23, `dump_coef` off) parses into what the hardware docs describe.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use apexctl::codec;
 use apexctl::hw::audio::{AudioSnapshot, render};
 
+/// This laptop's `/proc/asound/card1/codec#0` (Ubuntu 7.0.0-31, `dump_coef` off).
 const FIXTURE: &str = include_str!("fixtures/alc294-m7400qc-codec0.txt");
 
 #[test]
@@ -17,7 +15,6 @@ fn header_and_pins_match_the_hardware_notes() {
     assert_eq!(dump.subsystem_id, 0x1043_1ab2);
     assert_eq!(dump.revision_id, 0x0010_0004);
 
-    // docs/hardware/AUDIO.md: speaker on 0x14 fed by DAC 0x02, EAPD capable.
     let speaker = dump.node(0x14).expect("node 0x14");
     assert_eq!(
         speaker.pin_default.as_ref().map(|p| p.value),
@@ -31,7 +28,6 @@ fn header_and_pins_match_the_hardware_notes() {
     assert_eq!(speaker.eapd.as_ref().map(|e| e.value), Some(0x2));
     assert_eq!(speaker.connections, [0x02]);
 
-    // Headphone jack 0x21 selects DAC 0x03.
     let headphone = dump.node(0x21).expect("node 0x21");
     assert_eq!(
         headphone.pin_default.as_ref().map(|p| p.value),
@@ -45,11 +41,9 @@ fn header_and_pins_match_the_hardware_notes() {
         (0xc0, &["OUT".to_owned(), "HP".to_owned()][..])
     );
 
-    // Pin 0x13 prints "Pin-ctls: 0x00:" with no flags.
     let unused = dump.node(0x13).expect("node 0x13");
     assert!(unused.pin_ctls.as_ref().expect("pin-ctls").flags.is_empty());
 
-    // The COEF widget: 130 slots, not dumped.
     let widget = dump.node(0x20).expect("node 0x20");
     assert_eq!(widget.kind, "Vendor Defined Widget");
     assert_eq!(widget.ncoeff, Some(130));

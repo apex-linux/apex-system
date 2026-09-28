@@ -1,6 +1,3 @@
-//! Sync tests against the repository: the real hardware profile, the firmware list of the
-//! image checks, the committed renders and the constants compiled into `apexctl`.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use std::path::{Path, PathBuf};
@@ -21,8 +18,6 @@ fn profile() -> Profile {
     Profile::load(&profile_path()).expect("hardware/m7400qc/profile.toml is valid")
 }
 
-/// Package names listed in an `image/packages/*.txt` file: one per line, `#` starts a
-/// comment.
 fn package_list(text: &str) -> Vec<&str> {
     text.lines()
         .map(|line| line.split('#').next().unwrap_or("").trim())
@@ -56,7 +51,6 @@ fn firmware_list_mirrors_the_profile() {
     let list = render::firmware_list_path(&profile_path())
         .expect("the profile sits in hardware/<machine>/");
     let Ok(text) = std::fs::read_to_string(&list) else {
-        // The sync is only required when the image checks exist.
         eprintln!("{} not found; nothing to compare", list.display());
         return;
     };
@@ -125,8 +119,6 @@ fn committed_renders_match_the_profile() {
 
 #[test]
 fn rendered_monitors_xml_is_the_documented_one() {
-    // ADR 0003 and the display research: version 2, logical layout, eDP-1 SDC 0x4154
-    // serial 0x00000000, 2880x1800 at 90.001434326171875 Hz, scale 2.
     let xml = render::monitors_xml(&profile());
     insta::assert_snapshot!(xml);
     for needle in [

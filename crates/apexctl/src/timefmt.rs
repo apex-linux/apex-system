@@ -1,25 +1,18 @@
-//! UTC date formatting for timestamps shown to the user.
-//!
-//! The CLI prints UTC (and says so) rather than local time: local time needs the system
-//! time zone database, and a wrong offset is worse than an explicit `UTC`.
-
-/// Days since 1970-01-01 to a proleptic Gregorian `(year, month, day)`.
-///
-/// Howard Hinnant's `civil_from_days`; exact for the whole `i64` day range used here.
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 to a Gregorian date.
 pub const fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097); // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
     (year, month, day)
 }
 
-/// `2026-09-24 10:05 UTC` for seconds since the Unix epoch.
+/// UTC, labelled: local time would need the time zone database.
 pub fn format_utc(unix: u64) -> String {
     let unix = i64::try_from(unix).unwrap_or(i64::MAX);
     let (days, seconds) = (unix.div_euclid(86_400), unix.rem_euclid(86_400));
@@ -31,7 +24,6 @@ pub fn format_utc(unix: u64) -> String {
     )
 }
 
-/// `2026-09-24` for seconds since the Unix epoch.
 pub fn format_utc_date(unix: u64) -> String {
     let unix = i64::try_from(unix).unwrap_or(i64::MAX);
     let (year, month, day) = civil_from_days(unix.div_euclid(86_400));
@@ -55,7 +47,6 @@ mod tests {
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
     }
 
-    /// Days from a civil date (Hinnant's `days_from_civil`), the inverse used as oracle.
     fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
         let y = if m <= 2 { y - 1 } else { y };
         let era = y.div_euclid(400);

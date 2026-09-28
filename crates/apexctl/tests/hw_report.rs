@@ -1,5 +1,3 @@
-//! `hw report` and `hw audio snapshot` against a fake sysfs/procfs tree.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use std::fs;
@@ -26,7 +24,6 @@ fn put(root: &Path, path: &str, contents: impl AsRef<[u8]>) {
     fs::write(path, contents).expect("write");
 }
 
-/// A healthy M7400QC: fix loaded, limit on, dGPU in D3cold, reader present, Secure Boot on.
 fn healthy(root: &Path) {
     put(root, "/proc/asound/card1/codec#0", CODEC);
     put(
@@ -125,8 +122,6 @@ fn problems_are_named() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path();
     healthy(root);
-    // The kernel did not load the firmware; the limit is off; the dGPU is awake and its
-    // runtime PM is disabled; the reader is gone; Secure Boot is off.
     put(root, "/sys/class/sound/hwC1D0/init_verbs", "");
     put(
         root,
@@ -205,9 +200,6 @@ fn audio_snapshot_finds_the_alc294_and_its_init_verbs() {
 
 #[test]
 fn audio_snapshot_opens_only_the_codec_file_its_hwdep_names() {
-    // Reading a codec file powers that codec (and its controller) up, so the ALC294 is
-    // picked by the hwdep's cached sysfs ids. Here card0 holds a dump that also claims to
-    // be the ALC294, and it comes first: it must not be the one read.
     let dir = tempfile::tempdir().expect("tempdir");
     healthy(dir.path());
     put(
@@ -223,7 +215,6 @@ fn audio_snapshot_opens_only_the_codec_file_its_hwdep_names() {
     );
     assert_eq!(snapshot.card, Some(1));
 
-    // The file the hwdep points at must describe the ALC294.
     put(
         dir.path(),
         "/proc/asound/card1/codec#0",
@@ -237,8 +228,6 @@ fn audio_snapshot_opens_only_the_codec_file_its_hwdep_names() {
         "{error}"
     );
 
-    // Without an ALC294 hwdep nothing under /proc/asound is opened, and the message lists
-    // the hwdeps seen, from sysfs.
     fs::remove_dir_all(dir.path().join("sys/class/sound/hwC1D0")).expect("rm");
     let error = audio::snapshot(&SysRoot::new(dir.path())).expect_err("no hwdep");
     let text = error.to_string();
@@ -259,13 +248,11 @@ fn a_broken_alc294_dump_is_reported_with_its_line_not_as_missing() {
     assert!(text.contains("card1/codec#0: line "), "{text}");
     assert!(text.contains("malformed Pin Default"), "{text}");
     assert!(!text.contains("no ALC294"), "{text}");
-    // Printed once, not once more as a `source()`.
     assert!(std::error::Error::source(&error).is_none());
 }
 
 #[test]
 fn a_failed_coef_read_keeps_the_snapshot_usable() {
-    // dump_coef=1 and one failed read: the kernel prints its -1 as 0xffffffff.
     let dir = tempfile::tempdir().expect("tempdir");
     healthy(dir.path());
     let with_coefs = CODEC.replacen(
@@ -294,7 +281,6 @@ fn a_failed_coef_read_keeps_the_snapshot_usable() {
 
 #[test]
 fn an_installed_firmware_with_a_nul_fails_the_report() {
-    // The kernel's patch loader loops forever on a NUL; hw report must not call it a pass.
     let dir = tempfile::tempdir().expect("tempdir");
     healthy(dir.path());
     let firmware = FIRMWARE.replace("# test firmware", "# test firmware M7400QC\0");

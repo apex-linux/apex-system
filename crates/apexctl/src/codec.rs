@@ -1,87 +1,43 @@
-//! Parser for `/proc/asound/card*/codec#*`, the kernel's text dump of an HDA codec
-//! (`sound/hda/common/proc.c`).
-//!
-//! Only what Apex needs is kept: the codec header (`Codec`, `Address`, `Vendor Id`,
-//! `Subsystem Id`, `Revision Id`) and, per node, the widget type and capabilities, the pin
-//! capabilities, `Pin Default`, `Pin-ctls`, `EAPD`, the connection list with the selected
-//! entry, the processing capabilities and the `Coeff 0x..: 0x....` lines that appear when
-//! `snd_hda_codec.dump_coef` is enabled. Every other line is ignored, so newer kernels
-//! that print more do not break the parser. A line that *is* one of the parsed kinds but
-//! does not have the kernel's format is an error with its line number.
-//!
-//! A `Coeff` value is the kernel's 32-bit `unsigned int` printed with `%04x`: a failed read
-//! of that slot prints `0xffffffff` (`snd_hda_codec_read` returns -1). Such values are kept
-//! in [`Node::unreadable_coefs`] instead of failing the dump, which is exactly what is
-//! needed when the codec misbehaves.
-//!
-//! Reading the file with `dump_coef` enabled makes the kernel select every COEF slot in
-//! turn (and restore the index afterwards); `apexctl` only reads the text.
-
 use std::collections::BTreeMap;
 
 use serde::{Serialize, Serializer};
 
-/// The parsed dump of one codec.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CodecDump {
-    /// `Codec:` line, e.g. `Realtek ALC294`.
     pub codec: String,
-    /// `Address:` line: the codec address on the HDA link.
     pub address: Option<u8>,
-    /// `Vendor Id:`, e.g. `0x10ec0294`.
     pub vendor_id: u32,
-    /// `Subsystem Id:`, e.g. `0x10431ab2`.
     pub subsystem_id: u32,
-    /// `Revision Id:`, e.g. `0x100004`.
     pub revision_id: u32,
-    /// The widget nodes, in file order (ascending NID).
     pub nodes: Vec<Node>,
 }
 
 impl CodecDump {
-    /// The node with `nid`.
     pub fn node(&self, nid: u16) -> Option<&Node> {
         self.nodes.iter().find(|node| node.nid == nid)
     }
 
-    /// The pin complexes.
     pub fn pins(&self) -> impl Iterator<Item = &Node> {
         self.nodes.iter().filter(|node| node.is_pin())
     }
 }
 
-/// One `Node 0x.. [Type] wcaps 0x..:` block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Node {
-    /// Widget NID.
     pub nid: u16,
-    /// Widget type as printed, e.g. `Pin Complex` or `Vendor Defined Widget`.
     pub kind: String,
-    /// Widget capabilities.
     pub wcaps: u32,
-    /// `Pincap 0x........`: pin capabilities.
     pub pin_caps: Option<u32>,
-    /// `Pin Default 0x........: …`: the default configuration.
     pub pin_default: Option<PinDefault>,
-    /// `Pin-ctls: 0x..: …`: the pin widget control.
     pub pin_ctls: Option<Flags>,
-    /// `EAPD 0x.: …`: EAPD/BTL enable.
     pub eapd: Option<Flags>,
-    /// `Connection: N` list, in order.
     pub connections: Vec<u16>,
-    /// The entry marked `*` (the selected input), if any.
     pub selected_connection: Option<u16>,
-    /// `Processing caps: … ncoeff=N`: number of COEF slots.
     pub ncoeff: Option<u32>,
-    /// `Coeff 0x..: 0x....` lines, by COEF index (present only with `dump_coef`).
-    ///
-    /// A `BTreeMap` keeps the dump's index order and gives lookups by index for the
-    /// summary; JSON gets a list of `{index, value}` objects.
+    /// Empty unless the kernel's `snd_hda_codec.dump_coef` option is on.
     #[serde(serialize_with = "coefs_as_list")]
     pub coefs: BTreeMap<u16, u16>,
-    /// `Coeff` lines whose value does not fit a 16-bit COEF, with the raw value the kernel
-    /// printed. `0xffffffff` is the kernel's -1: reading that slot failed. JSON lists them
-    /// as `{index, raw}` objects, and leaves the key out when there are none.
+    /// The kernel prints a failed read of a slot as its -1, `0xffffffff`.
     #[serde(
         serialize_with = "raw_coefs_as_list",
         skip_serializing_if = "BTreeMap::is_empty"
@@ -90,27 +46,20 @@ pub struct Node {
 }
 
 impl Node {
-    /// `true` for a pin complex.
     pub fn is_pin(&self) -> bool {
         self.kind == "Pin Complex"
     }
 }
 
-/// A `Pin Default` value and the kernel's decoding of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PinDefault {
-    /// The 32-bit default configuration.
     pub value: u32,
-    /// The kernel's text, e.g. `[Fixed] Speaker at Int N/A`.
     pub description: String,
 }
 
-/// A register value followed by the kernel's flag words (`0x40: OUT`, `0x2: EAPD`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Flags {
-    /// The value.
     pub value: u32,
-    /// The flag words after the colon, e.g. `["IN", "VREF_HIZ"]`.
     pub flags: Vec<String>,
 }
 
@@ -142,33 +91,25 @@ fn raw_coefs_as_list<S: Serializer>(coefs: &BTreeMap<u16, u32>, s: S) -> Result<
     )
 }
 
-/// Why a dump could not be parsed. `line` numbers start at 1.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CodecParseError {
-    /// A line of a parsed kind does not have the kernel's format.
     #[error("line {line}: malformed {what}: {text:?}")]
     Malformed {
-        /// Line number.
         line: usize,
-        /// What the line was taken to be.
         what: &'static str,
-        /// The line.
         text: String,
     },
-    /// A required header line is missing.
     #[error("not a codec dump: no {0:?} line")]
     Missing(&'static str),
-    /// A connection list does not have the number of entries its header announced.
     #[error("line {line}: connection list has {found} entries, the header says {expected}")]
     ConnectionCount {
-        /// Line number of the list.
         line: usize,
-        /// Entries announced by `Connection: N`.
         expected: usize,
-        /// Entries found.
         found: usize,
     },
 }
+
+type LineKind = &'static str;
 
 fn hex(text: &str) -> Option<u32> {
     let digits = text.strip_prefix("0x")?;
@@ -182,17 +123,13 @@ fn hex16(text: &str) -> Option<u16> {
     hex(text).and_then(|n| u16::try_from(n).ok())
 }
 
-/// What the next indented line is expected to be.
 #[derive(Clone, Copy)]
-enum Pending {
+enum PendingList {
     Nothing,
-    /// The list after `Connection: N`.
     Connections(usize),
-    /// The list after `In-driver Connection: N`, which is skipped.
-    DriverConnections,
+    SkippedDriverConnections,
 }
 
-/// Header fields collected while parsing.
 #[derive(Default)]
 struct Header {
     codec: Option<String>,
@@ -202,12 +139,12 @@ struct Header {
     revision_id: Option<u32>,
 }
 
-/// Parses the text of `/proc/asound/cardN/codec#M`.
+/// Lines of other kinds are skipped, so newer kernels that print more still parse.
 pub fn parse(text: &str) -> Result<CodecDump, CodecParseError> {
     let mut header = Header::default();
     let mut nodes: Vec<Node> = Vec::new();
     let mut in_node = false;
-    let mut pending = Pending::Nothing;
+    let mut pending = PendingList::Nothing;
 
     for (index, raw) in text.lines().enumerate() {
         let line = index + 1;
@@ -217,14 +154,14 @@ pub fn parse(text: &str) -> Result<CodecDump, CodecParseError> {
             text: raw.to_owned(),
         };
         if !raw.starts_with(' ') {
-            pending = Pending::Nothing;
+            pending = PendingList::Nothing;
             in_node = false;
             parse_top_level(raw, &mut header, &mut nodes, &mut in_node).map_err(malformed)?;
             continue;
         }
         let content = raw.trim();
-        match std::mem::replace(&mut pending, Pending::Nothing) {
-            Pending::Connections(expected) => {
+        match std::mem::replace(&mut pending, PendingList::Nothing) {
+            PendingList::Connections(expected) => {
                 if !content.starts_with("0x") {
                     return Err(CodecParseError::ConnectionCount {
                         line,
@@ -254,8 +191,8 @@ pub fn parse(text: &str) -> Result<CodecDump, CodecParseError> {
                 }
                 continue;
             }
-            Pending::DriverConnections if content.starts_with("0x") => continue,
-            Pending::DriverConnections | Pending::Nothing => {}
+            PendingList::SkippedDriverConnections if content.starts_with("0x") => continue,
+            PendingList::SkippedDriverConnections | PendingList::Nothing => {}
         }
         if !in_node {
             continue;
@@ -282,13 +219,12 @@ pub fn parse(text: &str) -> Result<CodecDump, CodecParseError> {
     })
 }
 
-/// A line that starts in column 0. Returns the kind of line on a format error.
 fn parse_top_level(
     raw: &str,
     header: &mut Header,
     nodes: &mut Vec<Node>,
     in_node: &mut bool,
-) -> Result<(), &'static str> {
+) -> Result<(), LineKind> {
     if let Some(rest) = raw.strip_prefix("Codec: ") {
         header.codec = Some(rest.trim().to_owned());
     } else if let Some(rest) = raw.strip_prefix("Address: ") {
@@ -332,8 +268,7 @@ fn flags(rest: &str) -> Option<Flags> {
     })
 }
 
-/// An indented line inside a node block (trimmed). Returns what the next line must be.
-fn parse_node_line(content: &str, node: &mut Node) -> Result<Pending, &'static str> {
+fn parse_node_line(content: &str, node: &mut Node) -> Result<PendingList, LineKind> {
     if let Some(rest) = content.strip_prefix("Pincap ") {
         let value = rest.split(':').next().ok_or("Pincap")?;
         node.pin_caps = Some(hex(value.trim()).ok_or("Pincap")?);
@@ -352,12 +287,12 @@ fn parse_node_line(content: &str, node: &mut Node) -> Result<Pending, &'static s
         node.connections.clear();
         node.selected_connection = None;
         if count > 0 {
-            return Ok(Pending::Connections(count));
+            return Ok(PendingList::Connections(count));
         }
     } else if let Some(rest) = content.strip_prefix("In-driver Connection: ") {
         let count: usize = rest.trim().parse().map_err(|_| "In-driver Connection")?;
         if count > 0 {
-            return Ok(Pending::DriverConnections);
+            return Ok(PendingList::SkippedDriverConnections);
         }
     } else if let Some(rest) = content.strip_prefix("Processing caps: ") {
         let ncoeff = rest
@@ -378,7 +313,7 @@ fn parse_node_line(content: &str, node: &mut Node) -> Result<Pending, &'static s
             }
         }
     }
-    Ok(Pending::Nothing)
+    Ok(PendingList::Nothing)
 }
 
 #[cfg(test)]
@@ -387,7 +322,6 @@ mod tests {
     use proptest::prelude::*;
     use std::fmt::Write as _;
 
-    /// Prints a dump in the kernel's formats (the subset the parser reads).
     fn to_proc_text(dump: &CodecDump) -> String {
         let mut out = String::new();
         let _ = writeln!(out, "Codec: {}", dump.codec);
@@ -476,7 +410,6 @@ Node 0x21 [Pin Complex] wcaps 0x40058d: Stereo Amp-Out
 
     #[test]
     fn reads_coefficients_when_dump_coef_is_enabled() {
-        // Synthetic values: the real dump on this laptop has dump_coef disabled.
         let dump = parse(COEF_DUMP).unwrap();
         let widget = dump.node(0x20).unwrap();
         assert_eq!(widget.ncoeff, Some(130));
@@ -495,7 +428,6 @@ Node 0x21 [Pin Complex] wcaps 0x40058d: Stereo Amp-Out
 
     #[test]
     fn a_failed_coef_read_does_not_spoil_the_dump() {
-        // dump_coef=1 with one failed read: the kernel prints its -1 as 0xffffffff.
         let dump = COEF_DUMP.replace("Coeff 0x0f: 0x7774", "Coeff 0x0f: 0xffffffff");
         let dump = parse(&dump).unwrap();
         let widget = dump.node(0x20).unwrap();
@@ -507,10 +439,8 @@ Node 0x21 [Pin Complex] wcaps 0x40058d: Stereo Amp-Out
             json["unreadable_coefs"],
             serde_json::json!([{"index": 15, "raw": 0xffff_ffff_u32}])
         );
-        // No failed read: no key.
         let clean = serde_json::to_value(parse(COEF_DUMP).unwrap().node(0x20).unwrap()).unwrap();
         assert!(clean.get("unreadable_coefs").is_none());
-        // Wider than the kernel's unsigned int is still malformed.
         let wide = COEF_DUMP.replace("Coeff 0x0f: 0x7774", "Coeff 0x0f: 0x1ffffffff");
         assert!(matches!(
             parse(&wide),

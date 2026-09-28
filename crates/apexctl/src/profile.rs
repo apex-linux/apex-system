@@ -1,13 +1,3 @@
-//! The hardware profile, `hardware/<machine>/profile.toml`: the single source of machine
-//! facts that image drop-ins are rendered from.
-//!
-//! Parsing is strict: every table denies unknown keys, so a typo (`cold_bot`, `rulez`) is
-//! an error instead of a silently missing fix. `[audio.measurements]` has explicit keys for
-//! everything `coef-dump.sh` prints, including the informative `with_fix_*` lists, and its
-//! COEF lists may hold any number of indexes beyond the ones the fix uses.
-//! [`Profile::parse`] also validates what serde cannot express (formats, ranges, and that
-//! every COEF the fix needs was measured).
-
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -16,285 +6,177 @@ use toml::value::Datetime;
 
 use crate::scale::{Scale, supported_scales};
 
-/// The profile schema this version of `apexctl` reads.
 pub const PROFILE_SCHEMA: u32 = 1;
 
-/// Default profile path, relative to the repository root.
 pub const DEFAULT_PROFILE: &str = "hardware/m7400qc/profile.toml";
 
-/// Longest profile string that is copied into a comment line of the patch firmware
-/// (`machine.dmi_board_name`, `audio.measurements.bios` and `.kernel`). The lines must stay
-/// under the kernel's 127-character limit, and the strings must be printable ASCII: a line
-/// feed would start a line the kernel parses, and a NUL hangs its patch loader.
+/// Keeps the firmware comment lines these strings are copied into under the kernel's limit.
 pub const MAX_PROVENANCE_LEN: usize = 64;
 
-/// A whole hardware profile.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// Profile schema; must be [`PROFILE_SCHEMA`].
     pub schema: u32,
-    /// `[machine]`.
     pub machine: Machine,
-    /// `[cpu]`.
     pub cpu: Cpu,
-    /// `[panel]`.
     pub panel: Panel,
-    /// `[audio]`.
     pub audio: Audio,
-    /// `[fingerprint]`.
     pub fingerprint: Fingerprint,
-    /// `[gpu]`.
     pub gpu: Gpus,
-    /// `[firmware]`.
     pub firmware: Firmware,
-    /// `[battery]`.
     pub battery: Battery,
 }
 
-/// `[machine]`: identity of the laptop.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Machine {
-    /// Short machine id used in paths and file names, e.g. `m7400qc`.
     pub id: String,
-    /// DMI `sys_vendor`.
     pub dmi_sys_vendor: String,
-    /// DMI `product_name`.
     pub dmi_product_name: String,
-    /// DMI `board_name`.
     pub dmi_board_name: String,
-    /// BIOS versions the facts were checked on.
     pub bios_versions_seen: Vec<String>,
 }
 
-/// `[cpu]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cpu {
-    /// Marketing name.
     pub model: String,
-    /// `-march` value for a tuned kernel.
     pub march: String,
 }
 
-/// `[panel]`: the built-in display.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Panel {
-    /// DRM connector, e.g. `eDP-1`.
     pub connector: String,
-    /// EDID vendor (PNP id), e.g. `SDC`.
     pub edid_vendor: String,
-    /// EDID product code as mutter prints it, e.g. `0x4154`.
     pub edid_product: String,
-    /// EDID serial as mutter prints it, e.g. `0x00000000`.
     pub edid_serial: String,
-    /// EDID monitor name.
     pub edid_name: String,
-    /// Native width in pixels.
     pub width_px: u32,
-    /// Native height in pixels.
     pub height_px: u32,
-    /// Physical width in millimetres.
     pub width_mm: u32,
-    /// Physical height in millimetres.
     pub height_mm: u32,
-    /// Exact refresh rates as mutter reports them; `monitors.xml` uses the highest.
     pub refresh_hz: Vec<f64>,
-    /// Scale written to `monitors.xml`.
     pub default_scale: Scale,
-    /// Other scales the documentation offers.
     pub alternative_scales: Vec<Scale>,
 }
 
 impl Panel {
-    /// The refresh rate `monitors.xml` selects: the highest one.
     pub fn preferred_rate(&self) -> Option<f64> {
         self.refresh_hz.iter().copied().max_by(f64::total_cmp)
     }
 }
 
-/// `[audio]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Audio {
-    /// `[audio.codec]`.
     pub codec: AudioCodec,
-    /// `[audio.fix]`.
     pub fix: AudioFix,
-    /// `[audio.measurements]`; absent until the COEFs were measured on the laptop.
     pub measurements: Option<Measurements>,
 }
 
-/// `[audio.codec]`: the analog codec.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioCodec {
-    /// PCI address of the HDA controller.
     pub controller_pci: String,
-    /// Codec vendor ID, e.g. `0x10ec0294`.
     pub vendor_id: u32,
-    /// Codec subsystem ID, e.g. `0x10431ab2`.
     pub subsystem_id: u32,
-    /// Codec address on the HDA link.
     pub address: u8,
-    /// NID of the widget that owns the COEF registers.
     pub coef_nid: u8,
 }
 
-/// `[audio.fix]`: how the measured values become verbs.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioFix {
-    /// Written as `(cold & !clear) | set`.
     pub rules: Vec<FixRule>,
-    /// Restored to the cold-boot value when the after-Windows dump differs.
     pub restore_if_windows_differs: Vec<u16>,
 }
 
-/// One `[audio.fix].rules` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixRule {
-    /// COEF index.
     pub index: u16,
-    /// Bits to set.
     pub set: u16,
-    /// Bits to clear.
     pub clear: u16,
 }
 
-/// `[audio.measurements]`: COEF dumps taken with `coef-dump.sh` on this unit.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Measurements {
-    /// Date of the phase-A dump (a TOML local date).
     pub date: Datetime,
-    /// BIOS version during the dumps.
     pub bios: String,
-    /// Kernel release during the dumps.
     pub kernel: String,
-    /// Phase A: cold boot without the fix.
     pub cold_boot: Vec<CoefValue>,
-    /// Phase B: warm reboot from Windows without the fix.
     pub after_windows: Option<Vec<CoefValue>>,
-    /// Phase C (informative; not rendered).
+    // Informative only: validated, never rendered.
     pub with_fix_loaded: Option<Vec<CoefValue>>,
-    /// Phase D (informative; not rendered).
     pub with_fix_after_suspend: Option<Vec<CoefValue>>,
-    /// Phase E (informative; not rendered).
     pub with_fix_cold_boot: Option<Vec<CoefValue>>,
 }
 
-/// One measured COEF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoefValue {
-    /// COEF index.
     pub index: u16,
-    /// Measured value.
     pub value: u16,
 }
 
-/// `[fingerprint]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fingerprint {
-    /// USB vendor id.
     pub usb_vendor: u16,
-    /// USB product id.
     pub usb_product: u16,
-    /// libfprint driver name.
     pub libfprint_driver: String,
 }
 
-/// `[gpu]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Gpus {
-    /// `[gpu.integrated]`.
     pub integrated: IntegratedGpu,
-    /// `[gpu.discrete]`.
     pub discrete: DiscreteGpu,
 }
 
-/// `[gpu.integrated]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntegratedGpu {
-    /// PCI address.
     pub pci: String,
-    /// PCI vendor id.
     pub vendor: u16,
-    /// PCI device id.
     pub device: u16,
 }
 
-/// `[gpu.discrete]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DiscreteGpu {
-    /// PCI address.
     pub pci: String,
-    /// PCI vendor id.
     pub vendor: u16,
-    /// PCI device id.
     pub device: u16,
-    /// Whether any display is wired to it.
     pub drives_displays: bool,
 }
 
-/// `[firmware]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Firmware {
-    /// Firmware packages installed explicitly.
     pub packages: Vec<String>,
-    /// Globs under `/usr/lib/firmware` the image check requires; mirrored by
-    /// `image/checks/firmware-files.txt`.
     pub required_files: Vec<String>,
 }
 
-/// `[battery]`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Battery {
-    /// Power-supply name, e.g. `BAT0`.
     pub name: String,
-    /// Charge end threshold in percent.
     pub charge_end_threshold: u8,
 }
 
-/// Why a profile was rejected.
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
-    /// Reading the file failed.
     #[error("cannot read {path}: {error}")]
-    Read {
-        /// The file.
-        path: String,
-        /// The I/O error. It is part of the message, so it is not also the error's
-        /// `source()`: `apexctl` prints the whole chain, and would print it twice.
-        error: std::io::Error,
-    },
-    /// Not valid TOML, a wrong type, a missing or an unknown key.
+    Read { path: String, error: std::io::Error },
     #[error(transparent)]
     Toml(#[from] toml::de::Error),
-    /// A schema this version does not read.
     #[error("profile schema {found} is not supported (this apexctl reads schema {PROFILE_SCHEMA})")]
-    UnsupportedSchema {
-        /// The schema in the file.
-        found: u32,
-    },
-    /// A value that parses but is not allowed.
+    UnsupportedSchema { found: u32 },
     #[error("{field}: {reason}")]
-    Invalid {
-        /// Dotted key, e.g. `audio.fix.rules[0]`.
-        field: String,
-        /// What is wrong.
-        reason: String,
-    },
+    Invalid { field: String, reason: String },
 }
 
 fn invalid(field: impl Into<String>, reason: impl Into<String>) -> ProfileError {
@@ -304,14 +186,13 @@ fn invalid(field: impl Into<String>, reason: impl Into<String>) -> ProfileError 
     }
 }
 
-/// Only the schema, read first so a newer profile reports its schema, not a key error.
+/// Read first so a newer profile reports its schema rather than a key error.
 #[derive(Deserialize)]
 struct SchemaOnly {
     schema: u32,
 }
 
 impl Profile {
-    /// Parses and validates a profile.
     pub fn parse(text: &str) -> Result<Self, ProfileError> {
         let SchemaOnly { schema } = toml::from_str(text)?;
         if schema != PROFILE_SCHEMA {
@@ -322,7 +203,6 @@ impl Profile {
         Ok(profile)
     }
 
-    /// Reads, parses and validates a profile file.
     pub fn load(path: &Path) -> Result<Self, ProfileError> {
         let text = std::fs::read_to_string(path).map_err(|error| ProfileError::Read {
             path: path.display().to_string(),
@@ -331,7 +211,6 @@ impl Profile {
         Self::parse(&text)
     }
 
-    /// Checks everything serde cannot.
     pub fn validate(&self) -> Result<(), ProfileError> {
         validate_id(&self.machine.id)?;
         validate_comment_text("machine.dmi_board_name", &self.machine.dmi_board_name)?;
@@ -483,7 +362,6 @@ impl Profile {
     }
 }
 
-/// The COEF values of one dump, by index; duplicate indexes are an error.
 pub fn coef_map(field: &str, values: &[CoefValue]) -> Result<BTreeMap<u16, u16>, ProfileError> {
     let mut map = BTreeMap::new();
     for coef in values {
@@ -566,9 +444,8 @@ fn validate_measurements(m: &Measurements, fix: &AudioFix) -> Result<(), Profile
     Ok(())
 }
 
-/// A string the renderer copies into a comment line of the patch firmware: 1 to
-/// [`MAX_PROVENANCE_LEN`] printable ASCII characters, so it can neither start a new line
-/// nor carry the NUL that hangs the kernel's loader.
+/// Copied into a firmware comment line: a line feed would start a line the kernel parses,
+/// and a NUL hangs its patch loader.
 fn validate_comment_text(field: &str, value: &str) -> Result<(), ProfileError> {
     let printable = value.bytes().all(|b| (0x20..0x7f).contains(&b));
     if value.is_empty() || value.len() > MAX_PROVENANCE_LEN || !printable {
@@ -597,7 +474,7 @@ fn validate_id(id: &str) -> Result<(), ProfileError> {
     }
 }
 
-/// Letters, digits, `-`, `_` and `.`: safe in XML text, sysfs paths and file names.
+/// Safe in XML text, sysfs paths and file names.
 fn is_simple_token(value: &str) -> bool {
     !value.is_empty()
         && value
@@ -609,7 +486,6 @@ fn is_simple_token(value: &str) -> bool {
 pub(crate) mod tests {
     use super::*;
 
-    /// A complete, valid profile without measurements (the shape of the real one).
     pub(crate) const BASE: &str = r#"
 schema = 1
 
@@ -674,7 +550,7 @@ name = "BAT0"
 charge_end_threshold = 80
 "#;
 
-    /// Sample measurements (placeholders, not this laptop's values).
+    /// Placeholders, not this laptop's values.
     pub(crate) const MEASURED: &str = r"
 [audio.measurements]
 date = 2026-09-25
@@ -712,7 +588,6 @@ with_fix_loaded = [ { index = 0x1b, value = 0x4e4b } ]
     fn typos_and_bad_values_are_rejected() {
         assert!(reason(&BASE.replace("coef_nid", "coef_nod")).contains("coef_nod"));
         assert!(reason(&with(&MEASURED.replace("cold_boot", "cold_bot"))).contains("cold_bot"));
-        // A COEF value wider than 16 bits is a type error.
         assert_ne!(
             reason(&with(
                 &MEASURED.replace("value = 0x7770", "value = 0x17770")
@@ -768,8 +643,6 @@ with_fix_loaded = [ { index = 0x1b, value = 0x4e4b } ]
 
     #[test]
     fn the_board_name_cannot_smuggle_lines_or_nul_into_the_firmware() {
-        // Valid TOML escapes: a NUL (which hangs the kernel's patch loader) and a line feed
-        // followed by a section the kernel would apply.
         for board in [
             r#""M7400QC\u0000""#,
             r#""M7400QC\n[pincfg]\n0x19 0x411111f0""#,
@@ -787,7 +660,6 @@ with_fix_loaded = [ { index = 0x1b, value = 0x4e4b } ]
                 "{board}: {}",
                 reason(&with_measured(&text))
             );
-            // Without measurements too: the field is always checked.
             assert!(
                 reason(&text).starts_with("machine.dmi_board_name"),
                 "{board}"
@@ -809,17 +681,21 @@ with_fix_loaded = [ { index = 0x1b, value = 0x4e4b } ]
         let error = Profile::load(Path::new("/nonexistent/apex/profile.toml")).unwrap_err();
         assert!(matches!(error, ProfileError::Read { .. }));
         assert_eq!(
-            chain(&error).matches("os error 2").count(),
+            printed_error_chain(&error).matches("os error 2").count(),
             1,
             "{}",
-            chain(&error)
+            printed_error_chain(&error)
         );
         let toml_error = Profile::parse(&BASE.replace("coef_nid", "coef_nod")).unwrap_err();
-        assert_eq!(chain(&toml_error).matches("unknown field").count(), 1);
+        assert_eq!(
+            printed_error_chain(&toml_error)
+                .matches("unknown field")
+                .count(),
+            1
+        );
     }
 
-    /// The text `apexctl` prints for an error: its message and every `source()` after it.
-    pub(crate) fn chain(error: &dyn std::error::Error) -> String {
+    pub(crate) fn printed_error_chain(error: &dyn std::error::Error) -> String {
         let mut text = error.to_string();
         let mut cause = error.source();
         while let Some(inner) = cause {

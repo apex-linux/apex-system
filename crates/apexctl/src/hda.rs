@@ -1,75 +1,26 @@
-//! HD-audio verbs: the 32-bit command word, and the kernel's `(nid, verb, param)` triple
-//! used by patch files and `init_verbs`. The tests also check the legacy `hda-verb`
-//! packing that docs/hardware/AUDIO.md warns about.
-//!
-//! # The command word
-//!
-//! The controller sends 32-bit commands to a codec (Intel HDA specification rev. 1.0a,
-//! §7.1.2). The kernel builds them in `snd_hdac_make_cmd` (`sound/hda/core/device.c`):
-//!
-//! ```text
-//!  31    28 27 26         20 19                                  0
-//! +--------+--+-------------+-------------------------------------+
-//! |  CAd   |0 |     NID     |        verb field (20 bits)         |
-//! +--------+--+-------------+-------------------------------------+
-//!  12-bit verb:             |  verb ID (19:8)         | data 7:0  |
-//!  4-bit verb:              | ID 19:16 |   data (15:0)            |
-//! ```
-//!
-//! `snd_hdac_make_cmd` checks `addr <= 0xf`, `nid <= 0x7f`, `verb <= 0xfff` and
-//! `parm <= 0xffff`, then computes `addr << 28 | nid << 20 | verb << 8 | parm`. It does not
-//! know the two forms: a 4-bit verb is spelled as the 12-bit value `0xV00`
-//! (`AC_VERB_SET_COEF_INDEX` = `0x500`, `AC_VERB_SET_PROC_COEF` = `0x400`) with a 16-bit
-//! `parm`, whose high byte lands in bits 15:8, the same bits as the low byte of a 12-bit
-//! verb. The two are OR-ed. That overlap is why `hda-verb … 0x20 0x477 0x4a4b` writes
-//! `0x7f4b` ([`Verb::from_kernel_pair`]; the tests check the `hda-verb` packing).
-//! [`Verb`] is the decoded meaning of a verb field.
-//!
-//! # Patch files and `init_verbs`
-//!
-//! A `[verb]` line of an HDA patch file is `nid verb param`, read by `parse_init_verbs`
-//! (`sound/hda/common/sysfs.c`) with `sscanf("%i %i %i")` into `struct hda_verb`, and the
-//! sysfs file `init_verbs` prints the same entries as `0x%02x 0x%03x 0x%04x`. [`InitVerb`] is
-//! that triple; its `Display` is exactly the sysfs format.
-
 use std::fmt;
 
-/// `AC_VERB_SET_COEF_INDEX` (4-bit verb `0x5`): select a Realtek COEF slot.
 pub const AC_VERB_SET_COEF_INDEX: u16 = 0x500;
-/// `AC_VERB_SET_PROC_COEF` (4-bit verb `0x4`): write the selected COEF slot.
 pub const AC_VERB_SET_PROC_COEF: u16 = 0x400;
-/// `AC_VERB_GET_COEF_INDEX` (4-bit verb `0xd`): read the selected slot number.
 pub const AC_VERB_GET_COEF_INDEX: u16 = 0xd00;
-/// `AC_VERB_GET_PROC_COEF` (4-bit verb `0xc`): read the selected COEF slot.
 pub const AC_VERB_GET_PROC_COEF: u16 = 0xc00;
 
-/// Largest verb field (20 bits).
 pub const MAX_VERB_FIELD: u32 = 0xf_ffff;
-/// Largest NID `snd_hdac_make_cmd` accepts (7 bits).
 pub const MAX_NID: u16 = 0x7f;
-/// Largest codec address (4 bits).
 pub const MAX_CODEC_ADDRESS: u8 = 0xf;
 
-/// Why a verb, a triple or a number was rejected.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum HdaError {
-    /// A value is larger than its field allows.
     #[error("{what} {value:#x} is out of range (at most {max:#x})")]
     OutOfRange {
-        /// Which field.
         what: &'static str,
-        /// The rejected value.
         value: u64,
-        /// The largest allowed value.
         max: u64,
     },
-    /// A token is not a C integer (`%i`: decimal, `0x` hex or `0` octal).
     #[error("{0:?} is not a number")]
     BadNumber(String),
-    /// A line does not have exactly three numbers.
     #[error("expected \"NID VERB PARAM\", found {0:?}")]
     BadLine(String),
-    /// `parse_init_verbs` rejects a zero NID or a zero verb.
     #[error("the kernel rejects a zero NID or verb: {0:?}")]
     Zero(String),
 }
@@ -82,31 +33,24 @@ fn out_of_range(what: &'static str, value: impl Into<u64>, max: impl Into<u64>) 
     }
 }
 
-/// `true` for the verb IDs the HDA specification defines as 4-bit verbs with a 16-bit
-/// payload: set/get converter format (2/A), amplifier gain (3/B), processing coefficient
-/// (4/C) and coefficient index (5/D). Every other top nibble is a 12-bit verb (`0x7xx` set,
-/// `0xfxx` get); the specification reserves the rest, and they are shown as 12-bit verbs.
+/// HDA spec: set/get converter format, amp gain, processing coefficient, coefficient index.
 pub const fn is_four_bit_id(nibble: u32) -> bool {
     matches!(nibble, 0x2 | 0x3 | 0x4 | 0x5 | 0xa | 0xb | 0xc | 0xd)
 }
 
-/// A verb field that is none of the named [`Verb`]s. It can only be made by
-/// [`Verb::decode`], so a [`Verb`] is always in canonical form.
+/// Only [`Verb::decode`] builds one, which keeps every [`Verb`] canonical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OtherVerb(u32);
 
 impl OtherVerb {
-    /// The 20-bit verb field.
     pub const fn field(self) -> u32 {
         self.0
     }
 
-    /// `true` for a 4-bit verb with a 16-bit payload.
     pub const fn is_four_bit(self) -> bool {
         is_four_bit_id(self.0 >> 16)
     }
 
-    /// The verb ID: 4 bits for a 4-bit verb, 12 bits otherwise.
     pub const fn id(self) -> u16 {
         if self.is_four_bit() {
             (self.0 >> 16) as u16
@@ -115,7 +59,6 @@ impl OtherVerb {
         }
     }
 
-    /// The payload: 16 bits for a 4-bit verb, 8 bits otherwise.
     pub const fn payload(self) -> u16 {
         if self.is_four_bit() {
             (self.0 & 0xffff) as u16
@@ -125,26 +68,16 @@ impl OtherVerb {
     }
 }
 
-/// The meaning of a 20-bit verb field.
-///
-/// The four COEF verbs Apex uses are named; everything else is [`Verb::Other`]. Values are
-/// canonical: `Verb::decode(v.field()) == Ok(v)` for every `v`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Verb {
-    /// `SET_COEF_INDEX`: select COEF slot `index` of the processing widget.
     SetCoefIndex(u16),
-    /// `SET_PROC_COEF`: write `value` to the selected COEF slot.
     SetProcCoef(u16),
-    /// `GET_COEF_INDEX` (payload 0).
     GetCoefIndex,
-    /// `GET_PROC_COEF` (payload 0).
     GetProcCoef,
-    /// Any other verb, 4-bit or 12-bit.
     Other(OtherVerb),
 }
 
 impl Verb {
-    /// Decodes a 20-bit verb field (bits 19:0 of the command word).
     pub fn decode(field: u32) -> Result<Self, HdaError> {
         if field > MAX_VERB_FIELD {
             return Err(out_of_range("verb field", field, MAX_VERB_FIELD));
@@ -159,7 +92,6 @@ impl Verb {
         })
     }
 
-    /// The 20-bit verb field.
     pub const fn field(self) -> u32 {
         match self {
             Self::SetCoefIndex(index) => 0x5_0000 | index as u32,
@@ -170,9 +102,7 @@ impl Verb {
         }
     }
 
-    /// The `(verb, param)` pair the kernel uses (`struct hda_verb`, patch `[verb]` lines,
-    /// `snd_hda_codec_write`): `0xV00` plus a 16-bit param for a 4-bit verb, the 12-bit
-    /// verb plus an 8-bit param otherwise.
+    /// The kernel's `struct hda_verb` spelling: a 4-bit verb `V` is `0xV00`.
     pub const fn kernel_pair(self) -> (u16, u16) {
         let field = self.field();
         if is_four_bit_id(field >> 16) {
@@ -182,7 +112,6 @@ impl Verb {
         }
     }
 
-    /// What a kernel `(verb, param)` pair sends, after `snd_hdac_make_cmd`'s range checks.
     pub fn from_kernel_pair(verb: u32, param: u32) -> Result<Self, HdaError> {
         if verb > 0xfff {
             return Err(out_of_range("verb", verb, 0xfff_u32));
@@ -190,13 +119,12 @@ impl Verb {
         if param > 0xffff {
             return Err(out_of_range("parameter", param, 0xffff_u32));
         }
-        // Bitwise OR, exactly like the kernel: the param's high byte and the verb's low
-        // byte share bits 15:8.
+        // OR-ed like `snd_hdac_make_cmd`: the param's high byte and the verb's low byte share
+        // bits 15:8.
         Self::decode((verb << 8) | param)
     }
 }
 
-/// The kernel's symbolic name of a 4-bit verb ID.
 const fn four_bit_name(id: u16) -> &'static str {
     match id {
         0x2 => "SET_STREAM_FORMAT",
@@ -210,7 +138,7 @@ const fn four_bit_name(id: u16) -> &'static str {
     }
 }
 
-/// The kernel's symbolic name of common 12-bit verbs (`include/sound/hda_verbs.h`).
+/// Names from `include/sound/hda_verbs.h`.
 const fn twelve_bit_name(id: u16) -> Option<&'static str> {
     Some(match id {
         0xf00 => "PARAMETERS",
@@ -237,8 +165,6 @@ const fn twelve_bit_name(id: u16) -> Option<&'static str> {
 }
 
 impl fmt::Display for Verb {
-    /// `SET_COEF_INDEX 0x001b`, `SET_PROC_COEF 0x7f4b`, `GET_PROC_COEF`,
-    /// `SET_PIN_WIDGET_CONTROL 0x40` or `VERB 0x7a5 0x01`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             Self::SetCoefIndex(index) => write!(f, "SET_COEF_INDEX {index:#06x}"),
@@ -256,8 +182,7 @@ impl fmt::Display for Verb {
     }
 }
 
-/// Parses one C integer the way `%i` does: optional sign, `0x`/`0X` hex, a leading `0`
-/// for octal, decimal otherwise. The whole token must be a number.
+/// Like `sscanf("%i")`, except that the whole token must be the number.
 pub fn parse_c_int(token: &str) -> Result<i64, HdaError> {
     let bad = || HdaError::BadNumber(token.to_owned());
     let (negative, digits) = match token.as_bytes().first() {
@@ -283,23 +208,15 @@ pub fn parse_c_int(token: &str) -> Result<i64, HdaError> {
     Ok(if negative { -magnitude } else { magnitude })
 }
 
-/// One `[verb]` line of a patch file, and one entry of the sysfs `init_verbs` file: the
-/// kernel's `struct hda_verb`.
-///
-/// Values are checked against what `parse_init_verbs` and `snd_hdac_make_cmd` accept: a
-/// non-zero NID up to `0x7f`, a non-zero verb up to `0xfff` and a param up to `0xffff`.
+/// The kernel's `struct hda_verb`: a patch file `[verb]` line and an `init_verbs` entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct InitVerb {
-    /// Widget NID.
     pub nid: u16,
-    /// 12-bit verb (`0xV00` for a 4-bit verb).
     pub verb: u16,
-    /// Parameter (16 bits for a 4-bit verb, 8 bits otherwise).
     pub param: u16,
 }
 
 impl InitVerb {
-    /// The triple that sends `verb` to widget `nid`.
     pub fn new(nid: u16, verb: Verb) -> Result<Self, HdaError> {
         if nid == 0 || nid > MAX_NID {
             return Err(out_of_range("NID", nid, MAX_NID));
@@ -308,10 +225,8 @@ impl InitVerb {
         Ok(Self { nid, verb, param })
     }
 
-    /// Parses `NID VERB PARAM` with `%i` numbers, as `parse_init_verbs` does.
-    ///
-    /// Stricter than the kernel in one way: text after the third number is an error
-    /// (`sscanf` would ignore it), so a typo cannot hide in a line the kernel half-reads.
+    /// Unlike the kernel's `sscanf`, trailing text is an error, so a typo cannot hide in a
+    /// half-read line.
     pub fn parse(line: &str) -> Result<Self, HdaError> {
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let [nid, verb, param] = tokens.as_slice() else {
@@ -336,17 +251,15 @@ impl InitVerb {
         Ok(Self { nid, verb, param })
     }
 
-    /// What the triple sends.
     pub fn effective(self) -> Verb {
-        // The fields were range-checked on construction, so this cannot fail; the fallback
-        // keeps the function total without a panic path.
+        // Unreachable fallback: the fields were range-checked on construction.
         Verb::from_kernel_pair(u32::from(self.verb), u32::from(self.param))
             .unwrap_or(Verb::Other(OtherVerb(0)))
     }
 }
 
 impl fmt::Display for InitVerb {
-    /// `0x20 0x500 0x001b`: the kernel's `init_verbs_show` format.
+    /// The kernel's `init_verbs_show` format.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -361,8 +274,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// The 32-bit command word `snd_hdac_make_cmd` builds for `verb` on codec `address`
-    /// and widget `nid`: the layout in the module documentation.
+    /// `snd_hdac_make_cmd`.
     fn command(verb: Verb, address: u8, nid: u16) -> Result<u32, HdaError> {
         if address > MAX_CODEC_ADDRESS {
             return Err(out_of_range("codec address", address, MAX_CODEC_ADDRESS));
@@ -373,27 +285,16 @@ mod tests {
         Ok((u32::from(address) << 28) | (u32::from(nid) << 20) | verb.field())
     }
 
-    // A test oracle, not a feature: no command decodes hda-verb invocations. It checks
-    // the "0x477 packing pitfall" of docs/hardware/AUDIO.md against `from_kernel_pair`.
-    /// The numeric arguments of alsa-tools `hda-verb DEVICE NID VERB PARAM`.
-    ///
-    /// `hda-verb` accepts `NID <= 0xff`, `VERB <= 0xfff` and `PARAM <= 0xffff`, and packs
-    /// them as `HDA_VERB(nid, verb, param) = nid << 24 | verb << 8 | param` (bitwise OR, from
-    /// `hda_hwdep.h`). The kernel's hwdep `verb_write_ioctl` splits that word back into
-    /// `nid = w >> 24`, `verb = (w >> 8) & 0xffff` and `param = w & 0xff`. A 4-bit verb
-    /// written as `0x477` therefore ORs `0x77` into the high byte of the value.
+    /// alsa-tools `hda-verb NID VERB PARAM`: `HDA_VERB` ORs the three into one word, which the
+    /// kernel's hwdep `verb_write_ioctl` splits again.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     struct HdaVerbCommand {
-        /// NID argument.
         nid: u32,
-        /// Verb argument.
         verb: u32,
-        /// Param argument.
         param: u32,
     }
 
     impl HdaVerbCommand {
-        /// The ioctl word `hda-verb` sends, after its own range checks.
         fn packed(self) -> Result<u32, HdaError> {
             if self.nid > 0xff {
                 return Err(out_of_range("NID", self.nid, 0xff_u32));
@@ -407,8 +308,6 @@ mod tests {
             Ok((self.nid << 24) | (self.verb << 8) | self.param)
         }
 
-        /// What the kernel sends for an ioctl word: the NID and the verb, after the hwdep
-        /// split and `snd_hdac_make_cmd`'s checks.
         fn decode_packed(word: u32) -> Result<(u16, Verb), HdaError> {
             let nid = word >> 24;
             if nid > u32::from(MAX_NID) {
@@ -418,7 +317,6 @@ mod tests {
             Ok((nid as u16, verb))
         }
 
-        /// The NID and the verb the codec really receives.
         fn effective(self) -> Result<(u16, Verb), HdaError> {
             Self::decode_packed(self.packed()?)
         }
@@ -430,7 +328,6 @@ mod tests {
 
     #[test]
     fn ask_ubuntu_workaround_decodes_to_what_the_codec_really_gets() {
-        // docs/hardware/AUDIO.md, "The 0x477 packing pitfall".
         let cases = [
             (
                 legacy(0x20, 0x500, 0x1b),
@@ -479,7 +376,6 @@ mod tests {
         assert_eq!(command(Verb::GetProcCoef, 0, 0x20), Ok(0x020c_0000));
         assert!(command(Verb::GetProcCoef, 0x10, 0x20).is_err());
         assert!(command(Verb::GetProcCoef, 0, 0x80).is_err());
-        // A 12-bit verb: SET_PIN_WIDGET_CONTROL 0x40 on NID 0x14.
         let pin = Verb::from_kernel_pair(0x707, 0x40).unwrap();
         assert_eq!(command(pin, 0, 0x14), Ok(0x0147_0740));
         assert_eq!(pin.to_string(), "SET_PIN_WIDGET_CONTROL 0x40");
@@ -525,7 +421,6 @@ mod tests {
         );
         assert_eq!(verb.to_string(), "0x20 0x500 0x001b");
         assert_eq!(verb.effective(), Verb::SetCoefIndex(0x1b));
-        // Decimal and octal, like %i.
         assert_eq!(InitVerb::parse("32 1280 033").unwrap(), verb);
         assert_eq!(
             InitVerb::parse("  0x20\t0x400 0x4e4b  ").unwrap().param,
@@ -593,8 +488,6 @@ mod tests {
             verb in 1_u32..=0xfff,
             param in 0_u32..=0xffff,
         ) {
-            // hda-verb's packing and a [verb] line with the same three numbers reach the
-            // codec as the same command.
             let (effective_nid, effective) = legacy(nid, verb, param).effective().unwrap();
             prop_assert_eq!(u32::from(effective_nid), nid);
             prop_assert_eq!(effective, Verb::from_kernel_pair(verb, param).unwrap());

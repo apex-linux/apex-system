@@ -1,12 +1,3 @@
-//! What `apexctl status` prints, and the package change list of `apexctl update changes`.
-//!
-//! The human output names every digest in full: users compare them by eye with CI runs
-//! and release notes (INSTALL.md §9, RECOVERY.md §6), and a 12-digit prefix is only 48
-//! bits. Other commands may shorten a digest where nothing is compared.
-//!
-//! `apexctl status --json` has a stable schema, [`STATUS_JSON_HELP`], which
-//! `apexctl status --help` prints for users.
-
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 
@@ -18,10 +9,8 @@ use serde::Serialize;
 use crate::service::ServiceStatus;
 use crate::timefmt::{format_utc, format_utc_date};
 
-/// Schema number of `apexctl status --json`.
 pub const STATUS_JSON_SCHEMA: u32 = 1;
 
-/// The schema of `apexctl status --json`, as `apexctl status --help` prints it.
 pub const STATUS_JSON_HELP: &str = "\
 JSON output (--json), schema 1. One object; every key is always present, and a value the
 update service does not report is null. New keys may be added; existing keys keep their
@@ -51,22 +40,14 @@ A deployment has these keys, each null when unknown:
   download_only    staged only: true while the update is locked (not used at the next boot)
   degraded         components shipped degraded in that image, e.g. [\"audio\"]";
 
-/// A deployment in `status --json` ([`STATUS_JSON_HELP`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeploymentJson {
-    /// Image reference.
     pub image: Option<String>,
-    /// Manifest digest.
     pub digest: Option<String>,
-    /// Image version.
     pub version: Option<String>,
-    /// Build time, Unix seconds.
     pub timestamp: Option<u64>,
-    /// Pinned.
     pub pinned: Option<bool>,
-    /// Staged only: locked (download-only).
     pub download_only: Option<bool>,
-    /// Degraded components.
     pub degraded: Option<Vec<String>>,
 }
 
@@ -85,36 +66,21 @@ impl DeploymentJson {
     }
 }
 
-/// `apexctl status --json`; the schema is [`STATUS_JSON_HELP`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StatusJson {
-    /// [`STATUS_JSON_SCHEMA`].
     pub schema: u32,
-    /// Derived state.
     pub state: State,
-    /// Download progress in `[0, 1]`, only while downloading and known.
     pub progress: Option<f64>,
-    /// Channel.
     pub channel: Channel,
-    /// No newer build for more than 7 days.
     pub stale: bool,
-    /// Last successful check.
     pub last_check: Option<u64>,
-    /// Why the last automatic download was deferred.
     pub deferred_reason: Option<String>,
-    /// Last failure.
     pub last_error: Option<String>,
-    /// Digest that failed its health checks.
     pub health_failure: Option<String>,
-    /// Degraded components of the booted image.
     pub degraded: Vec<String>,
-    /// Booted deployment.
     pub booted: Option<DeploymentJson>,
-    /// Staged deployment.
     pub staged: Option<DeploymentJson>,
-    /// Rollback deployment.
     pub rollback: Option<DeploymentJson>,
-    /// Newer image found by the last check.
     pub available: Option<DeploymentJson>,
 }
 
@@ -122,14 +88,12 @@ fn non_empty(text: &str) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
-/// Download progress when it means something: while downloading, and not `-1`.
 fn known_progress(status: &ServiceStatus) -> Option<f64> {
     (status.state == State::Downloading && (0.0..=1.0).contains(&status.progress))
         .then_some(status.progress)
 }
 
 impl StatusJson {
-    /// Builds the JSON view.
     pub fn new(status: &ServiceStatus) -> Self {
         Self {
             schema: STATUS_JSON_SCHEMA,
@@ -150,16 +114,18 @@ impl StatusJson {
     }
 }
 
-/// `sha256:0123456789ab`: a digest shortened for display (12 hex digits, like podman).
+/// podman's short digest length.
+const SHORT_DIGEST_HEX_DIGITS: usize = 12;
+
 pub fn short_digest(digest: &str) -> String {
     match digest.strip_prefix("sha256:") {
-        Some(hex) if hex.len() > 12 => format!("sha256:{}", &hex[..12]),
+        Some(hex) if hex.len() > SHORT_DIGEST_HEX_DIGITS => {
+            format!("sha256:{}", &hex[..SHORT_DIGEST_HEX_DIGITS])
+        }
         _ => digest.to_owned(),
     }
 }
 
-/// One sentence for a state, plus what to do next. [`status_sentence`] refines it with the
-/// deployments where the state alone would mislead (`rollback-queued`).
 pub fn state_sentence(state: State) -> (&'static str, Option<&'static str>) {
     match state {
         State::UpToDate => ("Apex is up to date.", None),
@@ -173,8 +139,7 @@ pub fn state_sentence(state: State) -> (&'static str, Option<&'static str>) {
             Some("Use it at the next restart with: apexctl update apply"),
         ),
         State::ReadyForReboot => ("An update is ready.", Some("Reboot to finish the update.")),
-        // Neutral on purpose: the other deployment may be older or newer (see
-        // `rollback_queued_sentence`, which names it).
+        // Neutral: the queued deployment may be older or newer than the running one.
         State::RollbackQueued => (
             "Another version will start at the next boot (rollback queued).",
             Some("Automatic updates are paused until then."),
@@ -201,7 +166,6 @@ pub fn state_sentence(state: State) -> (&'static str, Option<&'static str>) {
             ),
         ),
         State::Error => ("The last update operation failed.", None),
-        // The service publishes "unknown" until its first read of the system succeeds.
         State::Unknown => (
             "The update state is unknown.",
             Some(
@@ -212,7 +176,6 @@ pub fn state_sentence(state: State) -> (&'static str, Option<&'static str>) {
     }
 }
 
-/// A deployment's name for sentences: its version, else its short digest.
 pub(crate) fn version_label(deployment: &Deployment) -> String {
     match (&deployment.version, &deployment.digest) {
         (Some(version), _) => version.clone(),
@@ -221,8 +184,6 @@ pub(crate) fn version_label(deployment: &Deployment) -> String {
     }
 }
 
-/// How `a` compares with `b` in age: by version (`FEDORA.YYYYMMDD.RUN`), else by build
-/// time. `None` when neither can tell.
 pub(crate) fn compare_age(a: &Deployment, b: &Deployment) -> Option<Ordering> {
     let version = |d: &Deployment| d.version.as_deref().and_then(Version::parse);
     if let (Some(a), Some(b)) = (version(a), version(b)) {
@@ -231,24 +192,14 @@ pub(crate) fn compare_age(a: &Deployment, b: &Deployment) -> Option<Ordering> {
     Some(a.timestamp?.cmp(&b.timestamp?))
 }
 
-/// Whether the deployment a queued rollback starts is known to be older than the running
-/// one: the state after `apexctl update rollback`, which a restart finishes.
 pub(crate) fn queued_rollback_goes_back(status: &ServiceStatus) -> bool {
     !status.rollback.is_empty()
         && compare_age(&status.rollback, &status.booted) == Some(Ordering::Less)
 }
 
-/// How to keep the running deployment while `next` is queued to start instead
-/// (RECOVERY.md §1). One instruction per line, so the command is easy to copy.
-///
-/// `next` may be an applied update whose boots are still being counted (`apex_target` in
-/// grubenv): the boot assessment keeps the arming after a boot of the previous entry picked
-/// by hand. Making the running deployment the default with `bootc rollback` is then unsafe:
-/// it swaps the boot order without touching grubenv, so with the counter at 0 the next boot
-/// starts the update again, as entry 1 and without a boot count. The update service does
-/// not publish the arming, so apexctl cannot tell the cases apart. It names the read-only
-/// check and the runbook, never the command.
-fn keep_running(booted: &str, next: &str) -> String {
+/// Never suggests `bootc rollback`: if `next` is still boot-counted (`apex_target` in
+/// grubenv, not published by the service), that would boot `next` again, uncounted.
+fn how_to_keep_running(booted: &str, next: &str) -> String {
     format!(
         "To keep running {booted}, first check whether {next} is an update whose boot check \
          is still running (apex_target is set):\n\
@@ -258,22 +209,15 @@ fn keep_running(booted: &str, next: &str) -> String {
     )
 }
 
-/// The sentence and next step for `rollback-queued`.
-///
-/// bootc reports a queued rollback whenever the rollback deployment comes first in the boot
-/// order, and its "rollback" deployment is simply the other one. After `apexctl update
-/// rollback` that is the older version, and a restart finishes the rollback. After the user
-/// started the older version from the boot menu, it is the **newer** one, which starts
-/// again at the next boot unless the running deployment is made the default; how to do that
-/// safely depends on whether the newer one is still armed ([`keep_running`]), and `apexctl
-/// update rollback` refuses while a rollback is queued.
+/// bootc reports `rollback-queued` whenever its "rollback" deployment boots next: the older
+/// one after `update rollback`, the newer one after an older entry was picked at boot.
 fn rollback_queued_sentence(status: &ServiceStatus) -> (String, Option<String>) {
     let booted = version_label(&status.booted);
     let next = &status.rollback;
     if next.is_empty() {
         return (
             "Another version will start at the next boot (rollback queued).".to_owned(),
-            Some(keep_running(&booted, "the other version")),
+            Some(how_to_keep_running(&booted, "the other version")),
         );
     }
     let next_label = version_label(next);
@@ -294,7 +238,7 @@ fn rollback_queued_sentence(status: &ServiceStatus) -> (String, Option<String>) 
             ),
             Some(format!(
                 "This happens after an older version is started from the boot menu.\n{}",
-                keep_running(&booted, &next_label)
+                how_to_keep_running(&booted, &next_label)
             )),
         ),
         _ => (
@@ -304,15 +248,12 @@ fn rollback_queued_sentence(status: &ServiceStatus) -> (String, Option<String>) 
             ),
             Some(format!(
                 "Reboot to switch to it.\n{}",
-                keep_running(&booted, &next_label)
+                how_to_keep_running(&booted, &next_label)
             )),
         ),
     }
 }
 
-/// The headline of the whole status and what to do next: [`state_sentence`], except that
-/// `rollback-queued` names the version that starts next and whether it is older or newer
-/// than the running one.
 pub fn status_sentence(status: &ServiceStatus) -> (String, Option<String>) {
     if status.state == State::RollbackQueued {
         return rollback_queued_sentence(status);
@@ -321,8 +262,7 @@ pub fn status_sentence(status: &ServiceStatus) -> (String, Option<String>) {
     (sentence.to_owned(), next.map(str::to_owned))
 }
 
-/// The repository of an image reference: without `@digest` and without the `:tag` of the
-/// last path component (a `:` before the first `/` is a registry port).
+/// A `:` before the last `/` is a registry port, not a tag.
 fn repository_of(image: &str) -> &str {
     let without_digest = image.split_once('@').map_or(image, |(repo, _)| repo);
     let last_slash = without_digest.rfind('/').map_or(0, |i| i + 1);
@@ -332,9 +272,6 @@ fn repository_of(image: &str) -> &str {
     }
 }
 
-/// Where `deployment`'s image comes from, when that is not the running image's repository:
-/// the other channel after `apexctl update channel`, or a foreign reference. `None` when
-/// both come from the same repository or either image is unknown.
 pub fn other_origin(booted: &Deployment, deployment: &Deployment) -> Option<String> {
     let image = deployment.image.as_deref()?;
     let repository = repository_of(image);
@@ -350,7 +287,6 @@ pub fn other_origin(booted: &Deployment, deployment: &Deployment) -> Option<Stri
     })
 }
 
-/// `Downloading 42 %` or `Downloading…` when progress is unknown.
 pub fn progress_line(progress: f64) -> String {
     if (0.0..=1.0).contains(&progress) {
         format!("Downloading {:>3.0} %", progress * 100.0)
@@ -359,7 +295,6 @@ pub fn progress_line(progress: f64) -> String {
     }
 }
 
-/// What a degraded component means for the user.
 fn degraded_meaning(component: &str) -> &'static str {
     match component {
         "audio" => "the speaker fix is not available yet",
@@ -370,7 +305,6 @@ fn degraded_meaning(component: &str) -> &'static str {
     }
 }
 
-/// `45.20260924.117  built 2026-09-24  pinned`; the digest gets its own line.
 fn deployment_line(deployment: &Deployment) -> String {
     let mut parts = vec![
         deployment
@@ -387,13 +321,10 @@ fn deployment_line(deployment: &Deployment) -> String {
     parts.join("  ")
 }
 
-/// One `label  value` row of the status table; an empty label continues the row above.
 fn row(out: &mut String, label: &str, value: &str) {
     let _ = writeln!(out, "{label:<10} {value}");
 }
 
-/// A deployment's rows: version, build date and `suffix`; then its full digest; then
-/// where it comes from when that is not the running image's repository.
 fn deployment_rows(
     out: &mut String,
     label: &str,
@@ -407,6 +338,7 @@ fn deployment_rows(
         &format!("{}{suffix}", deployment_line(deployment)),
     );
     if let Some(digest) = &deployment.digest {
+        // In full: users compare it by eye with CI runs, and 12 hex digits are only 48 bits.
         row(out, "", digest);
     }
     if let Some(origin) = other_origin(booted, deployment) {
@@ -414,7 +346,6 @@ fn deployment_rows(
     }
 }
 
-/// The human-readable `apexctl status`.
 pub fn render_status(status: &ServiceStatus) -> String {
     let mut out = String::new();
     let (sentence, next) = status_sentence(status);
@@ -447,8 +378,6 @@ pub fn render_status(status: &ServiceStatus) -> String {
     if !status.available.is_empty() {
         deployment_rows(&mut out, "Available", &status.available, booted, "");
     }
-    // The Channel property names the running image's channel; a switch shows up as the
-    // "from … channel" line of the staged image until that image boots.
     row(
         &mut out,
         "Channel",
@@ -489,8 +418,8 @@ pub fn render_status(status: &ServiceStatus) -> String {
             "Update {} failed its health checks after it was applied.",
             status.health_failure
         );
-        // In the health-failure state the next-step line above already says this.
-        if status.state != State::HealthFailure {
+        let next_step_already_says_how_to_clear = status.state == State::HealthFailure;
+        if !next_step_already_says_how_to_clear {
             note.push_str(" Clear this notice with: apexctl update acknowledge");
         }
         notes.push(note);
@@ -507,7 +436,6 @@ pub fn render_status(status: &ServiceStatus) -> String {
     out
 }
 
-/// Parses `[epoch:]version-release` as rpm prints it.
 pub fn parse_evr(text: &str) -> Option<Evr> {
     let (epoch, rest) = match text.split_once(':') {
         Some((epoch, rest)) => (epoch.parse().ok()?, rest),
@@ -520,13 +448,9 @@ pub fn parse_evr(text: &str) -> Option<Evr> {
     Some(Evr::new(epoch, version, release))
 }
 
-/// Architectures shown without a suffix: the ones [`apex_update::summarize`] prefers as
-/// native (`x86_64`, `aarch64`, `noarch`). Any other architecture is printed after the name
-/// (`glibc.i686`), so the rows of a multilib package can be told apart.
+/// The arches [`apex_update::summarize`] prefers as native.
 const NATIVE_ARCHES: [&str; 3] = ["x86_64", "aarch64", "noarch"];
 
-/// The package as `update changes` names it: `name` for a native architecture (or an empty
-/// one), `name.arch` for any other, the way rpm and dnf spell a package with its arch.
 pub fn package_label(name: &str, arch: &str) -> String {
     if arch.is_empty() || NATIVE_ARCHES.contains(&arch) {
         name.to_owned()
@@ -535,7 +459,6 @@ pub fn package_label(name: &str, arch: &str) -> String {
     }
 }
 
-/// Converts a `GetChanges` entry for [`apex_update::summarize`].
 fn to_update_change(change: &Change) -> Option<apex_update::Change> {
     let (name, arch, kind, from, to) = change;
     let kind = match kind.parse::<ChangeKind>().ok()? {
@@ -553,8 +476,6 @@ fn to_update_change(change: &Change) -> Option<apex_update::Change> {
     };
     Some(apex_update::Change {
         name: name.clone(),
-        // The summary highlights the native entry of a multilib package and counts the
-        // others as other changes.
         arch: arch.clone(),
         kind,
         from_evr: evr(from)?,
@@ -562,8 +483,6 @@ fn to_update_change(change: &Change) -> Option<apex_update::Change> {
     })
 }
 
-/// `apexctl update changes`: a summary line, then one aligned row per package, named by
-/// [`package_label`].
 pub fn render_changes(changes: &[Change]) -> String {
     let mut out = String::new();
     let converted: Option<Vec<apex_update::Change>> =
@@ -662,7 +581,6 @@ pub(crate) mod tests {
         insta::assert_snapshot!(render_status(&status));
     }
 
-    /// `rollback-queued` with `booted` running and `next` queued as the default.
     fn rollback_queued(booted: Deployment, next: Deployment) -> ServiceStatus {
         ServiceStatus {
             state: State::RollbackQueued,
@@ -675,7 +593,6 @@ pub(crate) mod tests {
 
     #[test]
     fn human_status_rollback_queued_to_the_previous_version() {
-        // `apexctl update rollback` from .117: the older .110 starts next.
         let status = rollback_queued(
             deployment("45.20260924.117", 'a'),
             deployment("45.20260920.110", 'c'),
@@ -690,8 +607,6 @@ pub(crate) mod tests {
 
     #[test]
     fn human_status_rollback_queued_after_picking_an_older_entry() {
-        // .117 is the default; the user picked .110 in the boot menu. bootc reports a
-        // queued rollback whose "rollback" deployment is the newer .117.
         let status = rollback_queued(
             deployment("45.20260920.110", 'c'),
             deployment("45.20260924.117", 'a'),
@@ -704,8 +619,6 @@ pub(crate) mod tests {
             ),
             "{text}"
         );
-        // apexctl cannot see whether .117 is still armed, so it gives the read-only check
-        // and the runbook, not the command (RECOVERY.md §1).
         assert!(
             text.contains("sudo grub2-editenv /boot/grub2/grubenv list\n"),
             "{text}"
@@ -718,10 +631,6 @@ pub(crate) mod tests {
 
     #[test]
     fn a_queued_rollback_never_advises_bootc_rollback() {
-        // `bootc rollback` is unsafe while the other deployment is an update whose boots are
-        // still being counted, and the update service does not say whether it is. Every
-        // variant of the rollback-queued text avoids the command; the ones where the running
-        // version may be the one to keep name the grubenv check and the runbook.
         let older = deployment("45.20260920.110", 'c');
         let newer = deployment("45.20260924.117", 'a');
         let unordered = |c: char| Deployment {
@@ -787,8 +696,6 @@ pub(crate) mod tests {
 
     #[test]
     fn human_status_testing_stage_under_a_stable_system() {
-        // After `apexctl update channel testing`: the Channel row still names the running
-        // image's channel, and the staged image says where it comes from.
         let mut status = staged_status();
         status.staged.image = Some("ghcr.io/sekirokenjii/apex-testing:45".to_owned());
         status.staged.version = Some("45.20260925.7".to_owned());
@@ -860,7 +767,6 @@ pub(crate) mod tests {
             )),
             "{text}"
         );
-        // In the health-failure state the next step already names both choices, once.
         status.state = State::HealthFailure;
         let text = render_status(&status);
         assert_eq!(
@@ -901,7 +807,6 @@ pub(crate) mod tests {
         assert_eq!(parse_evr("-1"), None);
     }
 
-    /// A `GetChanges` entry.
     fn change(name: &str, arch: &str, kind: &str, from: &str, to: &str) -> Change {
         (
             name.into(),
@@ -914,7 +819,6 @@ pub(crate) mod tests {
 
     #[test]
     fn change_list() {
-        // Sorted by (name, arch) like the daemon sends it, with two multilib packages.
         let changes: Vec<Change> = vec![
             change("glibc", "i686", "upgraded", "2.42-3.fc45", "2.42-4.fc45"),
             change("glibc", "x86_64", "upgraded", "2.42-3.fc45", "2.42-4.fc45"),
@@ -967,8 +871,6 @@ pub(crate) mod tests {
 
     #[test]
     fn the_summary_highlights_the_native_entry_of_a_multilib_package() {
-        // Only the i686 half of Mesa moved further: the summary still shows the native
-        // x86_64 versions and counts the i686 row as another change.
         let changes = [
             change(
                 "mesa-dri-drivers",

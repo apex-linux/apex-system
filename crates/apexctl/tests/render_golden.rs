@@ -1,9 +1,3 @@
-//! Golden output of the audio renderer for the real profile plus sample measurements.
-//!
-//! The measurement values below are placeholders chosen to exercise every rule (0x1b gets
-//! bit 10, 0x0f differs after Windows and is restored, 0x40 does not differ and is not
-//! written, 0x2a is an extra measured index). They are not this laptop's values.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use apexctl::hda::Verb;
@@ -11,6 +5,7 @@ use apexctl::patch;
 use apexctl::profile::Profile;
 use apexctl::render::{self, AudioOutcome};
 
+/// Placeholders, not this laptop's values, chosen to exercise every rule.
 const SAMPLE_MEASUREMENTS: &str = "
 [audio.measurements]
 date = 2026-09-25
@@ -45,7 +40,6 @@ fn patch_firmware_golden() {
     let firmware = file(&rendered, "alc294-m7400qc.fw");
     insta::assert_snapshot!(firmware);
 
-    // What the kernel will replay, decoded.
     let parsed = patch::parse(firmware).expect("the kernel-side parser accepts it");
     let effective: Vec<Verb> = parsed.verbs.iter().map(|v| v.effective()).collect();
     assert_eq!(

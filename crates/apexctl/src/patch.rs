@@ -1,44 +1,18 @@
-//! HDA patch firmware files as Apex writes them: one `[codec]` line and `[verb]` lines.
-//!
-//! The kernel reads these in `snd_hda_load_patch` (`sound/hda/common/sysfs.c`): each line
-//! has its leading and trailing whitespace stripped, empty lines and lines starting with
-//! `#` are skipped, a line starting with `[` switches the section, and data lines go to the
-//! section's parser. Three traps make this parser stricter than the kernel:
-//!
-//! - Lines are read into a 128-byte buffer. A line longer than [`MAX_LINE`] characters
-//!   is not truncated but ends parsing: `get_line_from_fw` stops advancing and consumes
-//!   the rest of the file. Such a file loses every later verb without a message.
-//! - A NUL byte anywhere hangs the kernel: `get_line_from_fw` stops at the NUL without
-//!   consuming it and still reports a line, so `snd_hda_load_patch` loops forever in the
-//!   firmware callback of `snd-hda-intel` and the sound cards never finish probing. Every
-//!   control character except tab is therefore rejected ([`PatchError::ControlCharacter`]);
-//!   Apex never writes one.
-//! - Bad data lines are skipped silently. Here they are errors, because the only symptom
-//!   on the laptop would be a missing verb in `init_verbs`.
-//!
-//! Only `[codec]` and `[verb]` (alias `[init_verbs]`) are accepted, as ADR 0004 requires:
-//! a `[model]` or `[pincfg]` section would override a future upstream quirk.
-
 use std::fmt;
 
 use crate::hda::{HdaError, InitVerb, parse_c_int};
 
-/// Longest line the kernel's patch loader handles (`char buf[128]`, one byte for NUL).
+/// The kernel reads lines into `char buf[128]`; a longer line silently ends the file.
 pub const MAX_LINE: usize = 127;
 
-/// The `[codec]` line: which codec the following sections apply to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 pub struct CodecLine {
-    /// Codec vendor ID, e.g. `0x10ec0294`.
     pub vendor_id: u32,
-    /// Codec subsystem ID, e.g. `0x10431ab2`.
     pub subsystem_id: u32,
-    /// Codec address on the HDA link.
     pub address: u32,
 }
 
 impl fmt::Display for CodecLine {
-    /// `0x10ec0294 0x10431ab2 0`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -48,77 +22,35 @@ impl fmt::Display for CodecLine {
     }
 }
 
-/// A parsed Apex patch file.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct PatchFile {
-    /// The codec the verbs are for.
     pub codec: CodecLine,
-    /// The `[verb]` lines, in file order (the order the kernel replays them).
     pub verbs: Vec<InitVerb>,
 }
 
-/// Why a patch file was rejected. `line` numbers start at 1.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PatchError {
-    /// A control character other than tab (line feeds end lines). A NUL makes the kernel's
-    /// loader loop forever; the others are never part of an Apex file.
     #[error(
         "line {line}: control character {byte:#04x}; the kernel's patch loader hangs on NUL \
          and Apex files never contain control characters"
     )]
-    ControlCharacter {
-        /// Line number.
-        line: usize,
-        /// The byte.
-        byte: u8,
-    },
-    /// The line is longer than [`MAX_LINE`]; the kernel would stop reading there.
+    ControlCharacter { line: usize, byte: u8 },
     #[error(
         "line {line}: longer than {MAX_LINE} characters; the kernel stops reading the file there"
     )]
-    LineTooLong {
-        /// Line number.
-        line: usize,
-    },
-    /// A section other than `[codec]` and `[verb]`.
+    LineTooLong { line: usize },
     #[error(
         "line {line}: section {name:?} is not allowed (ADR 0004 files have only [codec] and [verb])"
     )]
-    UnsupportedSection {
-        /// Line number.
-        line: usize,
-        /// The section header.
-        name: String,
-    },
-    /// A second `[codec]` line.
+    UnsupportedSection { line: usize, name: String },
     #[error("line {line}: a second codec line; Apex files target exactly one codec")]
-    SecondCodec {
-        /// Line number.
-        line: usize,
-    },
-    /// The `[codec]` line is not three numbers that fit the kernel's `int`s.
+    SecondCodec { line: usize },
     #[error("line {line}: expected \"VENDOR SUBSYSTEM ADDRESS\", found {text:?}")]
-    BadCodecLine {
-        /// Line number.
-        line: usize,
-        /// The line.
-        text: String,
-    },
-    /// Data before any section, or a `[verb]` before the `[codec]` line.
+    BadCodecLine { line: usize, text: String },
     #[error("line {line}: data outside a section, or [verb] data before the [codec] line")]
-    DataOutsideSection {
-        /// Line number.
-        line: usize,
-    },
-    /// A `[verb]` line the kernel would reject or misread.
+    DataOutsideSection { line: usize },
     #[error("line {line}: {error}")]
-    BadVerb {
-        /// Line number.
-        line: usize,
-        /// What is wrong with it. Part of the message, so it is not also the `source()`.
-        error: HdaError,
-    },
-    /// No `[codec]` line at all.
+    BadVerb { line: usize, error: HdaError },
     #[error("no [codec] line")]
     NoCodec,
 }
@@ -157,24 +89,15 @@ fn parse_codec_line(line: usize, text: &str) -> Result<CodecLine, PatchError> {
     })
 }
 
-/// A control character other than tab (DEL included): NUL hangs the kernel's loader, and
-/// no Apex file has any of them.
+/// A NUL hangs the kernel's patch loader: `get_line_from_fw` never consumes it.
 const fn is_forbidden_control(byte: u8) -> bool {
     (byte < 0x20 && byte != b'\t') || byte == 0x7f
 }
 
-/// Parses an Apex patch file.
+/// Stricter than the kernel's `snd_hda_load_patch`, which skips bad lines silently. Only
+/// `[codec]` and `[verb]`: a `[model]` or `[pincfg]` would override future upstream quirks.
 pub fn parse(text: &str) -> Result<PatchFile, PatchError> {
-    // Before anything else: `lines()` would hide a CR before a line feed, and the kernel
-    // stops at a NUL wherever it is, comments included.
-    for (index, raw) in text.split('\n').enumerate() {
-        if let Some(byte) = raw.bytes().find(|&b| is_forbidden_control(b)) {
-            return Err(PatchError::ControlCharacter {
-                line: index + 1,
-                byte,
-            });
-        }
-    }
+    reject_control_characters(text)?;
     let mut section = Section::None;
     let mut codec = None;
     let mut verbs = Vec::new();
@@ -216,6 +139,19 @@ pub fn parse(text: &str) -> Result<PatchFile, PatchError> {
         codec: codec.ok_or(PatchError::NoCodec)?,
         verbs,
     })
+}
+
+/// Checks every byte, comments included, and splits on `\n` because `lines()` hides a CR.
+fn reject_control_characters(text: &str) -> Result<(), PatchError> {
+    for (index, raw) in text.split('\n').enumerate() {
+        if let Some(byte) = raw.bytes().find(|&b| is_forbidden_control(b)) {
+            return Err(PatchError::ControlCharacter {
+                line: index + 1,
+                byte,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -292,13 +228,11 @@ mod tests {
 
     #[test]
     fn control_characters_are_rejected_because_nul_hangs_the_kernel() {
-        // A NUL in a comment: the kernel's get_line_from_fw would loop forever on it.
         let nul = SAMPLE.replace("# comment", "# M7400QC\0");
         assert_eq!(
             parse(&nul),
             Err(PatchError::ControlCharacter { line: 1, byte: 0 })
         );
-        // Also after the last line, where no section parser would ever look.
         assert_eq!(
             parse(&format!("{SAMPLE}\0")),
             Err(PatchError::ControlCharacter { line: 9, byte: 0 })
@@ -319,7 +253,6 @@ mod tests {
                 "{byte:#04x}"
             );
         }
-        // Tabs are ordinary whitespace for the kernel and for this parser.
         let tabs = SAMPLE.replace("0x20 0x500 0x001b", "0x20\t0x500\t0x001b");
         assert_eq!(parse(&tabs).unwrap().verbs.len(), 2);
         let message = parse(&nul).unwrap_err().to_string();

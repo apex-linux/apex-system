@@ -9,8 +9,6 @@ authors.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-# A library plus a thin binary, so that every parser, renderer and report is testable
-# without a bus, a codec or an rpm database.
 [lib]
 name = "apexctl"
 path = "src/lib.rs"
@@ -21,19 +19,15 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-# Types only (contract §9): `Digest` validates `apply --digest`.
 apex-bootc.workspace = true
 apex-dbus.workspace = true
-# Manifest model, package diff summary and the version type (contract §3, §9).
 apex-update.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# Unified diffs for `profile render --check`. 2.7.0 on purpose: insta already pulls exactly
-# this version into the graph, and 3.x would add a second copy (deny.toml warns on that).
+# The version insta already pulls in; 3.x would add a second copy (deny.toml warns).
 similar = "2.7.0"
 thiserror.workspace = true
-# current_thread runtime for zbus (contract §9); no extra features beyond the workspace set.
 tokio.workspace = true
 toml.workspace = true
 

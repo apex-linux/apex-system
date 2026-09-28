@@ -1,23 +1,3 @@
-//! The update commands against a mock `apex-updated` on a private D-Bus daemon.
-//!
-//! Each test starts its own `dbus-daemon` (a child process listening in a temporary
-//! directory) and serves `Mock`, the part of Update1 these tests need, under the contract's
-//! bus name. The unit tests of `update` use an in-memory fake; these check what that fake
-//! cannot:
-//!
-//! - the `a(sssss)` reply of `GetChanges` decoded and printed by the real binary;
-//! - the channel string and the interactive-authorization flag on the wire, and the exit
-//!   codes of `update channel`, `update acknowledge` and `update automatic` from the real
-//!   binary, which reaches the mock through `DBUS_SYSTEM_BUS_ADDRESS`;
-//! - `DbusService`'s progress loop polling the service while a long call is pending;
-//! - how the binary reports `Busy` from `Check` (exit 0) and `Busy` or `Internal` from
-//!   `GetChanges` before the service knows the system's state (exit 1), and what
-//!   `update discard` prints when the re-lock staged a newer build.
-//!
-//! They need `dbus-daemon` on `PATH` (Fedora package `dbus-daemon`). Without it they
-//! fail, so that CI cannot report them green without running them; set
-//! `APEXCTL_TEST_SKIP_BUS=1` to skip them on purpose (they then print why and pass).
-
 #![allow(
     clippy::expect_used,
     reason = "integration test helpers: a failed expectation is the test failure"
@@ -48,8 +28,6 @@ const STAGED_DIGEST: &str =
 const NEWER_DIGEST: &str =
     "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
-/// A private message bus: `dbus-daemon` with a permissive configuration in a temporary
-/// directory. It is killed when dropped.
 struct PrivateBus {
     child: Child,
     address: String,
@@ -57,8 +35,6 @@ struct PrivateBus {
 }
 
 impl PrivateBus {
-    /// Starts the daemon. Without one it fails the test, unless `APEXCTL_TEST_SKIP_BUS`
-    /// is set: then it says why and returns `None`, and the test passes without running.
     fn start() -> Option<Self> {
         let dir = tempfile::tempdir().expect("tempdir");
         let config = dir.path().join("bus.conf");
@@ -100,7 +76,6 @@ impl PrivateBus {
                  dbus-daemon); set APEXCTL_TEST_SKIP_BUS=1 to skip them on purpose"
             ),
         };
-        // The daemon prints its address once it listens.
         let mut address = String::new();
         BufReader::new(child.stdout.take().expect("piped stdout"))
             .read_line(&mut address)
@@ -122,7 +97,6 @@ impl PrivateBus {
             .expect("client connection")
     }
 
-    /// Serves `mock` at the contract path under the contract's bus name.
     async fn serve(&self, mock: Mock) -> Connection {
         connection::Builder::address(self.address.as_str())
             .expect("address")
@@ -135,7 +109,6 @@ impl PrivateBus {
             .expect("server connection")
     }
 
-    /// Runs the `apexctl` binary against this bus: (exit code, stdout, stderr).
     async fn apexctl(&self, args: &[&str]) -> (i32, String, String) {
         let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_apexctl"))
             .args(args)
@@ -153,13 +126,11 @@ impl PrivateBus {
 
 impl Drop for PrivateBus {
     fn drop(&mut self) {
-        // Best effort: the daemon may already be gone.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-/// The mock's state, shared with the test.
 #[derive(Debug)]
 struct Shared {
     state: State,
@@ -167,22 +138,14 @@ struct Shared {
     staged: Deployment,
     followed: Channel,
     health_failure: String,
-    /// When set, `SwitchChannel` refuses with `PolicyDenied` and this reason.
-    deny: Option<String>,
-    /// How long `SwitchChannel` "downloads".
-    switch_time: Duration,
-    /// When set, `Automatic` fails with this error kind and message.
+    switch_channel_denial: Option<String>,
+    switch_channel_duration: Duration,
     automatic_error: Option<(ErrorKind, String)>,
-    /// When set, `Check` fails with this error kind and message.
     check_error: Option<(ErrorKind, String)>,
-    /// When set, `GetChanges` fails with this error kind and message.
     changes_error: Option<(ErrorKind, String)>,
-    /// What `DiscardStaged` stages in place of the applied update (the re-lock pulled the
-    /// channel tag, which moved on).
-    relocked: Deployment,
-    /// Method calls as `Member(argument)`, with whether interactive authorization was allowed.
+    staged_by_discard: Deployment,
+    /// `Member(argument)`, and whether interactive authorization was allowed.
     calls: Vec<(String, bool)>,
-    /// The `State` value at each `State` read, in order.
     state_reads: Vec<State>,
 }
 
@@ -197,12 +160,12 @@ impl Mock {
             staged: Deployment::default(),
             followed: Channel::Stable,
             health_failure: String::new(),
-            deny: None,
-            switch_time: Duration::ZERO,
+            switch_channel_denial: None,
+            switch_channel_duration: Duration::ZERO,
             automatic_error: None,
             check_error: None,
             changes_error: None,
-            relocked: Deployment::default(),
+            staged_by_discard: Deployment::default(),
             calls: Vec::new(),
             state_reads: Vec::new(),
         })))
@@ -244,8 +207,7 @@ fn change(name: &str, arch: &str, kind: &str, from: &str, to: &str) -> Change {
     )
 }
 
-/// Turns a zbus failure inside a handler into a contract error.
-fn contract(error: zbus::Error) -> ApexError {
+fn update1_error(error: zbus::Error) -> ApexError {
     ApexError::from(error).into_contract()
 }
 
@@ -269,8 +231,7 @@ impl Mock {
         }
     }
 
-    /// Locks the applied update again, replaced by `relocked`, and signals the change
-    /// before it replies, like the daemon.
+    /// Signals the change before it replies, like the daemon.
     async fn discard_staged(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -279,11 +240,11 @@ impl Mock {
         self.record(&header, "DiscardStaged".to_owned());
         {
             let mut shared = self.lock();
-            shared.staged = shared.relocked.clone();
+            shared.staged = shared.staged_by_discard.clone();
             shared.state = State::Staged;
         }
-        self.staged_changed(&emitter).await.map_err(contract)?;
-        self.state_changed(&emitter).await.map_err(contract)
+        self.staged_changed(&emitter).await.map_err(update1_error)?;
+        self.state_changed(&emitter).await.map_err(update1_error)
     }
 
     #[zbus(out_args("changes"))]
@@ -306,7 +267,6 @@ impl Mock {
     }
 
     /// Takes the raw string, like the daemon, so the test sees exactly what went on the wire.
-    /// "Downloads" for `switch_time` in state `downloading`, then stages the channel's image.
     async fn switch_channel(
         &self,
         channel: &str,
@@ -317,9 +277,9 @@ impl Mock {
         let channel: Channel = channel
             .parse()
             .map_err(|error: UnknownValueError| ApexError::InvalidArgument(error.to_string()))?;
-        let switch_time = {
+        let switch_channel_duration = {
             let shared = self.lock();
-            if let Some(reason) = &shared.deny {
+            if let Some(reason) = &shared.switch_channel_denial {
                 return Err(ApexError::PolicyDenied(reason.clone()));
             }
             if shared.followed == channel {
@@ -327,16 +287,18 @@ impl Mock {
                     "This system already follows the {channel} channel."
                 )));
             }
-            shared.switch_time
+            shared.switch_channel_duration
         };
         {
             let mut shared = self.lock();
             shared.state = State::Downloading;
             shared.progress = 0.5;
         }
-        self.state_changed(&emitter).await.map_err(contract)?;
-        self.progress_changed(&emitter).await.map_err(contract)?;
-        tokio::time::sleep(switch_time).await;
+        self.state_changed(&emitter).await.map_err(update1_error)?;
+        self.progress_changed(&emitter)
+            .await
+            .map_err(update1_error)?;
+        tokio::time::sleep(switch_channel_duration).await;
         {
             let mut shared = self.lock();
             shared.state = State::Staged;
@@ -356,9 +318,11 @@ impl Mock {
                 ..Deployment::default()
             };
         }
-        self.state_changed(&emitter).await.map_err(contract)?;
-        self.progress_changed(&emitter).await.map_err(contract)?;
-        self.staged_changed(&emitter).await.map_err(contract)
+        self.state_changed(&emitter).await.map_err(update1_error)?;
+        self.progress_changed(&emitter)
+            .await
+            .map_err(update1_error)?;
+        self.staged_changed(&emitter).await.map_err(update1_error)
     }
 
     fn automatic(&self, #[zbus(header)] header: Header<'_>) -> Result<(), ApexError> {
@@ -382,8 +346,8 @@ impl Mock {
         }
         self.health_failure_changed(&emitter)
             .await
-            .map_err(contract)?;
-        self.state_changed(&emitter).await.map_err(contract)
+            .map_err(update1_error)?;
+        self.state_changed(&emitter).await.map_err(update1_error)
     }
 
     #[zbus(property)]
@@ -419,7 +383,7 @@ impl Mock {
         Deployment::default()
     }
 
-    /// The booted image's channel: it does not change until a switched image boots.
+    /// The booted image's channel, which a switch does not change until it boots.
     #[zbus(property)]
     fn channel(&self) -> Channel {
         Channel::Stable
@@ -471,8 +435,6 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
     }
     let _server = bus.serve(mock.clone()).await;
 
-    // GetChanges' a(sssss): the arch reaches the list and the summary, under the staged
-    // version and full digest, and above the command that applies exactly that digest.
     let (code, stdout, stderr) = bus.apexctl(&["update", "changes"]).await;
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(
@@ -489,8 +451,6 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
         )
     );
 
-    // SwitchChannel gets the contract string, with interactive authorization allowed so
-    // polkit can ask for the administrator password (auth_admin).
     let (code, stdout, stderr) = bus.apexctl(&["update", "channel", "testing"]).await;
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(
@@ -509,8 +469,7 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
         "apexctl: This system already follows the testing channel.\n"
     );
 
-    // A refusing gate exits 2, without the download-only --force advice.
-    mock.lock().deny = Some("Not enough free space in /sysroot".to_owned());
+    mock.lock().switch_channel_denial = Some("Not enough free space in /sysroot".to_owned());
     let (code, _, stderr) = bus.apexctl(&["update", "channel", "stable"]).await;
     assert_eq!(code, 2, "{stderr}");
     assert_eq!(
@@ -518,7 +477,6 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
         "apexctl: not now: Not enough free space in /sysroot\n"
     );
 
-    // AcknowledgeHealthFailure clears the notice; a second run has nothing to clear.
     let (code, stdout, stderr) = bus.apexctl(&["update", "acknowledge"]).await;
     assert_eq!(code, 0, "{stderr}");
     assert!(
@@ -552,7 +510,7 @@ async fn the_progress_loop_polls_while_a_switch_runs() {
     };
     let mock = Mock::new();
     // Longer than two 500 ms progress ticks.
-    mock.lock().switch_time = Duration::from_millis(1_200);
+    mock.lock().switch_channel_duration = Duration::from_millis(1_200);
     let _server = bus.serve(mock.clone()).await;
     let client = bus.connect().await;
     // Without a property cache every read is a call the mock sees.
@@ -571,8 +529,6 @@ async fn the_progress_loop_polls_while_a_switch_runs() {
         "{out}"
     );
     let reads = mock.lock().state_reads.clone();
-    // The loop read the state while the call was pending and saw the download, and the
-    // status read after the call saw the stage.
     assert!(reads.contains(&State::Downloading), "{reads:?}");
     assert_eq!(reads.last(), Some(&State::Staged), "{reads:?}");
 }
@@ -585,8 +541,6 @@ async fn the_timer_run_exits_0_when_it_only_has_to_wait() {
     let mock = Mock::new();
     let _server = bus.serve(mock.clone()).await;
 
-    // Another operation holds the daemon (a user download can take two hours), or the
-    // registry is unreachable: a deferral, so apex-update-auto.service does not fail.
     for (error, why) in [
         (
             (ErrorKind::Busy, "Another update operation is running."),
@@ -606,7 +560,6 @@ async fn the_timer_run_exits_0_when_it_only_has_to_wait() {
         );
     }
 
-    // A real refusal still fails the unit, with root advice rather than polkit advice.
     mock.lock().automatic_error = Some((
         ErrorKind::NotAuthorized,
         "Only the system can call this method (caller uid 1000).".to_owned(),
@@ -644,7 +597,6 @@ async fn busy_and_unknown_state_replies_are_reported_plainly() {
     }
     let _server = bus.serve(mock.clone()).await;
 
-    // Check while a download runs: nothing was checked, and that is not a failure.
     let (code, stdout, stderr) = bus.apexctl(&["update", "check"]).await;
     assert_eq!(code, 0, "{stderr}");
     assert!(stderr.is_empty(), "{stderr}");
@@ -655,8 +607,6 @@ async fn busy_and_unknown_state_replies_are_reported_plainly() {
          Check again when the download has finished; apexctl status shows its progress.\n"
     );
 
-    // GetChanges before the service has read the system: Busy, then Internal once bootc
-    // turned out to be unusable. Neither is "another update operation is running".
     {
         let mut shared = mock.lock();
         shared.state = State::Unknown;
@@ -713,7 +663,7 @@ async fn discard_names_the_build_the_relock_left_behind() {
             download_only: Some(false),
             ..Deployment::default()
         };
-        shared.relocked = Deployment {
+        shared.staged_by_discard = Deployment {
             image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
             digest: Some(NEWER_DIGEST.to_owned()),
             version: Some("45.20260926.119".to_owned()),
@@ -723,8 +673,6 @@ async fn discard_names_the_build_the_relock_left_behind() {
     }
     let _server = bus.serve(mock.clone()).await;
 
-    // The status read after the reply sees the new stage (the property cache is updated by
-    // the PropertiesChanged signals the service sent before it replied).
     let (code, stdout, stderr) = bus.apexctl(&["update", "discard"]).await;
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(

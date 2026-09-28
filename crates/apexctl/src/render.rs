@@ -1,17 +1,3 @@
-//! `apexctl profile render`: the files derived from the hardware profile (contract §7).
-//!
-//! Into `hardware/<machine>/generated/`:
-//!
-//! - [`MONITORS_XML`], always: `/etc/xdg/monitors.xml` with the panel's default scale
-//!   (ADR 0003).
-//! - `alc294-<machine>.fw` and [`AUDIO_CONF`], only when `[audio.measurements]` exists
-//!   (ADR 0004). Without measurements both must be absent, and rendering removes stale
-//!   copies.
-//!
-//! [`render`] is pure; [`write_outputs`] and [`check_outputs`] do the file I/O. Output is
-//! deterministic (it never contains the path the profile was read from, the time or the
-//! user), so `--check` can compare bytes.
-
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
@@ -21,21 +7,15 @@ use crate::hda::{InitVerb, Verb};
 use crate::patch::{CodecLine, MAX_LINE, PatchError};
 use crate::profile::{Profile, ProfileError, coef_map};
 
-/// Name of the rendered `monitors.xml`.
 pub const MONITORS_XML: &str = "monitors.xml";
-/// Name of the rendered modprobe drop-in (installed as `/usr/lib/modprobe.d/apex-audio.conf`).
 pub const AUDIO_CONF: &str = "apex-audio.conf";
-/// Directory under `/usr/lib/firmware` that holds the patch firmware.
 pub const FIRMWARE_SUBDIR: &str = "apex";
-/// `snd-hda-intel` assigns `patch=` entries by controller probe order, not by PCI address,
-/// so every slot names the same file (ADR 0004).
+/// `snd-hda-intel` assigns `patch=` entries in controller probe order, not by PCI address,
+/// so every slot names the same file.
 pub const PATCH_SLOTS: usize = 4;
-/// Name of the output directory next to the profile.
 pub const GENERATED_DIR: &str = "generated";
-/// The firmware list the image check reads, relative to the repository root.
 pub const FIRMWARE_LIST: &str = "image/checks/firmware-files.txt";
 
-/// File name of the patch firmware, e.g. `alc294-m7400qc.fw` (from the codec's device id).
 pub fn firmware_file_name(profile: &Profile) -> String {
     format!(
         "alc{:x}-{}.fw",
@@ -44,69 +24,36 @@ pub fn firmware_file_name(profile: &Profile) -> String {
     )
 }
 
-/// The `patch=` entry: the firmware path relative to `/usr/lib/firmware`.
-///
-/// `request_firmware` joins the name to each firmware directory with `"%s/%s"` and only
-/// refuses names with a `..` component (`drivers/base/firmware_loader/main.c`), so a
-/// subdirectory is fine.
+/// `request_firmware` accepts a subdirectory; it only refuses `..` components.
 pub fn firmware_reference(profile: &Profile) -> String {
     format!("{FIRMWARE_SUBDIR}/{}", firmware_file_name(profile))
 }
 
-/// Why a COEF is written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteReason {
-    /// An `[audio.fix].rules` entry: `(cold & !clear) | set`.
-    Rule {
-        /// Cold-boot value.
-        cold: u16,
-        /// Bits set.
-        set: u16,
-        /// Bits cleared.
-        clear: u16,
-    },
-    /// A `restore_if_windows_differs` index whose after-Windows value differs.
-    RestoreCold {
-        /// Cold-boot value (written).
-        cold: u16,
-        /// After-Windows value.
-        after_windows: u16,
-    },
+    Rule { cold: u16, set: u16, clear: u16 },
+    RestoreCold { cold: u16, after_windows: u16 },
 }
 
-/// One COEF the patch firmware writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoefWrite {
-    /// COEF index.
     pub index: u16,
-    /// Value written.
     pub value: u16,
-    /// Where the value comes from.
     pub reason: WriteReason,
 }
 
-/// A `restore_if_windows_differs` index that did not change after Windows (not written).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Unchanged {
-    /// COEF index.
+pub struct UnchangedAfterWindows {
     pub index: u16,
-    /// The value in both dumps.
     pub value: u16,
 }
 
-/// The COEF writes of the audio fix and the checked indexes that stay untouched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoefPlan {
-    /// Writes, in ascending index order, one per index.
     pub writes: Vec<CoefWrite>,
-    /// `restore_if_windows_differs` indexes that did not change, in index order.
-    pub unchanged: Vec<Unchanged>,
+    pub unchanged: Vec<UnchangedAfterWindows>,
 }
 
-/// Plans the COEF writes of the audio fix. `None` without `[audio.measurements]`.
-///
-/// Each index is written at most once; a rule wins over a restore of the same index (the
-/// rule starts from the cold value anyway).
 pub fn plan_coef_writes(profile: &Profile) -> Result<Option<CoefPlan>, ProfileError> {
     let Some(measurements) = &profile.audio.measurements else {
         return Ok(None);
@@ -122,13 +69,12 @@ pub fn plan_coef_writes(profile: &Profile) -> Result<Option<CoefPlan>, ProfileEr
         reason: format!("COEF {index:#04x} was not measured"),
     };
 
-    // BTreeMap: ascending index order and one entry per index.
-    let mut writes = std::collections::BTreeMap::new();
+    let mut writes_by_index = std::collections::BTreeMap::new();
     for rule in &fix.rules {
         let cold_value = *cold
             .get(&rule.index)
             .ok_or_else(|| missing("audio.measurements.cold_boot", rule.index))?;
-        writes.insert(
+        writes_by_index.insert(
             rule.index,
             CoefWrite {
                 index: rule.index,
@@ -149,16 +95,17 @@ pub fn plan_coef_writes(profile: &Profile) -> Result<Option<CoefPlan>, ProfileEr
         let after_value = *after
             .get(&index)
             .ok_or_else(|| missing("audio.measurements.after_windows", index))?;
-        if writes.contains_key(&index) {
+        // A rule wins: it starts from the cold value anyway.
+        if writes_by_index.contains_key(&index) {
             continue;
         }
         if after_value == cold_value {
-            unchanged.push(Unchanged {
+            unchanged.push(UnchangedAfterWindows {
                 index,
                 value: cold_value,
             });
         } else {
-            writes.insert(
+            writes_by_index.insert(
                 index,
                 CoefWrite {
                     index,
@@ -173,12 +120,11 @@ pub fn plan_coef_writes(profile: &Profile) -> Result<Option<CoefPlan>, ProfileEr
     }
     unchanged.sort_by_key(|u| u.index);
     Ok(Some(CoefPlan {
-        writes: writes.into_values().collect(),
+        writes: writes_by_index.into_values().collect(),
         unchanged,
     }))
 }
 
-/// The `[verb]` triples for `writes` on the COEF widget: index, then value, per COEF.
 pub fn coef_verbs(profile: &Profile, writes: &[CoefWrite]) -> Vec<InitVerb> {
     let nid = u16::from(profile.audio.codec.coef_nid);
     writes
@@ -188,72 +134,46 @@ pub fn coef_verbs(profile: &Profile, writes: &[CoefWrite]) -> Vec<InitVerb> {
         .collect()
 }
 
-/// One file of the output directory: its contents, or `None` when it must not exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutputFile {
-    /// File name inside the output directory.
     pub name: String,
-    /// Contents, or `None` for a file that must be absent.
+    /// `None`: the file must not exist.
     pub contents: Option<String>,
 }
 
-/// What happened to the audio fix.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioOutcome {
-    /// Rendered with these writes.
     Rendered(Vec<CoefWrite>),
-    /// No `[audio.measurements]`: no firmware (the image is labelled `degraded=audio`).
     NotMeasured,
 }
 
-/// Everything `profile render` produces.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rendered {
-    /// Every file the renderer owns, in a fixed order.
     pub files: Vec<OutputFile>,
-    /// The audio part.
     pub audio: AudioOutcome,
 }
 
-/// Why rendering failed.
 #[derive(Debug, thiserror::Error)]
 pub enum RenderError {
-    /// The profile is invalid.
     #[error(transparent)]
     Profile(#[from] ProfileError),
-    /// A patch firmware line would exceed the kernel's limit.
     #[error(
         "{file} line {line} has {length} characters; the kernel's patch loader stops at {MAX_LINE}"
     )]
     LineTooLong {
-        /// File name.
         file: String,
-        /// Line number.
         line: usize,
-        /// Its length.
         length: usize,
     },
-    /// The measurements and the fix produce no verb at all.
     #[error("[audio.fix] writes no COEF with these measurements; nothing to render")]
     NoVerbs,
-    /// The rendered patch firmware is not a file the kernel would load as intended.
     #[error("{file} would not load as rendered: {error}")]
-    InvalidFirmware {
-        /// File name.
-        file: String,
-        /// Why [`crate::patch::parse`] rejects it (part of the message, not a `source()`).
-        error: PatchError,
-    },
-    /// The rendered patch firmware parses, but not to the profile's codec and the planned
-    /// verbs: text copied from the profile changed what the kernel would read.
+    InvalidFirmware { file: String, error: PatchError },
     #[error("{file} does not parse back to the profile's [codec] line and the planned verbs")]
-    FirmwareMismatch {
-        /// File name.
-        file: String,
-    },
+    FirmwareMismatch { file: String },
 }
 
-/// Renders every output file from a profile. Validates the profile first.
+/// Deterministic (no path, time or user in the output), so `--check` can compare bytes.
 pub fn render(profile: &Profile) -> Result<Rendered, RenderError> {
     profile.validate()?;
     let mut files = vec![OutputFile {
@@ -302,10 +222,7 @@ pub fn render(profile: &Profile) -> Result<Rendered, RenderError> {
     Ok(Rendered { files, audio })
 }
 
-/// Reads the rendered firmware back the way the kernel will ([`crate::patch::parse`]
-/// mirrors `snd_hda_load_patch`) and checks that it names exactly the profile's codec and
-/// carries exactly the planned verbs, in order. Profile text is copied into comment lines;
-/// whatever it contains, it must not change what the kernel reads or make it hang.
+/// Profile text lands in comment lines; it must not change what the kernel reads.
 fn verify_firmware(
     profile: &Profile,
     file: &str,
@@ -330,7 +247,6 @@ fn verify_firmware(
     Ok(())
 }
 
-/// Escapes XML text (the profile validation already limits the characters).
 fn xml_escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -346,10 +262,8 @@ fn xml_escape(text: &str) -> String {
     out
 }
 
-/// `monitors.xml` (layout mode logical, version 2) with the panel alone at the default
-/// scale and the highest refresh rate. mutter matches the monitor by connector, vendor,
-/// product and serial, and the mode rate within 0.001 Hz, so both are written exactly as
-/// mutter reports them (`%.17g`).
+/// mutter matches the monitor spec exactly and the rate within 0.001 Hz, so both are
+/// written as mutter reports them.
 pub fn monitors_xml(profile: &Profile) -> String {
     let panel = &profile.panel;
     let rate = panel.preferred_rate().unwrap_or_default();
@@ -394,10 +308,12 @@ pub fn monitors_xml(profile: &Profile) -> String {
     )
 }
 
-/// The HDA patch firmware: provenance comments, the `[codec]` line and one index/value
-/// pair per COEF. Verb lines use the kernel's `init_verbs` format, so they compare
-/// byte-for-byte with `/sys/class/sound/hwC*D*/init_verbs`.
-pub fn patch_firmware(profile: &Profile, writes: &[CoefWrite], unchanged: &[Unchanged]) -> String {
+/// Verb lines use the kernel's `init_verbs` format, so they match the sysfs file byte for byte.
+pub fn patch_firmware(
+    profile: &Profile,
+    writes: &[CoefWrite],
+    unchanged: &[UnchangedAfterWindows],
+) -> String {
     let codec = &profile.audio.codec;
     let chip = codec.vendor_id & 0xffff;
     let mut out = String::new();
@@ -466,7 +382,6 @@ pub fn patch_firmware(profile: &Profile, writes: &[CoefWrite], unchanged: &[Unch
     out
 }
 
-/// The modprobe drop-in that makes `snd-hda-intel` load the patch firmware.
 pub fn modprobe_conf(profile: &Profile) -> String {
     let reference = firmware_reference(profile);
     let entries = [reference.as_str(); PATCH_SLOTS].join(",");
@@ -481,7 +396,6 @@ pub fn modprobe_conf(profile: &Profile) -> String {
     )
 }
 
-/// Where rendered files go by default: `generated/` next to the profile.
 pub fn default_output_dir(profile_path: &Path) -> PathBuf {
     profile_path
         .parent()
@@ -489,8 +403,6 @@ pub fn default_output_dir(profile_path: &Path) -> PathBuf {
         .join(GENERATED_DIR)
 }
 
-/// The repository's firmware list for a profile at `<root>/hardware/<machine>/profile.toml`,
-/// or `None` when the profile is not inside such a tree.
 pub fn firmware_list_path(profile_path: &Path) -> Option<PathBuf> {
     let machine_dir = profile_path.parent()?;
     let hardware_dir = machine_dir.parent()?;
@@ -500,7 +412,6 @@ pub fn firmware_list_path(profile_path: &Path) -> Option<PathBuf> {
     Some(hardware_dir.parent()?.join(FIRMWARE_LIST))
 }
 
-/// The globs of `image/checks/firmware-files.txt`: one per line, `#` starts a comment.
 pub fn parse_firmware_list(text: &str) -> Vec<String> {
     text.lines()
         .map(|line| line.split('#').next().unwrap_or_default().trim())
@@ -509,8 +420,6 @@ pub fn parse_firmware_list(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// A unified diff between the profile's `[firmware].required_files` and the list file,
-/// or `None` when they are identical (same globs, same order).
 pub fn compare_firmware_list(profile: &Profile, list_text: &str) -> Option<String> {
     let listed = parse_firmware_list(list_text);
     if listed == profile.firmware.required_files {
@@ -528,7 +437,6 @@ pub fn compare_firmware_list(profile: &Profile, list_text: &str) -> Option<Strin
     ))
 }
 
-/// A unified diff with three lines of context.
 pub fn unified_diff(old: &str, new: &str, old_label: &str, new_label: &str) -> String {
     similar::TextDiff::from_lines(old, new)
         .unified_diff()
@@ -537,15 +445,11 @@ pub fn unified_diff(old: &str, new: &str, old_label: &str, new_label: &str) -> S
         .to_string()
 }
 
-/// A file I/O failure while writing or checking outputs.
 #[derive(Debug, thiserror::Error)]
 #[error("cannot {action} {path}: {error}")]
 pub struct OutputError {
-    /// What was attempted.
     pub action: &'static str,
-    /// The path.
     pub path: PathBuf,
-    /// The I/O error. It is part of the message, so it is not also the `source()`.
     pub error: io::Error,
 }
 
@@ -558,16 +462,11 @@ fn io_error(action: &'static str, path: &Path) -> impl FnOnce(io::Error) -> Outp
     }
 }
 
-/// What [`write_outputs`] did with one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileAction {
-    /// Created or replaced.
     Written,
-    /// Already had the rendered contents; left alone.
     Unchanged,
-    /// A stale file was deleted.
     Removed,
-    /// Must be absent and was.
     Absent,
 }
 
@@ -579,7 +478,6 @@ fn read_existing(path: &Path) -> Result<Option<Vec<u8>>, OutputError> {
     }
 }
 
-/// Writes `contents` to `path` atomically (temporary file, `fsync`, rename), mode 0644.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), OutputError> {
     use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
     let dir = path
@@ -609,14 +507,11 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), OutputError> {
             .map_err(io_error("flush", dir))
     })();
     if result.is_err() {
-        // Best effort: the original error is what matters.
         let _ = fs::remove_file(&tmp);
     }
     result
 }
 
-/// Writes the rendered files into `dir` (created if missing), removes files that must be
-/// absent, and leaves files with identical contents untouched.
 pub fn write_outputs(
     dir: &Path,
     rendered: &Rendered,
@@ -643,16 +538,12 @@ pub fn write_outputs(
     Ok(actions)
 }
 
-/// One output file whose committed state differs from the rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Difference {
-    /// File name.
     pub name: String,
-    /// Unified diff from the committed file to the rendered one.
     pub diff: String,
 }
 
-/// Compares `dir` with the rendering without changing anything.
 pub fn check_outputs(dir: &Path, rendered: &Rendered) -> Result<Vec<Difference>, OutputError> {
     let mut differences = Vec::new();
     for file in &rendered.files {
@@ -768,7 +659,7 @@ mod tests {
         );
         assert_eq!(
             unchanged,
-            [Unchanged {
+            [UnchangedAfterWindows {
                 index: 0x40,
                 value: 0x8800
             }]
@@ -796,7 +687,6 @@ mod tests {
         let check = |text: &str| verify_firmware(&profile, "f.fw", text, &writes);
         assert!(check(&good).is_ok());
 
-        // What an unvalidated profile string could have done to the first comment line.
         let (first, rest) = good.split_once('\n').unwrap();
         let injected = format!("{first}\n[pincfg]\n0x19 0x411111f0\n{rest}");
         assert!(matches!(
@@ -814,7 +704,6 @@ mod tests {
                 ..
             })
         ));
-        // Parses, but not to the plan: an extra verb, or another codec.
         let extra = format!("{good}0x20 0x500 0x0001\n");
         assert!(matches!(
             check(&extra),
@@ -834,8 +723,6 @@ mod tests {
 
     #[test]
     fn a_profile_changed_after_parsing_is_validated_again() {
-        // `render` validates on its own, so a profile built or edited in code cannot slip a
-        // line feed or a NUL into the firmware's comment lines either.
         for board in ["M7400QC\n[pincfg]\n0x19 0x411111f0", "M7400QC\0"] {
             let mut profile = measured();
             profile.machine.dmi_board_name = board.to_owned();
@@ -885,11 +772,9 @@ mod tests {
         let again = write_outputs(dir.path(), &measured).unwrap();
         assert!(again.iter().all(|(_, a)| *a == FileAction::Unchanged));
 
-        // The profile loses its measurements: the audio files become stale.
         let bare = render(&Profile::parse(BASE).unwrap()).unwrap();
         let differences = check_outputs(dir.path(), &bare).unwrap();
         let names: Vec<&str> = differences.iter().map(|d| d.name.as_str()).collect();
-        // monitors.xml does not depend on the audio measurements.
         assert_eq!(names, ["alc294-m7400qc.fw", "apex-audio.conf"]);
         assert!(differences[0].diff.contains("+++ /dev/null"));
         assert!(differences[0].diff.contains("-[codec]"));
@@ -938,7 +823,6 @@ mod tests {
             let rendered = render(&profile).unwrap();
             let firmware = rendered.files[1].contents.clone().unwrap();
             let parsed = crate::patch::parse(&firmware).unwrap();
-            // Every index is followed by its value, and 0x1b always gets bit 10.
             let effective: Vec<Verb> = parsed.verbs.iter().map(|v| v.effective()).collect();
             prop_assert_eq!(effective.len() % 2, 0);
             let pos = effective.iter().position(|v| *v == Verb::SetCoefIndex(0x1b)).unwrap();
