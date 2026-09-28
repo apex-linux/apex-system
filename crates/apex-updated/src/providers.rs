@@ -1,16 +1,3 @@
-//! What the daemon learns from the rest of the system, each behind a trait so the engine
-//! can be tested without a laptop: the clock, power (`UPower`), the metered flag
-//! (`NetworkManager`), free space (`statvfs`), the kernel and initramfs size, systemd unit
-//! states, and files inside deployments (the image manifest, os-release, the ostree
-//! finalization stamp).
-//!
-//! The traits return [`BoxFuture`]s so they stay dyn-compatible: [`Providers`] holds them
-//! as `Arc<dyn …>`, which keeps the engine generic over the bootc runner only.
-//!
-//! Every probe degrades instead of failing. Unknown power counts as "on battery, charge
-//! unknown" (the power gate then defers, and a user can override it); unknown metered
-//! counts as not metered (as `apex-update` specifies); unknown free space counts as zero.
-
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, Read};
@@ -34,50 +21,36 @@ use zbus::zvariant::OwnedObjectPath;
 use crate::BoxFuture;
 use crate::channel::os_release_version_id;
 
-/// Where the physical root is mounted on an ostree system.
 pub const SYSROOT: &str = "/sysroot";
-/// The boot partition.
 pub const BOOT: &str = "/boot";
 /// Written by `ostree-finalize-staged` when finalization at shutdown failed; removed (and
 /// turned into a failed unit) by `ostree-boot-complete.service` on the next boot.
 pub const FINALIZE_FAILURE_STAMP: &str = "/boot/ostree/finalize-failure.stamp";
-/// The unit that reports a failed finalization of the previous shutdown.
 pub const BOOT_COMPLETE_UNIT: &str = "ostree-boot-complete.service";
-/// The boot assessment; `Apply` waits until it is no longer running (see `apex_boot::decide`).
 pub const ASSESS_UNIT: &str = "apex-boot-assess.service";
-/// os-release of the running image (read from `/usr`, never from `/etc`).
+/// The running image's own, never the one in `/etc`.
 pub const OS_RELEASE: &str = "/usr/lib/os-release";
-/// The ostree executable, for the manifest fallback.
 pub const OSTREE_PROGRAM: &str = "/usr/bin/ostree";
-/// The system ostree repository.
 pub const OSTREE_REPO: &str = "/sysroot/ostree/repo";
-/// Longest a D-Bus probe (`UPower`, `NetworkManager`, systemd) may take.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-/// Longest `ostree cat` may take.
 pub const OSTREE_CAT_TIMEOUT: Duration = Duration::from_secs(30);
-/// Largest manifest read. A full desktop image lists about 2000 packages in roughly
-/// 200 kB; anything much larger is not a manifest this build wrote.
+/// A full desktop image's manifest is about 200 kB.
 pub const MANIFEST_MAX_SIZE: u64 = 16 * 1024 * 1024;
+const OSTREE_STDERR_MAX_SIZE: u64 = 64 * 1024;
 
-/// The current time.
 pub trait Clock: Send + Sync {
-    /// Seconds since the Unix epoch.
+    /// Unix seconds.
     fn now(&self) -> u64;
 }
 
-/// Power supply state.
 pub trait PowerSource: Send + Sync {
-    /// On AC, and the battery charge if a battery is present.
     fn power(&self) -> BoxFuture<'_, Power>;
 }
 
-/// Whether the network is metered.
 pub trait MeteredSource: Send + Sync {
-    /// `Some(true)` metered, `Some(false)` not metered, `None` unknown.
     fn metered(&self) -> BoxFuture<'_, Option<bool>>;
 }
 
-/// Free space of a filesystem.
 pub trait DiskSpace: Send + Sync {
     /// Bytes available to an unprivileged writer on the filesystem holding `path`.
     fn free_bytes(&self, path: &Path) -> Option<u64>;
@@ -85,103 +58,65 @@ pub trait DiskSpace: Send + Sync {
 
 /// Size of what finalization copies to `/boot`.
 pub trait BootPayload: Send + Sync {
-    /// `vmlinuz` plus `initramfs.img` of the kernel in the tree at `root`
-    /// (`<root>/usr/lib/modules/<version>/`). With several kernels, the largest pair.
     fn boot_payload(&self, root: &Path) -> Option<u64>;
 }
 
-/// systemd unit states.
 pub trait UnitStates: Send + Sync {
-    /// `ActiveState` of a loaded unit (`active`, `activating`, `failed`, …), `None` when
-    /// the unit is not loaded or systemd cannot be asked.
     fn active_state<'a>(&'a self, unit: &'a str) -> BoxFuture<'a, Option<String>>;
 }
 
-/// Which tree a manifest is read from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ManifestSource {
-    /// The running system's `/usr`.
     Running,
-    /// A deployment on disk (the staged or the rollback one).
     Deployment(DeploymentLocation),
 }
 
-/// Files the daemon reads from the running image and from deployments.
 pub trait DeploymentFiles: Send + Sync {
-    /// The image manifest (`/usr/share/apex/manifest.json`) of `source`; `Ok(None)` when
-    /// the image has none.
     fn manifest<'a>(
         &'a self,
         source: &'a ManifestSource,
     ) -> BoxFuture<'a, Result<Option<Manifest>, FileError>>;
 
-    /// `VERSION_ID` of the running image's os-release.
     fn fedora_release(&self) -> Option<u32>;
 
-    /// Whether [`FINALIZE_FAILURE_STAMP`] exists.
     fn finalize_failure_stamp(&self) -> bool;
 }
 
-/// Why a file inside an image could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum FileError {
-    /// Opening or reading failed (a symbolic link at the path counts as a failure).
     #[error("cannot read {}", .path.display())]
     Io {
-        /// The file.
         path: PathBuf,
-        /// The OS error.
         #[source]
         source: io::Error,
     },
-    /// The file is larger than [`MANIFEST_MAX_SIZE`].
     #[error("{} is larger than {limit} bytes", .path.display())]
-    TooLarge {
-        /// The file.
-        path: PathBuf,
-        /// The limit.
-        limit: u64,
-    },
-    /// The file is not a manifest this build understands.
+    TooLarge { path: PathBuf, limit: u64 },
     #[error("{} is not a valid image manifest", .path.display())]
     Manifest {
-        /// The file.
         path: PathBuf,
-        /// The parse error.
         #[source]
         source: ManifestError,
     },
-    /// `ostree cat` failed.
     #[error("`ostree cat` failed: {detail}")]
-    Ostree {
-        /// What went wrong.
-        detail: String,
-    },
+    Ostree { detail: String },
 }
 
-/// The GRUB environment block, as the boot counter's state is read before `Apply` arms it
-/// and after a fallback (`apex_boot::check_arming`, M1 contract §5). Writes go through
-/// `apex_boot::GrubEnvWriter` instead.
 pub trait GrubEnvSource: Send + Sync {
-    /// The block as it is now; `Ok(None)` when the file does not exist (GRUB then has no
-    /// variables, and `grub2-editenv` creates it at the first write).
+    /// `Ok(None)` when the file does not exist: GRUB then has no variables.
     fn read(&self) -> Result<Option<GrubEnv>, GrubEnvReadError>;
 }
 
-/// The GRUB environment block file, read directly as M1 contract §5 prescribes (the
-/// signature line, `key=value` lines, `#` padding), with `apex_boot::grubenv`'s parser.
 #[derive(Debug, Clone)]
 pub struct GrubEnvFile {
     path: PathBuf,
 }
 
 impl GrubEnvFile {
-    /// `/boot/grub2/grubenv` ([`GRUBENV_PATH`]).
     pub fn system() -> Self {
         Self::at(GRUBENV_PATH)
     }
 
-    /// Another file, for tests.
     pub fn at(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -201,22 +136,14 @@ impl GrubEnvSource for GrubEnvFile {
     }
 }
 
-/// Every provider the engine uses.
 #[derive(Clone)]
 pub struct Providers {
-    /// The clock.
     pub clock: Arc<dyn Clock>,
-    /// Power supply.
     pub power: Arc<dyn PowerSource>,
-    /// Metered network.
     pub metered: Arc<dyn MeteredSource>,
-    /// Free space.
     pub space: Arc<dyn DiskSpace>,
-    /// Kernel plus initramfs size.
     pub payload: Arc<dyn BootPayload>,
-    /// systemd unit states.
     pub units: Arc<dyn UnitStates>,
-    /// Files in the image and in deployments.
     pub files: Arc<dyn DeploymentFiles>,
 }
 
@@ -227,8 +154,6 @@ impl fmt::Debug for Providers {
 }
 
 impl Providers {
-    /// The real providers, using `connection` (the system bus) for `UPower`,
-    /// `NetworkManager` and systemd.
     pub fn system(connection: &Connection) -> Self {
         Self {
             clock: Arc::new(SystemClock),
@@ -242,7 +167,6 @@ impl Providers {
     }
 }
 
-/// The system clock.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemClock;
 
@@ -254,10 +178,7 @@ impl Clock for SystemClock {
     }
 }
 
-/// Maps `UPower`'s `OnBattery` and its display device to [`Power`].
-///
-/// `battery` is the display device's `IsPresent` and `Percentage`. A percentage outside
-/// 0-100 or not a number is treated as unknown.
+/// `battery` is the display device's `(IsPresent, Percentage)`.
 pub fn power_from_upower(on_battery: bool, battery: Option<(bool, f64)>) -> Power {
     let battery_percent = battery.and_then(|(present, percent)| {
         (present && (0.0..=100.0).contains(&percent)).then(|| percent.round() as u8)
@@ -268,13 +189,15 @@ pub fn power_from_upower(on_battery: bool, battery: Option<(bool, f64)>) -> Powe
     }
 }
 
-/// Maps `NetworkManager`'s `Metered` (`NMMetered`) to the engine's tri-state: `YES` (1) and
-/// `GUESS_YES` (3) are metered, `NO` (2) and `GUESS_NO` (4) are not, anything else is
-/// unknown.
+const NM_METERED_YES: u32 = 1;
+const NM_METERED_NO: u32 = 2;
+const NM_METERED_GUESS_YES: u32 = 3;
+const NM_METERED_GUESS_NO: u32 = 4;
+
 pub fn metered_from_nm(value: u32) -> Option<bool> {
     match value {
-        1 | 3 => Some(true),
-        2 | 4 => Some(false),
+        NM_METERED_YES | NM_METERED_GUESS_YES => Some(true),
+        NM_METERED_NO | NM_METERED_GUESS_NO => Some(false),
         _ => None,
     }
 }
@@ -334,14 +257,12 @@ trait SystemdUnit {
     fn active_state(&self) -> zbus::Result<String>;
 }
 
-/// Power from `UPower` on the system bus.
 #[derive(Debug, Clone)]
 pub struct UPower {
     connection: Connection,
 }
 
 impl UPower {
-    /// Reads `UPower` over `connection`.
     pub fn new(connection: Connection) -> Self {
         Self { connection }
     }
@@ -383,14 +304,12 @@ impl PowerSource for UPower {
     }
 }
 
-/// The metered flag from `NetworkManager` on the system bus.
 #[derive(Debug, Clone)]
 pub struct NetworkManager {
     connection: Connection,
 }
 
 impl NetworkManager {
-    /// Reads `NetworkManager` over `connection`.
     pub fn new(connection: Connection) -> Self {
         Self { connection }
     }
@@ -420,14 +339,12 @@ impl MeteredSource for NetworkManager {
     }
 }
 
-/// Unit states from systemd on the system bus.
 #[derive(Debug, Clone)]
 pub struct Systemd {
     connection: Connection,
 }
 
 impl Systemd {
-    /// Asks systemd over `connection`.
     pub fn new(connection: Connection) -> Self {
         Self { connection }
     }
@@ -454,7 +371,7 @@ impl UnitStates for Systemd {
         Box::pin(async move {
             match tokio::time::timeout(PROBE_TIMEOUT, self.read(unit)).await {
                 Ok(Ok(state)) => Some(state),
-                // Not loaded (`NoSuchUnit`) is the common case for units that did not run.
+                // `NoSuchUnit` is the common case: units that did not run are not loaded.
                 Ok(Err(error)) => {
                     tracing::debug!(unit, %error, "unit state unavailable");
                     None
@@ -465,7 +382,6 @@ impl UnitStates for Systemd {
     }
 }
 
-/// Free space with `statvfs(3)`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Statvfs;
 
@@ -479,7 +395,6 @@ impl DiskSpace for Statvfs {
     }
 }
 
-/// The kernel and initramfs of a tree, from `usr/lib/modules`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KernelFiles;
 
@@ -498,7 +413,6 @@ impl BootPayload for KernelFiles {
     }
 }
 
-/// Files of the running image and of deployments under the sysroot.
 #[derive(Debug, Clone)]
 pub struct HostFiles {
     root: PathBuf,
@@ -509,7 +423,6 @@ pub struct HostFiles {
 }
 
 impl HostFiles {
-    /// The real paths: `/`, [`SYSROOT`], [`FINALIZE_FAILURE_STAMP`], [`OSTREE_PROGRAM`].
     pub fn system() -> Self {
         Self {
             root: PathBuf::from("/"),
@@ -520,8 +433,6 @@ impl HostFiles {
         }
     }
 
-    /// The same reader under other directories, for tests: `root` stands for `/` and
-    /// `sysroot` for `/sysroot`; `ostree` is the program run for the fallback.
     pub fn under(root: &Path, sysroot: &Path, ostree: &Path) -> Self {
         Self {
             root: root.to_path_buf(),
@@ -556,9 +467,8 @@ impl HostFiles {
             .map_err(|source| FileError::Manifest { path, source })
     }
 
-    /// `ostree cat --repo=<repo> <checksum> /usr/share/apex/manifest.json`, for a deployment
-    /// whose checkout does not have the file. The checksum was validated (64 lowercase hex
-    /// digits) by [`DeploymentLocation`], so it cannot be read as an option.
+    /// [`DeploymentLocation`] validated the checksum as hex, so ostree cannot read it as an
+    /// option.
     async fn ostree_cat(&self, checksum: &str) -> Result<Option<Vec<u8>>, FileError> {
         let mut repo = std::ffi::OsString::from("--repo=");
         repo.push(&self.ostree_repo);
@@ -596,7 +506,11 @@ impl HostFiles {
             };
             let read_err = async {
                 match stderr.as_mut() {
-                    Some(pipe) => pipe.take(64 * 1024).read_to_end(&mut err).await.map(drop),
+                    Some(pipe) => pipe
+                        .take(OSTREE_STDERR_MAX_SIZE)
+                        .read_to_end(&mut err)
+                        .await
+                        .map(drop),
                     None => Ok(()),
                 }
             };
@@ -634,9 +548,6 @@ impl HostFiles {
     }
 }
 
-/// Reads a regular file of at most [`MANIFEST_MAX_SIZE`] bytes without following a
-/// symbolic link at its last component. A missing file (or a missing directory on the way)
-/// is `Ok(None)`.
 fn read_capped(path: &Path) -> Result<Option<Vec<u8>>, FileError> {
     let io_error = |source| FileError::Io {
         path: path.to_path_buf(),

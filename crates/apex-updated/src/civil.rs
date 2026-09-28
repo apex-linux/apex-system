@@ -1,16 +1,8 @@
-//! Calendar arithmetic for the `Stale` property: the build date inside an Apex version
-//! (`45.YYYYMMDD.RUN`) as Unix seconds.
-//!
-//! `last-check.json` stores the remote version but not its build time (contract §4), so after
-//! a restart the date field of the version is the only build time the daemon has for the
-//! remote image. The conversion is Howard Hinnant's `days_from_civil`, exact for the
-//! proleptic Gregorian calendar.
+const SECONDS_PER_DAY: u64 = 86_400;
+const DAYS_PER_400_YEARS: u64 = 146_097;
+const DAYS_FROM_0000_03_01_TO_1970_01_01: u64 = 719_468;
 
-/// Seconds in a day.
-const DAY: u64 = 86_400;
-
-/// Days from 1970-01-01 to `year-month-day` (proleptic Gregorian), or `None` for an invalid
-/// date or one before 1970.
+/// Howard Hinnant's algorithm (proleptic Gregorian): days since 1970-01-01.
 pub fn days_from_civil(year: u64, month: u64, day: u64) -> Option<u64> {
     if !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
         return None;
@@ -26,8 +18,7 @@ pub fn days_from_civil(year: u64, month: u64, day: u64) -> Option<u64> {
     let mp = (month + 9) % 12;
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    // 719_468 is the day number of 1970-01-01 counted from 0000-03-01.
-    (era * 146_097 + doe).checked_sub(719_468)
+    (era * DAYS_PER_400_YEARS + doe).checked_sub(DAYS_FROM_0000_03_01_TO_1970_01_01)
 }
 
 fn is_leap(year: u64) -> bool {
@@ -43,11 +34,9 @@ fn days_in_month(year: u64, month: u64) -> u64 {
     }
 }
 
-/// Midnight UTC of the date `yyyymmdd` in Unix seconds, or `None` if it is not a valid date
-/// on or after 1970-01-01.
 pub fn unix_from_yyyymmdd(date: u64) -> Option<u64> {
     let days = days_from_civil(date / 10_000, (date / 100) % 100, date % 100)?;
-    days.checked_mul(DAY)
+    days.checked_mul(SECONDS_PER_DAY)
 }
 
 #[cfg(test)]
@@ -55,7 +44,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// The inverse (`civil_from_days`), only needed to test the conversion.
     fn civil_from_days(days: u64) -> (u64, u64, u64) {
         let z = days + 719_468;
         let era = z / 146_097;
@@ -91,7 +79,10 @@ mod tests {
         fn round_trips_through_the_inverse(days in 0u64..3_000_000) {
             let (y, m, d) = civil_from_days(days);
             prop_assert_eq!(days_from_civil(y, m, d), Some(days));
-            prop_assert_eq!(unix_from_yyyymmdd(y * 10_000 + m * 100 + d), Some(days * DAY));
+            prop_assert_eq!(
+                unix_from_yyyymmdd(y * 10_000 + m * 100 + d),
+                Some(days * SECONDS_PER_DAY)
+            );
         }
 
         #[test]

@@ -1,15 +1,3 @@
-//! The persisted state (`/var/lib/apex`, contract §4) as the daemon uses it.
-//!
-//! `apex_update::StateStore` covers every file except one write: `health-failure.json` is
-//! normally written by `apex-boot-assess`, but `ReportBoot("red")` must also record it when
-//! that write failed (the XML contract: the daemon publishes `HealthFailure`). [`Store`]
-//! adds that write, and the startup cleanup of temporary files ([`Store::remove_stale_temp_files`]).
-//!
-//! A write whose rename (or removal) happened but whose directory flush failed is
-//! `StoreError::NotFlushed`: readers already see the change. [`unflushed_is_done`] turns it
-//! into a success with a warning, so the daemon never acts as if such a file still held its
-//! old content.
-
 use apex_update::store::{
     DENYLIST_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE, write_json_atomic,
 };
@@ -17,7 +5,6 @@ use apex_update::{HealthFailureRecord, StateDir, StateStore, StoreError};
 
 use crate::errors::with_sources;
 
-/// Every state file (M1 contract §4).
 pub const STATE_FILES: [&str; 4] = [
     INTENT_FILE,
     DENYLIST_FILE,
@@ -25,17 +12,11 @@ pub const STATE_FILES: [&str; 4] = [
     HEALTH_FAILURE_FILE,
 ];
 
-/// The daemon's persisted state.
 pub trait Store: StateStore + Send + Sync {
-    /// Records a health failure (atomic write, like every other state file).
     fn write_health_failure(&self, record: &HealthFailureRecord) -> Result<(), StoreError>;
 
-    /// Removes the temporary files that writers of the state files left when they died
-    /// before their rename, and returns how many were removed. Only files of writers that
-    /// are gone are touched (`apex_update::store::remove_stale_temp_files`).
-    ///
-    /// Every write already cleans up after earlier writes of the same file; the daemon also
-    /// calls this once at startup, for files that are rarely written (the denylist).
+    /// Every write cleans up after earlier writes of its own file; this, at startup, covers
+    /// files rarely written, such as the denylist.
     fn remove_stale_temp_files(&self) -> usize {
         0
     }
@@ -54,9 +35,8 @@ impl Store for StateDir {
     }
 }
 
-/// `result` of a state-file write or removal, with `StoreError::NotFlushed` (the change is
-/// made and visible, only the directory flush failed, so it may not survive a power cut)
-/// logged as a warning and counted as done. Every other error is returned as it is.
+/// `NotFlushed` means readers already see the change, so acting as if the old content
+/// remained would be wrong.
 pub fn unflushed_is_done(result: Result<(), StoreError>, what: &str) -> Result<(), StoreError> {
     match result {
         Err(error) if error.is_applied() => {
@@ -92,8 +72,7 @@ mod tests {
         assert_eq!(store.read_health_failure().unwrap(), None);
     }
 
-    /// A pid that cannot belong to a running process: above the kernel's `PID_MAX_LIMIT`
-    /// (4194304).
+    /// Above the kernel's `PID_MAX_LIMIT` (4194304).
     const DEAD_PID: u32 = 4_194_305;
 
     #[test]

@@ -1,19 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
-<!--
-  Polkit actions of the Apex update service (M1 contract §8). Installed in
-  /usr/share/polkit-1/actions/.
-
-  Routine actions (check, download, apply, discard) are allowed for the active local user
-  without a password: they only move the system between versions the channel signed and
-  the user reviewed, like a reboot would. The discard action also guards
-  AcknowledgeHealthFailure (M1 contract §8): dismissing the warning about a failed update
-  is as routine as cancelling one. Rollback, changing the channel and downgrading
-  need an administrator every time (auth_admin, never auth_admin_keep, so one prompt in a
-  shared process such as gnome-shell does not authorize later calls). Inactive and remote
-  sessions get nothing. apex-updated checks the caller's system bus name, never a PID.
--->
+<!-- auth_admin, never auth_admin_keep: one prompt in a shared process such as gnome-shell
+     must not authorize its later calls. -->
 <policyconfig>
   <vendor>Apex</vendor>
   <vendor_url>https://github.com/SekiroKenjii/apex-fedora</vendor_url>
@@ -49,7 +38,6 @@
     </defaults>
   </action>
 
-  <!-- DiscardStaged and AcknowledgeHealthFailure. -->
   <action id="io.github.sekirokenjii.apex.update.discard">
     <description>Cancel the installation of a downloaded system update, or dismiss the warning about a failed one</description>
     <message>Authentication is required to cancel the system update or dismiss its warning</message>

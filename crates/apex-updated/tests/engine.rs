@@ -1,8 +1,3 @@
-//! Engine-level tests: the real engine, queue and worker, with bootc scripted by
-//! `FakeRunner`, the system faked by `FakeSystem`, grubenv recorded, and the state files in
-//! a temporary directory. Every test ends with `assert_finished`, so a bootc command that
-//! was not expected (or one that was expected but not run) fails it.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -33,8 +28,7 @@ use apex_updated::testing::{FakeSystem, SharedGrubWriter};
 use common::*;
 use tokio::time::Instant;
 
-/// The arming `Apply` writes, with the variable names of M1 contract §5 spelled out (not
-/// taken from apex-boot), so a rename on either side fails here.
+/// Spelled out, not taken from apex-boot, so a rename on either side fails here.
 fn arm_call(digest: &str) -> EditenvCall {
     EditenvCall::Set(vec![
         ("apex_target".into(), digest.into()),
@@ -55,8 +49,6 @@ fn download_only(progress: bool) -> BootcCommand {
     BootcCommand::UpgradeDownloadOnly { progress }
 }
 
-// ----- download gating and DeferredReason ----------------------------------------------
-
 #[tokio::test(start_paused = true)]
 async fn metered_network_defers_and_the_override_downloads() {
     let h = Harness::new();
@@ -73,7 +65,6 @@ async fn metered_network_defers_and_the_override_downloads() {
         properties.deferred_reason
     );
 
-    // A user download without the override is refused with the gate's reason.
     h.push(status(&before));
     let error = h
         .run(Op::Download {
@@ -84,7 +75,6 @@ async fn metered_network_defers_and_the_override_downloads() {
     assert_eq!(error.kind(), Some(ErrorKind::PolicyDenied));
     assert_eq!(error.message(), properties.deferred_reason);
 
-    // With the override it downloads, reporting progress while bootc runs.
     let after = host(
         booted(),
         Some(entry(REMOTE, STAGED_VERSION, STAGED_CSUM)).map(|mut e| {
@@ -129,7 +119,7 @@ async fn automatic_run_checks_and_records_why_it_did_not_download() {
         s.power.battery_percent = Some(30);
     });
     let current = host(booted(), None, None);
-    // Refresh, then (power already fails, so only a check) check and status.
+    // Power already fails, so no download follows the check.
     h.push(status(&current))
         .push(Scripted::new(BootcCommand::UpgradeCheck).stdout(format!(
             "Update available for: ostree-image-signed:docker://{STABLE_IMAGE}\n  Version: {STAGED_VERSION}\n  Digest: {REMOTE}\n"
@@ -209,7 +199,6 @@ async fn a_download_that_stages_another_digest_updates_the_check_record() {
 async fn a_failed_download_keeps_the_check_record_and_reports_the_error() {
     let h = Harness::new();
     h.last_check(REMOTE, "45.20260925.1", 3600);
-    // An older download is still staged; the new one fails.
     let current = host(booted(), Some(staged(true)), None);
     h.push(status(&current))
         .push(Scripted::new(download_only(true)).exit_code(1).stderr(
@@ -236,11 +225,8 @@ async fn a_failed_download_keeps_the_check_record_and_reports_the_error() {
     h.fake.assert_finished();
 }
 
-// ----- what a download actually staged ---------------------------------------------------
-
 const MOVED_CSUM: &str = "6666666666666666666666666666666666666666666666666666666666666666";
 
-/// A harness whose `MOVED_CSUM` deployment holds `version` (the build the tag moved to).
 fn with_moved_build(version: &str) -> Harness {
     let mut state = fake_state();
     state
@@ -249,7 +235,6 @@ fn with_moved_build(version: &str) -> Harness {
     Harness::with(state, SharedGrubWriter::new())
 }
 
-/// The tag's new image, `REMOTE` at `version`, staged locked or not.
 fn moved_stage(version: &str, download_only: bool) -> BootEntry {
     BootEntry {
         download_only,
@@ -267,9 +252,6 @@ fn deny(h: &Harness, digest: &str) {
     h.store.write_denylist(&denylist).unwrap();
 }
 
-/// The check found a good build, but the tag moved to one that failed before while the
-/// automatic run downloaded. It stays locked, is never offered or installable, and
-/// `DeferredReason` says why; the timer's run itself succeeded.
 #[tokio::test(start_paused = true)]
 async fn an_automatic_download_that_staged_a_denylisted_build_keeps_it_locked() {
     let newer = "45.20260925.1";
@@ -307,7 +289,6 @@ async fn an_automatic_download_that_staged_a_denylisted_build_keeps_it_locked() 
         Some(REMOTE)
     );
 
-    // Never ready: Apply refuses it, and nothing is armed.
     h.push(status(&staged_denied));
     let error = h
         .run(Op::Apply {
@@ -320,8 +301,6 @@ async fn an_automatic_download_that_staged_a_denylisted_build_keeps_it_locked() 
     h.fake.assert_finished();
 }
 
-/// A user's download staged an older build than the check found (the tag moved back): the
-/// call fails with the reason, which `LastError` and `DeferredReason` keep as well.
 #[tokio::test(start_paused = true)]
 async fn a_user_download_that_staged_an_older_build_says_it_will_not_be_installed() {
     let h = with_moved_build(OLDER_VERSION);
@@ -354,8 +333,6 @@ async fn a_user_download_that_staged_an_older_build_says_it_will_not_be_installe
     h.fake.assert_finished();
 }
 
-/// A bootc that ignored `--download-only` left the new stage set to install, and nothing
-/// armed the counter for it: it is locked again at once.
 #[tokio::test(start_paused = true)]
 async fn a_download_left_unlocked_is_locked_again() {
     let newer = "45.20260925.1";
@@ -390,8 +367,6 @@ async fn a_download_left_unlocked_is_locked_again() {
     assert!(h.grub.calls().is_empty());
     h.fake.assert_finished();
 }
-
-// ----- Apply -----------------------------------------------------------------------------
 
 #[tokio::test(start_paused = true)]
 async fn apply_refuses_a_digest_that_is_not_staged() {
@@ -428,7 +403,6 @@ async fn apply_arms_then_unlocks_then_records_the_intent() {
     .await
     .expect("apply");
 
-    // Armed with one grub2-editenv call, before the unlock (the only other command).
     assert_eq!(h.grub.calls(), [arm_call(STAGED)]);
     assert_eq!(
         h.fake.calls(),
@@ -551,7 +525,6 @@ async fn apply_checks_boot_space_and_waits_for_the_boot_assessment() {
     h.fake.assert_finished();
 }
 
-/// grubenv with Apex's variables set to `vars`.
 fn grubenv_with(vars: &[(&str, &str)]) -> SharedGrubWriter {
     let mut env = SharedGrubWriter::new().env();
     for (name, value) in vars {
@@ -560,10 +533,6 @@ fn grubenv_with(vars: &[(&str, &str)]) -> SharedGrubWriter {
     SharedGrubWriter::with_env(env)
 }
 
-/// The arming precondition's second half (`apex_boot::check_arming`, M1 contract §5): the
-/// running version must be confirmed, because finalizing the stage keeps only the new
-/// deployment and the running one. Each refusal is `PolicyDenied` in plain words, and
-/// nothing is armed, unlocked or recorded.
 #[tokio::test(start_paused = true)]
 async fn apply_refuses_to_arm_on_top_of_an_unconfirmed_or_failed_running_version() {
     let apply = || Op::Apply {
@@ -571,8 +540,7 @@ async fn apply_refuses_to_arm_on_top_of_an_unconfirmed_or_failed_running_version
     };
     let ready = host(booted(), Some(staged(true)), None);
 
-    // grubenv is still armed for the running version: its startup check has not passed
-    // (GRUB counted this boot, the assessment has not confirmed it).
+    // Still armed for the running version: its startup check has not passed.
     let h = Harness::with(
         fake_state(),
         grubenv_with(&[
@@ -601,7 +569,6 @@ async fn apply_refuses_to_arm_on_top_of_an_unconfirmed_or_failed_running_version
     );
     h.fake.assert_finished();
 
-    // health-failure.json names the running version: it failed its startup check.
     let h = Harness::new();
     h.store
         .write_health_failure(&HealthFailureRecord {
@@ -622,7 +589,6 @@ async fn apply_refuses_to_arm_on_top_of_an_unconfirmed_or_failed_running_version
     assert_eq!(h.intent(), None);
     h.fake.assert_finished();
 
-    // The counter's state cannot be interpreted: the precondition cannot be shown.
     let h = Harness::with(
         fake_state(),
         grubenv_with(&[("apex_target", BOOTED), ("apex_counter", "two")]),
@@ -639,9 +605,6 @@ async fn apply_refuses_to_arm_on_top_of_an_unconfirmed_or_failed_running_version
     h.fake.assert_finished();
 }
 
-/// An arming left for another update (one cancelled while its stage was already locked
-/// again) is not about the running version: it does not block, and the new arming
-/// replaces it. A health failure recorded for another digest does not block either.
 #[tokio::test(start_paused = true)]
 async fn apply_arms_over_an_arming_for_another_update() {
     let h = Harness::with(
@@ -672,9 +635,6 @@ async fn apply_arms_over_an_arming_for_another_update() {
     h.fake.assert_finished();
 }
 
-// ----- DiscardStaged -------------------------------------------------------------------
-
-/// `bootc upgrade --download-only` stdout when it locked the applied stage again.
 const RELOCKED: &str = "Image downloaded, but will not be applied on reboot\n";
 
 fn applied_intent(h: &Harness) {
@@ -704,7 +664,6 @@ async fn discard_relocks_then_disarms_and_forgets_the_intent() {
         "discarding never rolls back"
     );
 
-    // Nothing applied: nothing to discard, and nothing is touched.
     h.push(status(&host(booted(), Some(staged(true)), None)));
     assert_eq!(kind(h.run(Op::Discard).await), Some(ErrorKind::NothingToDo));
     assert_eq!(h.grub.calls(), [disarm_call()]);
@@ -713,9 +672,7 @@ async fn discard_relocks_then_disarms_and_forgets_the_intent() {
 
 #[tokio::test(start_paused = true)]
 async fn discard_that_stages_a_newer_locked_digest_still_disarms() {
-    // The re-lock pulls the tag, which has moved on: bootc downloads the newer image and
-    // stages it locked in place of the applied one. Nothing boots next, so the arming for
-    // the applied digest goes, and Staged and the check record follow the new digest.
+    // The re-lock pulls the tag, which has moved on: bootc stages the newer image locked.
     let h = Harness::new();
     applied_intent(&h);
     h.last_check(STAGED, STAGED_VERSION, 3600);
@@ -746,7 +703,6 @@ async fn discard_that_stages_a_newer_locked_digest_still_disarms() {
     h.fake.assert_finished();
 }
 
-/// grubenv as `Apply` leaves it for `digest`: target set, three attempts, not confirmed.
 fn armed_for(digest: &str) -> SharedGrubWriter {
     let grub = SharedGrubWriter::new();
     let mut env = grub.env();
@@ -760,23 +716,19 @@ fn armed_for(digest: &str) -> SharedGrubWriter {
     SharedGrubWriter::with_env(env)
 }
 
-/// The arming `Apply` wrote is still in grubenv.
 fn assert_still_armed(h: &Harness, digest: &str) {
     let env = h.grub.env();
     assert_eq!(env.get_str("apex_target").unwrap(), Some(digest));
     assert_eq!(env.get_str("apex_counter").unwrap(), Some("3"));
 }
 
-/// Regression (the discard blocker): when the channel tag points back at the running image,
-/// bootc prints "No update available.", changes nothing and exits 0, so the applied stage
-/// still installs at the next restart. The arming and the intent must stay, whatever a
-/// status read says, and the call must fail in plain words.
+/// With the tag back at the running image, bootc prints "No update available.", changes
+/// nothing and exits 0: the applied stage still installs at the next restart.
 #[tokio::test(start_paused = true)]
 async fn no_update_available_keeps_the_update_applied_and_armed() {
     let applied = host(booted(), Some(staged(false)), None);
     let relocked = host(booted(), Some(staged(true)), None);
-    // The status after it shows the stage still applied (what bootc does), or locked (a
-    // stale or foreign status): the cancellation is not confirmed either way.
+    // Applied (what bootc does) or locked (a stale status): unconfirmed either way.
     for after in [&applied, &relocked] {
         let h = Harness::with(fake_state(), armed_for(STAGED));
         applied_intent(&h);
@@ -798,7 +750,6 @@ async fn no_update_available_keeps_the_update_applied_and_armed() {
             assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
             assert_eq!(h.properties().state, State::ReadyForReboot);
             assert!(h.properties().last_error.contains("could not be cancelled"));
-            // The tag points at the running image, as bootc said.
             assert_eq!(
                 h.store.read_last_check().unwrap().remote_digest.as_deref(),
                 Some(BOOTED)
@@ -833,8 +784,6 @@ async fn discard_offline_keeps_the_update_applied_and_armed() {
     h.fake.assert_finished();
 }
 
-/// bootc's report and a fresh status must both say the stage is locked. With either one
-/// missing, nothing is disarmed.
 #[tokio::test(start_paused = true)]
 async fn discard_needs_both_bootcs_report_and_the_status() {
     let busy = || {
@@ -845,7 +794,6 @@ async fn discard_needs_both_bootcs_report_and_the_status() {
     let applied = host(booted(), Some(staged(false)), None);
     let relocked = host(booted(), Some(staged(true)), None);
 
-    // bootc reported the stage locked again, but no status confirms it.
     let h = Harness::with(fake_state(), armed_for(STAGED));
     applied_intent(&h);
     h.push(status(&applied))
@@ -863,7 +811,6 @@ async fn discard_needs_both_bootcs_report_and_the_status() {
     assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
     h.fake.assert_finished();
 
-    // The status shows the stage locked, but bootc's output does not say so.
     let h = Harness::with(fake_state(), armed_for(STAGED));
     applied_intent(&h);
     h.push(status(&applied))
@@ -882,7 +829,6 @@ async fn discard_needs_both_bootcs_report_and_the_status() {
     assert_still_armed(&h, STAGED);
     h.fake.assert_finished();
 
-    // bootc reported the lock, the status says the update is still applied.
     let h = Harness::with(fake_state(), armed_for(STAGED));
     applied_intent(&h);
     h.push(status(&applied))
@@ -896,8 +842,6 @@ async fn discard_needs_both_bootcs_report_and_the_status() {
     h.fake.assert_finished();
 }
 
-/// A bootc that ignored `--download-only` staged the tag's newer image unlocked: that is what
-/// boots next, so the counter is armed for it, and the call fails.
 #[tokio::test(start_paused = true)]
 async fn discard_arms_for_another_update_bootc_set_to_install() {
     let h = Harness::with(fake_state(), armed_for(STAGED));
@@ -916,8 +860,6 @@ async fn discard_arms_for_another_update_bootc_set_to_install() {
     assert_still_armed(&h, REMOTE);
     h.fake.assert_finished();
 }
-
-// ----- Rollback and ReportBoot ---------------------------------------------------------
 
 #[tokio::test(start_paused = true)]
 async fn rollback_marks_the_booted_digest_bad_and_disarms() {
@@ -939,8 +881,6 @@ async fn rollback_marks_the_booted_digest_bad_and_disarms() {
     assert_eq!(h.grub.calls(), [disarm_call()]);
     assert_eq!(h.properties().state, State::RollbackQueued);
 
-    // Asking again would swap the order back. The queued version may be older or newer
-    // than the running one, so the answer names neither.
     h.push(status(&queued));
     let error = h.run(Op::Rollback { mark_bad: false }).await.unwrap_err();
     assert_eq!(error.kind(), Some(ErrorKind::NothingToDo));
@@ -951,8 +891,7 @@ async fn rollback_marks_the_booted_digest_bad_and_disarms() {
     h.fake.assert_finished();
 }
 
-/// grubenv as `apex-boot-assess` leaves it when it reports a fallback from `digest`: the
-/// arming, with the hedge `apex_counter=3` written just before the report.
+/// apex-boot-assess writes the hedge `apex_counter=3` before reporting: the full arming.
 fn hedged_for(digest: &str) -> SharedGrubWriter {
     armed_for(digest)
 }
@@ -989,15 +928,10 @@ async fn fallback_report_rolls_back_once_and_denies_the_target() {
         Some((FALLBACK_REASON, NOW))
     );
     assert_eq!(h.intent(), None);
-    // Disarmed by the daemon itself before it replied, so a lost reply cannot leave GRUB
-    // counting (or choosing) the failed target; apex-boot-assess's own disarm afterwards
-    // is the same unset.
     assert_eq!(h.grub.calls(), [disarm_call()]);
     assert_eq!(h.grub.env().get_str("apex_target").unwrap(), None);
     assert_eq!(h.grub.env().get_str("apex_counter").unwrap(), None);
 
-    // The same report again (the assessment retried): no second rollback, and nothing
-    // left to disarm.
     h.push(status(&fixed)).push(status(&fixed));
     h.run(Op::Fallback {
         digest: STAGED.into(),
@@ -1017,8 +951,6 @@ async fn fallback_report_rolls_back_once_and_denies_the_target() {
     h.fake.assert_finished();
 }
 
-/// The reply to the first report was lost, and the assessment wrote its hedge again before
-/// reporting once more: the rollback already happened, so the daemon only disarms.
 #[tokio::test(start_paused = true)]
 async fn a_repeated_fallback_report_disarms_a_hedge_written_again() {
     let h = Harness::with(fake_state(), hedged_for(STAGED));
@@ -1039,9 +971,6 @@ async fn a_repeated_fallback_report_disarms_a_hedge_written_again() {
     h.fake.assert_finished();
 }
 
-/// The counter is disarmed only once the failed target is no longer the default: a failed
-/// `bootc rollback` leaves the hedge in place, and an arming for another update is not the
-/// fallback's to remove.
 #[tokio::test(start_paused = true)]
 async fn a_fallback_disarms_only_its_own_target_and_only_after_the_rollback() {
     let mut fell_back = host(
@@ -1100,7 +1029,6 @@ async fn green_and_red_reports_update_the_health_failure() {
     let record = h.store.read_health_failure().unwrap().unwrap();
     assert_eq!(record.digest, BOOTED);
 
-    // A record apex-boot-assess wrote (with check names) is kept as it is.
     h.store
         .write_health_failure(&HealthFailureRecord {
             digest: BOOTED.into(),
@@ -1142,8 +1070,6 @@ async fn green_and_red_reports_update_the_health_failure() {
     h.fake.assert_finished();
 }
 
-// ----- Check -----------------------------------------------------------------------------
-
 #[tokio::test(start_paused = true)]
 async fn check_is_rate_limited_to_once_a_minute() {
     let h = Harness::new();
@@ -1158,7 +1084,6 @@ async fn check_is_rate_limited_to_once_a_minute() {
     assert_eq!(h.properties().last_check, NOW);
     assert_eq!(h.properties().state, State::UpToDate);
 
-    // Within 60 s: answered at once, bootc is not run.
     h.system.update(|s| s.now = NOW + 59);
     h.run(Op::Check).await.expect("rate-limited check");
     assert_eq!(h.fake.calls().len(), 2);
@@ -1170,9 +1095,6 @@ async fn check_is_rate_limited_to_once_a_minute() {
     h.fake.assert_finished();
 }
 
-/// The rate limit counts successful checks only (`LastCheck`): a retry right after a failed
-/// check (the network is back) must contact the registry, not report a success that never
-/// happened.
 #[tokio::test(start_paused = true)]
 async fn a_failed_check_is_reported_and_a_retry_runs_at_once() {
     let h = Harness::new();
@@ -1195,7 +1117,6 @@ async fn a_failed_check_is_reported_and_a_retry_runs_at_once() {
     let properties = h.properties();
     assert_eq!(properties.last_check, NOW + 20);
     assert_eq!(properties.last_error, "", "cleared by the success");
-    // Now the limit applies.
     h.run(Op::Check).await.expect("rate-limited");
     assert_eq!(
         h.fake
@@ -1208,8 +1129,6 @@ async fn a_failed_check_is_reported_and_a_retry_runs_at_once() {
     h.fake.assert_finished();
 }
 
-/// Two checks at the same time query the registry once, and both callers get the result
-/// of that query, a failure included.
 #[tokio::test(start_paused = true)]
 async fn concurrent_checks_share_one_query_and_its_result() {
     let h = Harness::new();
@@ -1228,11 +1147,8 @@ async fn concurrent_checks_share_one_query_and_its_result() {
     h.fake.assert_finished();
 }
 
-/// Regression for the remote after "no changes": bootc compares the tag with the image
-/// pulled last and prints no digest, while the booted entry's `cachedUpdate` keeps
-/// describing what an old check found. Download an update, then a newer one that replaces
-/// it (the tag moved), restart (the locked stage is dropped), and check: the channel still
-/// offers the newer one, not the one the stale `cachedUpdate` names.
+/// For "no changes" bootc prints no digest, while the booted entry's `cachedUpdate` still
+/// names what an old check found.
 #[tokio::test(start_paused = true)]
 async fn after_a_replaced_download_and_a_restart_the_check_offers_what_was_pulled_last() {
     const NEWER: &str = "45.20260925.1";
@@ -1252,8 +1168,7 @@ async fn after_a_replaced_download_and_a_restart_the_check_offers_what_was_pulle
             "Staged but not queued for next boot: ostree-image-signed:docker://{STABLE_IMAGE}\n  Version: {version}\n  Digest: {digest}\n"
         ))
     };
-    // bootc stored the first check's find on the commit the reference pointed at then:
-    // the booted one. Nothing ever clears it.
+    // bootc stored the first check's find on the booted commit and never clears it.
     let mut stale_booted = booted();
     stale_booted.cached_update = Some(image(STAGED, STAGED_VERSION));
     let first = host(stale_booted.clone(), Some(staged(true)), None);
@@ -1263,7 +1178,6 @@ async fn after_a_replaced_download_and_a_restart_the_check_offers_what_was_pulle
     };
     let second = host(stale_booted.clone(), Some(newer_stage), None);
 
-    // Check, then download the update.
     h.push(available(STAGED_VERSION, STAGED))
         .push(status(&host(stale_booted.clone(), None, None)));
     h.run(Op::Check).await.expect("check");
@@ -1276,7 +1190,6 @@ async fn after_a_replaced_download_and_a_restart_the_check_offers_what_was_pulle
     .await
     .expect("download");
 
-    // The tag moves on: check, and download the newer build in place of the first.
     h.system.update(|s| s.now = NOW + 120);
     h.push(available(NEWER, REMOTE)).push(status(&first));
     h.run(Op::Check).await.expect("second check");
@@ -1290,8 +1203,7 @@ async fn after_a_replaced_download_and_a_restart_the_check_offers_what_was_pulle
     .expect("second download");
     assert_eq!(h.properties().staged.digest.as_deref(), Some(REMOTE));
 
-    // Restart: the locked stage is dropped. The tag still points at the newer build, which
-    // is the image pulled last, so bootc says "no changes".
+    // The restart drops the locked stage; the tag still points at the image pulled last.
     let h = h.reboot(NOW + 3600);
     h.push(Scripted::new(BootcCommand::UpgradeCheck).stdout(format!(
         "No changes in: ostree-image-signed:docker://{STABLE_IMAGE}\n"
@@ -1309,8 +1221,6 @@ async fn after_a_replaced_download_and_a_restart_the_check_offers_what_was_pulle
     h.fake.assert_finished();
 }
 
-/// "No changes" with nothing recorded (a fresh installation): the tag's image is unknown,
-/// and a `cachedUpdate` is not taken for it.
 #[tokio::test(start_paused = true)]
 async fn no_changes_without_a_record_leaves_the_remote_unknown() {
     let h = Harness::new();
@@ -1329,16 +1239,14 @@ async fn no_changes_without_a_record_leaves_the_remote_unknown() {
     h.fake.assert_finished();
 }
 
-// ----- the queue -------------------------------------------------------------------------
-
 #[tokio::test(start_paused = true)]
 async fn operations_run_one_at_a_time() {
     let h = Harness::new();
     let current = host(booted(), None, Some(rollback()));
     let mut queued = current.clone();
     queued.status.rollback_queued = true;
-    // If Rollback started while Check waits for bootc, it would take the Status meant for
-    // the check and then find Status, not Rollback, at the head of the script.
+    // A Rollback started during the check would take the check's Status and then fail on
+    // the script's order.
     h.push(
         Scripted::new(BootcCommand::UpgradeCheck)
             .stdout("No changes in: x\n")
@@ -1366,8 +1274,6 @@ async fn operations_run_one_at_a_time() {
     h.fake.assert_finished();
 }
 
-/// A Check during a download is `Busy`, not a success: the download may stop at a gate
-/// without contacting the registry, so it answers nothing about the channel.
 #[tokio::test(start_paused = true)]
 async fn a_download_makes_other_operations_busy() {
     let h = Harness::new();
@@ -1423,18 +1329,15 @@ async fn no_status_is_read_while_the_daemons_own_bootc_command_runs() {
         let engine = h.daemon.engine();
         assert!(engine.bootc_busy());
         assert_eq!(h.daemon.queue().running(), Some(OpKind::Download));
-        // Let the published state age, so every read would like a refresh.
+        // Aged, so every read would like a refresh.
         tokio::time::sleep(REFRESH_MAX_AGE).await;
         assert!(engine.refresh_due());
         assert!(!h.daemon.read_may_refresh());
-        // What a property read and GetChanges do: nothing is queued, nothing waits.
         h.daemon.refresh_if_due();
         h.daemon.ensure_fresh().await;
-        // Even a refresh that bypasses the queue does not start bootc status.
         let error = engine.refresh(&CancelToken::new()).await.unwrap_err();
         assert_eq!(error.kind(), Some(ErrorKind::Busy));
         assert_eq!(error.message(), STATUS_SKIPPED);
-        // The skip is not a failure: the state and LastError stay as they were.
         let properties = h.properties();
         assert_eq!(properties.state, State::Downloading);
         assert_eq!(properties.last_error, "");
@@ -1442,7 +1345,6 @@ async fn no_status_is_read_while_the_daemons_own_bootc_command_runs() {
     };
     let (result, ()) = tokio::join!(download, meanwhile);
     result.expect("download");
-    // The operation read the status itself once bootc had finished.
     assert!(!h.daemon.engine().bootc_busy());
     assert_eq!(h.properties().state, State::Staged);
     assert_eq!(
@@ -1455,8 +1357,6 @@ async fn no_status_is_read_while_the_daemons_own_bootc_command_runs() {
     );
     h.fake.assert_finished();
 }
-
-// ----- SwitchChannel ---------------------------------------------------------------------
 
 #[tokio::test(start_paused = true)]
 async fn switch_channel_uses_the_compile_time_reference() {
@@ -1504,7 +1404,6 @@ async fn switch_channel_uses_the_compile_time_reference() {
 
     h.fake.assert_finished();
 
-    // An unknown Fedora release has no compile-time reference.
     let fresh = Harness::with(
         {
             let mut state = fake_state();
@@ -1524,8 +1423,6 @@ async fn switch_channel_uses_the_compile_time_reference() {
     fresh.fake.assert_finished();
 }
 
-// ----- refresh, Ping and GetChanges -------------------------------------------------------
-
 #[tokio::test(start_paused = true)]
 async fn an_unreadable_status_is_an_error_state_and_fails_ping() {
     let h = Harness::new();
@@ -1537,7 +1434,6 @@ async fn an_unreadable_status_is_an_error_state_and_fails_ping() {
         Some(ErrorKind::Internal)
     );
 
-    // A good status clears it.
     h.refresh(&host(booted(), None, None)).await;
     assert_eq!(h.properties().state, State::UpToDate);
     h.daemon.engine().ping().await.expect("ping");
@@ -1562,7 +1458,6 @@ async fn a_busy_sysroot_keeps_the_last_known_state() {
 #[tokio::test(start_paused = true)]
 async fn changes_between_booted_and_staged_manifests() {
     let h = Harness::new();
-    // Before the first refresh nothing is known: that is not "nothing staged".
     assert_eq!(
         h.daemon.engine().get_changes().await.unwrap_err().kind(),
         Some(ErrorKind::Busy)
@@ -1604,11 +1499,6 @@ async fn published_properties_snapshot() {
     h.fake.assert_finished();
 }
 
-// ----- Apply: what the status says after the unlock ----------------------------------------
-
-/// bootc unlocks the stage in one step early on. A bootc that dies afterwards (killed at
-/// shutdown, a timeout) has still unlocked it: the arming protects that restart and stays,
-/// and the call reports what will happen.
 #[tokio::test(start_paused = true)]
 async fn apply_keeps_the_arming_when_bootc_fails_after_unlocking() {
     let h = Harness::new();
@@ -1627,8 +1517,6 @@ async fn apply_keeps_the_arming_when_bootc_fails_after_unlocking() {
     h.fake.assert_finished();
 }
 
-/// bootc failed and the status cannot be read: the stage may be unlocked, so the arming
-/// stays (an arming whose stage does not boot is cleared by the next boot assessment).
 #[tokio::test(start_paused = true)]
 async fn apply_keeps_the_arming_when_the_outcome_cannot_be_confirmed() {
     let h = Harness::new();
@@ -1654,8 +1542,6 @@ async fn apply_keeps_the_arming_when_the_outcome_cannot_be_confirmed() {
     h.fake.assert_finished();
 }
 
-/// `SIGTERM` during `Apply` (`systemctl stop`, shutdown): closing the queue cancels bootc.
-/// What the arming does then is decided by a status read with a token of its own.
 #[tokio::test(start_paused = true)]
 async fn a_shutdown_during_apply_decides_on_a_fresh_status() {
     for (unlocked, grub, intent) in [
@@ -1682,9 +1568,6 @@ async fn a_shutdown_during_apply_decides_on_a_fresh_status() {
     }
 }
 
-/// Another root bootc run restaged between the status read and the unlock, so bootc
-/// unlocked another digest. The counter follows what actually boots next, so a failure of it
-/// falls back and is denylisted under its own digest; the call does not claim success.
 #[tokio::test(start_paused = true)]
 async fn apply_arms_for_another_digest_that_bootc_unlocked() {
     let h = Harness::new();
@@ -1727,9 +1610,6 @@ async fn apply_disarms_when_bootc_claims_success_but_nothing_is_applied() {
     h.fake.assert_finished();
 }
 
-// ----- channel switches --------------------------------------------------------------------
-
-/// `entry` following `reference` instead of the stable image.
 fn following(mut entry: BootEntry, reference: &ImageRef) -> BootEntry {
     if let Some(image) = &mut entry.image {
         image.image.image = reference.to_string();
@@ -1737,10 +1617,6 @@ fn following(mut entry: BootEntry, reference: &ImageRef) -> BootEntry {
     entry
 }
 
-/// stable and testing point at the same build (stable builds are promoted testing builds),
-/// so `SwitchChannel` stages the running image under the other reference. `Apply` installs
-/// it without arming: identical content has nothing to prove, and the arming precondition
-/// needs a different image.
 #[tokio::test(start_paused = true)]
 async fn a_channel_switch_to_the_running_build_installs_without_arming() {
     let mut state = fake_state();
@@ -1773,9 +1649,6 @@ async fn a_channel_switch_to_the_running_build_installs_without_arming() {
     h.fake.assert_finished();
 }
 
-/// Switching from testing to stable, which is at an older build: the administrator
-/// confirmed the switch, so the version check is waived for this stage, while every other
-/// gate still applies, and the counter is armed as for any other image.
 #[tokio::test(start_paused = true)]
 async fn a_channel_switch_to_an_older_build_installs_behind_the_other_gates() {
     let mut state = fake_state();
@@ -1818,11 +1691,6 @@ async fn a_channel_switch_to_an_older_build_installs_behind_the_other_gates() {
     h.fake.assert_finished();
 }
 
-// ----- Rollback after a failed update --------------------------------------------------------
-
-/// After a fallback the failed update is still installed, as the rollback deployment, and
-/// newer than the running one. Rolling back to it would boot a denylisted image without
-/// the boot counter.
 #[tokio::test(start_paused = true)]
 async fn rollback_refuses_a_deployment_that_failed_before() {
     let h = Harness::new();
@@ -1873,11 +1741,6 @@ async fn rollback_refuses_a_deployment_that_failed_before() {
     h.fake.assert_finished();
 }
 
-// ----- the first refresh ---------------------------------------------------------------------
-
-/// Reads right after activation wait for the first refresh, whose `bootc status` takes a
-/// while, instead of answering with placeholders; a first refresh that never ends delays
-/// them by at most `PING_WAIT` in total.
 #[tokio::test(start_paused = true)]
 async fn reads_wait_for_the_first_refresh_but_not_forever() {
     let h = Harness::new();
@@ -1911,10 +1774,6 @@ async fn reads_wait_for_the_first_refresh_but_not_forever() {
     h.daemon.shutdown();
 }
 
-// ----- Apply requests that cannot succeed ------------------------------------------------------
-
-/// Any active-session process may call `Apply` without a prompt; a digest the fresh state
-/// refutes is answered at once, without queueing a full refresh.
 #[tokio::test(start_paused = true)]
 async fn an_apply_the_fresh_state_refutes_never_reaches_the_queue() {
     let h = Harness::new();
@@ -1945,10 +1804,6 @@ async fn an_apply_the_fresh_state_refutes_never_reaches_the_queue() {
     h.fake.assert_finished();
 }
 
-// ----- text from outside -----------------------------------------------------------------------
-
-/// A registry (or a proxy) controls part of bootc's error line. NUL would make the
-/// property undecodable for zbus clients; CR and C1 controls would rewrite the terminal.
 #[tokio::test(start_paused = true)]
 async fn text_from_bootc_reaches_last_error_without_control_characters() {
     let h = Harness::new();
@@ -1968,11 +1823,7 @@ async fn text_from_bootc_reaches_last_error_without_control_characters() {
     h.fake.assert_finished();
 }
 
-// ----- state files whose directory flush fails --------------------------------------------------
-
-/// The real state directory, except that every write and removal reports
-/// `StoreError::NotFlushed` after it happened: the rename (or removal) is done and visible,
-/// only the directory `fsync` failed.
+/// Every write and removal happens, then reports `NotFlushed`.
 #[derive(Debug)]
 struct UnflushedStore(StateDir);
 
@@ -2025,9 +1876,6 @@ impl apex_updated::store::Store for UnflushedStore {
     }
 }
 
-/// A change whose directory flush failed is made (readers see it), so the daemon goes on as
-/// if it had been saved and only warns: marking a version bad does not stop the rollback,
-/// and acknowledging or reporting a boot does not fail.
 #[tokio::test(start_paused = true)]
 async fn a_change_whose_directory_flush_failed_counts_as_made() {
     let dir = tempfile::tempdir().unwrap();
@@ -2082,9 +1930,6 @@ async fn a_change_whose_directory_flush_failed_counts_as_made() {
     fake.assert_finished();
 }
 
-// ----- a panicking operation -------------------------------------------------------------------
-
-/// A runner with a bug.
 #[derive(Debug)]
 struct PanickingRunner;
 
@@ -2096,9 +1941,6 @@ impl CommandRunner for PanickingRunner {
     }
 }
 
-/// A panic ends the worker. Nothing may then wait forever: callers of the panicking
-/// operation (and those that joined it) get an error, new work fails at once, `Ping`
-/// fails, and the worker's handle completes, which `main` treats as fatal.
 #[tokio::test(start_paused = true)]
 async fn a_panicking_operation_stops_the_service_instead_of_wedging_it() {
     let dir = tempfile::tempdir().unwrap();

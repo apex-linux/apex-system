@@ -17,8 +17,7 @@ name = "apex-updated"
 path = "src/main.rs"
 
 [features]
-# Exposes `apex_updated::testing`: the allow-all authorizer and fake providers. Only the
-# crate's own tests enable it (self dev-dependency below); the daemon never does.
+# The crate's own tests enable it through the self dev-dependency; the daemon never does.
 testing = []
 
 [dependencies]
@@ -44,8 +43,7 @@ apex-updated = { path = ".", features = ["testing"] }
 apex-bootc = { workspace = true, features = ["testing"] }
 insta.workspace = true
 proptest.workspace = true
-# Well-formedness and content checks of the policy and bus configuration files; the same
-# version apex-dbus already uses, so nothing new enters Cargo.lock.
+# The version apex-dbus uses, so nothing new enters Cargo.lock.
 quick-xml = "0.42.0"
 serde_json.workspace = true
 tempfile.workspace = true

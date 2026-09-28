@@ -1,6 +1,3 @@
-//! The published properties of `io.github.sekirokenjii.Apex.Update1` and the pure rules
-//! that derive them.
-
 use std::collections::HashMap;
 
 use apex_dbus::{Channel, Deployment, State};
@@ -11,37 +8,25 @@ use zbus::zvariant::Value;
 use crate::civil::unix_from_yyyymmdd;
 use crate::text::display_text;
 
-/// Every property of the interface, as last published.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Properties {
-    /// `State`.
     pub state: State,
-    /// `Progress`: `[0, 1]` while downloading with known progress, otherwise -1.
+    /// In `[0, 1]` while downloading with known progress, otherwise -1.
     pub progress: f64,
-    /// `Booted`.
     pub booted: Deployment,
-    /// `Staged`.
     pub staged: Deployment,
-    /// `Rollback`.
     pub rollback: Deployment,
-    /// `Available`.
     pub available: Deployment,
-    /// `Channel`.
     pub channel: Channel,
-    /// `LastCheck`: Unix seconds of the last successful check, 0 if never.
+    /// Unix seconds of the last successful check, 0 if never.
     pub last_check: u64,
-    /// `DeferredReason`.
     pub deferred_reason: String,
-    /// `LastError`.
     pub last_error: String,
-    /// `Stale`.
     pub stale: bool,
-    /// `HealthFailure`: the failed digest, or "".
     pub health_failure: String,
 }
 
 impl Default for Properties {
-    /// What a client sees before the first refresh: state `unknown`, progress unknown.
     fn default() -> Self {
         Self {
             state: State::Unknown,
@@ -61,20 +46,14 @@ impl Default for Properties {
 }
 
 impl Properties {
-    /// The D-Bus names and values of the properties that differ from `previous`, for one
-    /// `PropertiesChanged` signal.
     pub fn changed_since(&self, previous: &Self) -> HashMap<&'static str, Value<'static>> {
         self.entries(Some(previous))
     }
 
-    /// Every property with its value, for the signal a new service instance sends first.
     pub fn all(&self) -> HashMap<&'static str, Value<'static>> {
         self.entries(None)
     }
 
-    /// The same values with every string made safe for D-Bus and terminals
-    /// ([`display_text`]): the messages, and the image labels and references in the
-    /// deployment dictionaries, come from bootc, the registry and the state files.
     #[must_use]
     pub fn sanitized(mut self) -> Self {
         for deployment in [
@@ -107,7 +86,6 @@ impl Properties {
         self
     }
 
-    /// The properties that differ from `previous`, or all of them without one.
     fn entries(&self, previous: Option<&Self>) -> HashMap<&'static str, Value<'static>> {
         let all = previous.is_none();
         let previous = previous.unwrap_or(self);
@@ -178,7 +156,6 @@ impl Properties {
     }
 }
 
-/// The contract value of an engine state (the two enums spell the same twelve values).
 pub fn dbus_state(state: apex_update::State) -> State {
     use apex_update::State as S;
     match state {
@@ -200,24 +177,12 @@ pub fn dbus_state(state: apex_update::State) -> State {
 /// What the daemon itself is doing, which overrides the derived state.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Work {
-    /// Nothing that changes the published state.
     Idle,
-    /// Downloading an image; `progress` is the overall fraction once known.
-    Downloading {
-        /// Overall progress in `[0, 1]`, if bootc reports it.
-        progress: Option<f64>,
-    },
+    Downloading { progress: Option<f64> },
 }
 
-/// The `State` property.
-///
-/// - `error` when the last refresh failed in a way that leaves the state unknown;
-/// - `downloading` while a download runs;
-/// - `unknown` before the first successful refresh;
-/// - otherwise `apex_update::derive_state`.
-///
-/// A failed operation does not turn the state into `error`: the state stays what the
-/// system is (for example `available`) and `LastError` says what went wrong.
+/// Only a failed refresh is `error`: after a failed operation the state stays what the
+/// system is, and `LastError` says what went wrong.
 pub fn state(snapshot: Option<&SystemSnapshot>, work: Work, refresh_failed: bool) -> State {
     if refresh_failed {
         return State::Error;
@@ -228,7 +193,6 @@ pub fn state(snapshot: Option<&SystemSnapshot>, work: Work, refresh_failed: bool
     snapshot.map_or(State::Unknown, |s| dbus_state(apex_update::derive_state(s)))
 }
 
-/// The `Progress` property.
 pub fn progress(work: Work) -> f64 {
     match work {
         Work::Downloading {
@@ -238,12 +202,8 @@ pub fn progress(work: Work) -> f64 {
     }
 }
 
-/// The `DeferredReason` property: why an automatic download of the available update is
-/// deferred right now, or "".
-///
-/// It is derived from the current snapshot with the same rule the automatic run uses
-/// (`apex_update::plan_after_check`), rather than remembered from the last timer run, so it
-/// survives the daemon's idle exit and follows the charger and the network as they change.
+/// Derived with the automatic run's own rule rather than remembered from the last run, so it
+/// survives the idle exit and follows the charger and the network as they change.
 pub fn deferred_reason(snapshot: Option<&SystemSnapshot>) -> String {
     let Some(snapshot) = snapshot.filter(|s| is_available(s)) else {
         return String::new();
@@ -254,12 +214,8 @@ pub fn deferred_reason(snapshot: Option<&SystemSnapshot>) -> String {
     }
 }
 
-/// Why the staged update will not be installed although it was downloaded: `Apply`'s
-/// denylist and version gates (`apex_update::validate_apply`) on the digest bootc actually
-/// staged, which may not be the one the download's gates saw (the channel tag can move
-/// between the check and the pull). `switch`: the stage comes from `SwitchChannel`, for
-/// which `Apply` waives the version gate, so only the denylist applies. `None` when
-/// nothing is staged or the stage may be installed.
+/// `Apply`'s denylist and version gates on the digest bootc actually staged: the tag can move
+/// between the check and the pull. `Apply` waives the version gate for a channel `switch`.
 pub fn stage_refusal(snapshot: &SystemSnapshot, switch: bool) -> Option<String> {
     let host = &snapshot.host;
     let staged = host.staged.as_ref()?;
@@ -286,10 +242,6 @@ pub fn stage_refusal(snapshot: &SystemSnapshot, switch: bool) -> Option<String> 
     }
 }
 
-/// The `DeferredReason` property: [`deferred_reason`], or when that is empty and a locked
-/// stage will not be installed, [`stage_refusal`] for it (after a download that staged a
-/// denylisted or older build than the check had found). An unlocked stage is never
-/// explained this way: it is set to install.
 pub fn deferred_reason_or_stage(snapshot: Option<&SystemSnapshot>, switch: bool) -> String {
     let reason = deferred_reason(snapshot);
     if !reason.is_empty() {
@@ -306,8 +258,6 @@ pub fn deferred_reason_or_stage(snapshot: Option<&SystemSnapshot>, switch: bool)
         .unwrap_or_default()
 }
 
-/// The newest build time known on the channel: the latest of the given image build times
-/// and the dates inside the given versions.
 pub fn newest_build_time(
     timestamps: impl IntoIterator<Item = Option<u64>>,
     versions: impl IntoIterator<Item = Option<Version>>,
@@ -318,9 +268,7 @@ pub fn newest_build_time(
     timestamps.into_iter().chain(from_versions).flatten().max()
 }
 
-/// The `Stale` property: a check has run, and the newest build it knows of is more than
-/// seven days old (`apex_update::is_stale`). Without any check there is no evidence either
-/// way, so it is `false`.
+/// Without any check there is no evidence either way.
 pub fn stale(last_check_at: u64, newest_build: Option<u64>, now: u64) -> bool {
     last_check_at != 0 && newest_build.is_some_and(|built| is_stale(built, now))
 }
@@ -422,7 +370,6 @@ mod tests {
         assert_eq!(deferred_reason(None), "");
     }
 
-    /// A snapshot with `version` staged (locked unless `applied`) under digest `sha256:s`.
     fn staged_snapshot(version: &str, applied: bool) -> SystemSnapshot {
         let mut s = available_snapshot();
         s.metered = Some(false);
@@ -450,9 +397,7 @@ mod tests {
             "The downloaded update 45.20260918.1 is not newer than the installed version 45.20260920.1, so it will not be installed."
         );
         assert_eq!(deferred_reason_or_stage(Some(&older), false), reason);
-        // Equal is not newer either.
         assert!(stage_refusal(&staged_snapshot("45.20260920.1", false), false).is_some());
-        // A channel switch may be older: Apply waives the version check for it.
         assert_eq!(stage_refusal(&older, true), None);
 
         let mut unversioned = staged_snapshot("45.20260924.1", false);
@@ -465,7 +410,6 @@ mod tests {
                 .contains("no version number")
         );
 
-        // A digest that failed before is refused even for a channel switch.
         let mut denied = staged_snapshot("45.20260924.1", false);
         denied.denylist.insert(apex_update::DenyEntry {
             digest: "sha256:s".into(),
@@ -481,7 +425,6 @@ mod tests {
             );
         }
 
-        // An applied stage is set to install; it is never explained as refused.
         let applied = staged_snapshot("45.20260918.1", true);
         assert!(stage_refusal(&applied, false).is_some());
         assert_eq!(deferred_reason_or_stage(Some(&applied), false), "");
@@ -491,7 +434,6 @@ mod tests {
     #[test]
     fn a_deferred_download_is_explained_before_a_refused_stage() {
         let mut s = staged_snapshot("45.20260918.1", false);
-        // A newer update is available and deferred (metered): that reason comes first.
         s.metered = Some(true);
         s.remote = Some(RemoteView {
             digest: "sha256:r".into(),
@@ -522,10 +464,8 @@ mod tests {
         }
     }
 
-    /// A change to one field of [`Properties`].
     type Edit = fn(&mut Properties);
 
-    /// Every property of the contract XML, with its signature.
     fn contract_properties() -> Vec<(String, String)> {
         let node = zbus_xml::Node::try_from(apex_dbus::INTROSPECTION_XML).unwrap();
         node.interfaces()[0]
@@ -538,7 +478,6 @@ mod tests {
     #[test]
     fn every_contract_property_is_signalled_alone_when_it_changes() {
         let before = Properties::default();
-        // One change per property, each touching exactly one field.
         let edits: [(&str, Edit); 12] = [
             ("State", |p| p.state = State::Staged),
             ("Progress", |p| p.progress = 0.5),
@@ -577,7 +516,6 @@ mod tests {
             assert!(after.changed_since(&after).is_empty());
             edit(&mut all);
         }
-        // Everything at once: one signal naming all twelve.
         let mut names: Vec<String> = all
             .changed_since(&before)
             .into_keys()

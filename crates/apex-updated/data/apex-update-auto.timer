@@ -1,7 +1,3 @@
-# apex-update-auto.timer: the automatic update run (ARCHITECTURE §5.2), 15 minutes after
-# boot and then daily. Installed as /usr/lib/systemd/system/apex-update-auto.timer and
-# enabled by preset.
-
 [Unit]
 Description=Daily Apex update check
 Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0008-update-policy.md
@@ -9,9 +5,7 @@ Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/000
 [Timer]
 OnBootSec=15min
 OnCalendar=daily
-# Spread the registry load and keep the run away from the exact start of the day.
 RandomizedDelaySec=1h
-# A run missed while the laptop was off or suspended happens soon after it wakes.
 Persistent=true
 
 [Install]

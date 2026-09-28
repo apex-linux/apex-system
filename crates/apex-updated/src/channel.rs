@@ -1,34 +1,21 @@
-//! Channels: which one the booted image follows, and the compile-time image reference
-//! `SwitchChannel` switches to.
-//!
-//! The references are the `apex-bootc` constants for Fedora 45 (contract §1). The Fedora
-//! release comes from the running system (its manifest, else os-release), never from the
-//! client, and the table only has the releases this build knows, so a client can never
-//! make the daemon follow anything but the two signed Apex repositories.
-
 use apex_bootc::{APEX_STABLE, APEX_TESTING, APEX_TESTING_REPOSITORY, Host, ImageRef};
 use apex_dbus::Channel;
 
-/// The channel references of one Fedora release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelRefs {
-    /// The Fedora release, e.g. 45.
     pub fedora: u32,
-    /// The stable (release-key) reference.
     pub stable: ImageRef,
-    /// The testing (CI-key) reference.
     pub testing: ImageRef,
 }
 
-/// Every Fedora release this build can switch channels on. Major upgrades are a manual
-/// runbook until Fedora 46 branches (ARCHITECTURE §5.2), so there is one row.
+/// Compiled in, and looked up by the running system's release, so no client can make the
+/// daemon follow anything but the two signed Apex repositories.
 pub static CHANNEL_REFS: [ChannelRefs; 1] = [ChannelRefs {
     fedora: 45,
     stable: APEX_STABLE,
     testing: APEX_TESTING,
 }];
 
-/// The reference to switch to for `channel` on Fedora `fedora`, if this build knows it.
 pub fn channel_target(channel: Channel, fedora: u32) -> Option<ImageRef> {
     let refs = CHANNEL_REFS.iter().find(|refs| refs.fedora == fedora)?;
     Some(match channel {
@@ -37,21 +24,14 @@ pub fn channel_target(channel: Channel, fedora: u32) -> Option<ImageRef> {
     })
 }
 
-/// Whether `image` is the channel reference of a known Fedora release (what
-/// `SwitchChannel` switches to).
 pub fn is_channel_reference(image: &str) -> bool {
     CHANNEL_REFS
         .iter()
         .any(|refs| refs.stable.to_string() == image || refs.testing.to_string() == image)
 }
 
-/// Whether the staged deployment comes from a channel switch: it follows a channel
-/// reference, and a different one than the booted deployment.
-///
-/// `bootc upgrade` keeps the booted deployment's reference, so only `bootc switch` makes
-/// them differ: `SwitchChannel` (polkit `switch-channel`, `auth_admin`), or root running
-/// bootc by hand. `Apply` relies on that: it installs such a stage even when it holds the
-/// running build or an older one.
+/// `bootc upgrade` keeps the booted deployment's reference, so only `bootc switch` stages
+/// one that follows another reference.
 pub fn is_channel_switch(host: &Host) -> bool {
     let booted = host
         .booted()
@@ -65,8 +45,7 @@ pub fn is_channel_switch(host: &Host) -> bool {
     }
 }
 
-/// The repository part of an image reference: without `@digest` and without the `:tag` of
-/// the last path component (a `:` before the first `/` is a registry port).
+/// Without `@digest` and `:tag`; a `:` before the last `/` belongs to a registry port.
 pub fn repository_of(image: &str) -> &str {
     let without_digest = image.split_once('@').map_or(image, |(repo, _)| repo);
     let last_slash = without_digest.rfind('/').map_or(0, |i| i + 1);
@@ -76,12 +55,8 @@ pub fn repository_of(image: &str) -> &str {
     }
 }
 
-/// The channel an image reference belongs to.
-///
-/// The contract has two values, so anything that is not the testing repository reports
-/// `stable`. A foreign reference cannot be updated anyway: the strict signature policy
-/// rejects every repository but the two Apex ones, and the `Booted` property shows the
-/// actual reference.
+/// Anything but the testing repository is `stable`: the signature policy rejects foreign
+/// repositories anyway, and `Booted` shows the actual reference.
 pub fn channel_of_image(image: &str) -> Channel {
     if repository_of(image) == APEX_TESTING_REPOSITORY {
         Channel::Testing
@@ -90,8 +65,6 @@ pub fn channel_of_image(image: &str) -> Channel {
     }
 }
 
-/// `VERSION_ID` of an os-release file, as a number (`45`, `"45"`); `None` when missing or
-/// not a plain integer (for example `rawhide`).
 pub fn os_release_version_id(os_release: &str) -> Option<u32> {
     os_release.lines().find_map(|line| {
         let value = line.trim().strip_prefix("VERSION_ID=")?;
@@ -181,10 +154,8 @@ mod tests {
         let testing = APEX_TESTING.to_string();
         assert!(is_channel_switch(&host(&stable, Some(&testing))));
         assert!(is_channel_switch(&host(&testing, Some(&stable))));
-        // An ordinary upgrade keeps the reference.
         assert!(!is_channel_switch(&host(&stable, Some(&stable))));
         assert!(!is_channel_switch(&host(&stable, None)));
-        // Only the two channel references count, not anything root switched to by hand.
         assert!(!is_channel_switch(&host(
             &stable,
             Some("ghcr.io/sekirokenjii/apex-testing:sha-0123456789ab-7")

@@ -1,18 +1,7 @@
-//! Mapping of every internal failure onto the contract's D-Bus errors
-//! (`io.github.sekirokenjii.Apex.Update1.Error.<Kind>`), with messages a person can read.
-
 use apex_bootc::{BootcError, CommandKind};
 use apex_dbus::{ApexError, ErrorKind};
 use apex_update::{ApplyError, Deferral, DiscardError, DownloadError, StoreError};
 
-/// A bootc failure as a D-Bus error.
-///
-/// | bootc | D-Bus |
-/// |---|---|
-/// | `Busy` (sysroot lock held) | `Busy` |
-/// | `Network`, and `Timeout` of a command that talks to the registry | `Network` |
-/// | `Spawn`, `InvalidStatus`, `Cancelled` | `Internal` |
-/// | everything else | `Bootc` |
 pub fn from_bootc(error: &BootcError) -> ApexError {
     let message = error.to_string();
     let kind = match error {
@@ -36,7 +25,6 @@ fn talks_to_registry(command: CommandKind) -> bool {
     )
 }
 
-/// A state-file failure: `Internal`, with the underlying cause appended.
 pub fn from_store(error: &StoreError) -> ApexError {
     ApexError::Internal(format!(
         "The update records in /var/lib/apex could not be used: {}",
@@ -44,12 +32,10 @@ pub fn from_store(error: &StoreError) -> ApexError {
     ))
 }
 
-/// A gate refusal: `PolicyDenied` with the gate's reason as the message.
 pub fn from_deferral(deferral: &Deferral) -> ApexError {
     ApexError::PolicyDenied(deferral.reason.clone())
 }
 
-/// `Download` refusals: nothing to download is `NothingToDo`, a gate is `PolicyDenied`.
 pub fn from_download(error: &DownloadError) -> ApexError {
     match error {
         DownloadError::NothingToDownload => ApexError::NothingToDo(error.to_string()),
@@ -57,12 +43,6 @@ pub fn from_download(error: &DownloadError) -> ApexError {
     }
 }
 
-/// `Apply` refusals, as the `apex-update` documentation maps them.
-///
-/// A downgrade is `PolicyDenied`: moving to an older version of the same channel needs the
-/// separate `downgrade` polkit action, and M1 offers no method that uses it. (A stage made
-/// by `SwitchChannel` never gets here: the administrator confirmed it, see the engine's
-/// `Apply`.)
 pub fn from_apply(error: &ApplyError) -> ApexError {
     match error {
         ApplyError::NothingStaged | ApplyError::AlreadyApplied => {
@@ -71,6 +51,7 @@ pub fn from_apply(error: &ApplyError) -> ApexError {
         ApplyError::DigestMismatch { expected, staged } => ApexError::DigestMismatch(format!(
             "{error} (reviewed {expected}, downloaded {staged})"
         )),
+        // A downgrade needs the `downgrade` polkit action, which no method uses yet.
         ApplyError::Downgrade { .. } => ApexError::PolicyDenied(format!(
             "{error} Installing an older version is not supported."
         )),
@@ -78,7 +59,6 @@ pub fn from_apply(error: &ApplyError) -> ApexError {
     }
 }
 
-/// `DiscardStaged` refusals.
 pub fn from_discard(error: &DiscardError) -> ApexError {
     match error {
         DiscardError::NothingStaged | DiscardError::NotApplied => {
@@ -88,17 +68,12 @@ pub fn from_discard(error: &DiscardError) -> ApexError {
     }
 }
 
-/// `Internal` with `context` and the error's source chain.
 pub fn internal(context: &str, error: &dyn std::error::Error) -> ApexError {
     ApexError::Internal(format!("{context}: {}", with_sources(error)))
 }
 
-/// Whether a failed operation is recorded in `LastError`.
-///
-/// Refusals (`Busy`, `NotAuthorized`, `PolicyDenied`, `NothingToDo`, `InvalidArgument`,
-/// `DigestMismatch`) go only to the caller, who asked and gets the answer. Failures of the
-/// work itself (`Bootc`, `Network`, `Internal`) are also kept in `LastError`, because the
-/// caller may be the timer, which has no one to tell.
+/// Whether `LastError` keeps it: a refusal goes only to the caller, but a failure of the work
+/// itself may have been the timer's, which has no one to tell.
 pub fn is_recorded(error: &ApexError) -> bool {
     matches!(
         error.kind(),
@@ -106,8 +81,7 @@ pub fn is_recorded(error: &ApexError) -> bool {
     )
 }
 
-/// `error: source: source…`, skipping a source whose text the message already contains
-/// (many errors print their source themselves).
+/// Skips a source whose text is already there: many errors print their source themselves.
 pub fn with_sources(error: &dyn std::error::Error) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
@@ -122,7 +96,6 @@ pub fn with_sources(error: &dyn std::error::Error) -> String {
     text
 }
 
-/// Upper-cases the first character, so bootc's lower-case messages read as sentences.
 fn capitalize(text: &str) -> String {
     let mut chars = text.chars();
     match chars.next() {

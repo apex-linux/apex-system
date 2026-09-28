@@ -1,8 +1,3 @@
-//! The data files in `data/` (M1 contract §2) against the contract and the code:
-//! the polkit defaults equal `apex_dbus::PolkitAction`, the bus policy allows exactly the
-//! documented messages, the unit, activation and timer files name the contract's paths and
-//! keep the hardening rules, and, when `systemd-analyze` is installed, the units verify.
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -45,8 +40,6 @@ fn element(start: &BytesStart<'_>) -> Element {
     (name, attributes, String::new())
 }
 
-/// Every element with its attributes and its own text, in document order; fails on XML
-/// that is not well-formed.
 fn elements(xml: &str) -> Vec<Element> {
     let mut reader = Reader::from_str(xml);
     let mut out: Vec<Element> = Vec::new();
@@ -171,7 +164,6 @@ fn bus_policy_allows_exactly_the_contract() {
     assert_eq!(sends, expected);
 }
 
-/// `key=value` lines of an ini-style file, by section (comments and blanks skipped).
 fn ini(text: &str) -> BTreeMap<String, Vec<(String, String)>> {
     let mut sections: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     let mut section = String::new();
@@ -216,41 +208,6 @@ fn activation_file_hands_over_to_systemd() {
     );
 }
 
-/// The directives the unit's header lists as deliberately not set (`#  - Name=, Other=: why`).
-fn documented_as_not_set(unit: &str) -> BTreeSet<String> {
-    let (_, rest) = unit
-        .split_once("deliberately NOT set")
-        .expect("the unit header lists what it does not set");
-    // One item per "#  - " line, joined with its indented continuation lines.
-    let mut items: Vec<String> = Vec::new();
-    for line in rest
-        .lines()
-        .skip(1)
-        .take_while(|line| line.starts_with('#'))
-    {
-        if let Some(item) = line.strip_prefix("#  - ") {
-            items.push(item.to_owned());
-        } else if let (Some(continued), Some(item)) = (line.strip_prefix("#    "), items.last_mut())
-        {
-            item.push(' ');
-            item.push_str(continued);
-        }
-    }
-    items
-        .iter()
-        .flat_map(|item| {
-            let names = item
-                .split_once(':')
-                .map_or(item.as_str(), |(names, _)| names);
-            names
-                .split(',')
-                .filter_map(|name| name.trim().strip_suffix('='))
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .collect()
-}
-
 #[test]
 fn service_unit_is_dbus_activated_and_hardened_within_what_bootc_and_the_grubenv_writer_need() {
     let text = data("apex-updated.service");
@@ -259,7 +216,6 @@ fn service_unit_is_dbus_activated_and_hardened_within_what_bootc_and_the_grubenv
     assert_eq!(value(&unit, "Service", "BusName"), Some(BUS_NAME));
     assert_eq!(value(&unit, "Service", "ExecStart"), Some(BINARY_PATH));
     assert!(!unit.contains_key("Install"), "D-Bus activated only");
-    // bootc stages into /boot and the grubenv writer remounts it.
     let mounts: Vec<&str> = value(&unit, "Unit", "RequiresMountsFor")
         .expect("RequiresMountsFor")
         .split_whitespace()
@@ -284,9 +240,7 @@ fn service_unit_is_dbus_activated_and_hardened_within_what_bootc_and_the_grubenv
     ] {
         assert_eq!(value(&unit, "Service", key), Some(expected), "{key}");
     }
-    // Each of these breaks bootc or the grubenv writer (`unshare --mount` plus
-    // `mount -o remount,rw /boot` needs CAP_SYS_ADMIN, mount namespaces and the @mount
-    // system calls); see the comments in the unit, which must list exactly these.
+    // Each of these breaks bootc or the grubenv writer.
     let forbidden: BTreeSet<String> = [
         "ProtectSystem",
         "ReadOnlyPaths",
@@ -312,32 +266,9 @@ fn service_unit_is_dbus_activated_and_hardened_within_what_bootc_and_the_grubenv
             assert_eq!(value(&unit, section, key), None, "{key}");
         }
     }
-    assert_eq!(documented_as_not_set(&text), forbidden);
-    // The service runs as root: the writer needs CAP_SYS_ADMIN, bootc much more.
+    // Root: the writer needs CAP_SYS_ADMIN, bootc much more.
     assert_eq!(value(&unit, "Service", "User"), None);
     assert_eq!(value(&unit, "Service", "DynamicUser"), None);
-}
-
-/// Every directive of the unit has a comment right above it, except the self-describing
-/// `Description=` and `Documentation=`.
-#[test]
-fn every_unit_directive_is_documented() {
-    let text = data("apex-updated.service");
-    let mut previous = "";
-    let mut directives = 0;
-    for line in text.lines().map(str::trim) {
-        let is_directive = !line.is_empty() && !line.starts_with('#') && !line.starts_with('[');
-        if is_directive {
-            directives += 1;
-            let key = line.split_once('=').map_or(line, |(key, _)| key);
-            assert!(
-                matches!(key, "Description" | "Documentation") || previous.starts_with('#'),
-                "{key}= has no comment of its own"
-            );
-        }
-        previous = line;
-    }
-    assert!(directives >= 18, "{directives} directives");
 }
 
 #[test]
@@ -378,8 +309,6 @@ fn tmpfiles_creates_the_private_state_directory() {
     assert_eq!(lines, ["d /var/lib/apex 0700 root root -"]);
 }
 
-/// `systemd-analyze verify` on the three units inside a scratch root with stub binaries,
-/// as `make check-data` does. Skipped when systemd-analyze is not installed.
 #[test]
 fn units_verify_with_systemd_analyze() {
     if Command::new("systemd-analyze")

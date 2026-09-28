@@ -1,103 +1,34 @@
-# apex-updated.service: the Apex update service (ARCHITECTURE §5, ADR 0008).
-#
-# Installed as /usr/lib/systemd/system/apex-updated.service. There is no [Install]
-# section: the service is started by D-Bus activation
-# (/usr/share/dbus-1/system-services/io.github.sekirokenjii.Apex.Update1.service) and
-# exits by itself after five idle minutes. It is the only component that runs bootc, and
-# every bootc run goes through its single operation queue.
-#
-# Every directive below has its own comment. Two kinds of child process run in this unit,
-# and every hardening choice has to hold for both:
-#
-#  1. bootc (and the ostree and skopeo code it runs). It writes /sysroot, /boot, /ostree,
-#     /var and /etc, re-executes itself into a private mount namespace to remount /sysroot
-#     read-write, needs CAP_SYS_ADMIN and a long list of other capabilities for that, may
-#     transition to the SELinux domain install_t, and downloads from the registry.
-#  2. The grubenv writer that arms and disarms the boot counter (M1 contract §5, apex-boot's
-#     Editenv::system):
-#       /usr/bin/unshare --mount --propagation private -- /usr/bin/sh -c \
-#         '/usr/bin/mount -n -o remount,rw /boot && exec /usr/bin/grub2-editenv "$0" "$@"' \
-#         /boot/grub2/grubenv set|unset ...
-#     bootc mounts /boot read-only, so the write happens in a private mount namespace in
-#     which /boot is remounted read-write; the host (and this service) never see a writable
-#     /boot. That needs, in this unit: CAP_SYS_ADMIN, the unshare(2) system call with
-#     CLONE_NEWNS (the "mnt" namespace type), the mount system calls (mount(2), or
-#     fspick/fsconfig/mount_setattr with the new mount API), /boot mounted, and the
-#     executables /usr/bin/{unshare,sh,mount,grub2-editenv}.
-#
-# Hence these directives are deliberately NOT set (tests/data_files.rs keeps them out):
-#  - ProtectSystem=, ReadOnlyPaths=: bootc's writes above.
-#  - PrivateMounts=, MountFlags=: bootc's own mount namespace and the remount inside it.
-#  - RestrictNamespaces=: bootc and unshare(1) both create mount namespaces.
-#  - SystemCallFilter=: the writer needs the @mount group, which @system-service lacks
-#    (systemd-analyze syscall-filter), and bootc needs it too.
-#  - CapabilityBoundingSet=, AmbientCapabilities=: bootc needs SYS_ADMIN, DAC_OVERRIDE,
-#    FOWNER, SETFCAP, LINUX_IMMUTABLE (ostree marks deployment roots immutable) and more;
-#    the writer needs SYS_ADMIN. The service runs as root with the full bounding set.
-#  - NoNewPrivileges=: it restricts SELinux domain transitions, and bootc re-executes
-#    itself to reach install_t so it can write files with any label.
-#  - RestrictSUIDSGID=: importing an image creates set-uid files (sudo, passwd…).
-#  - ProtectKernelModules=: it hides /usr/lib/modules, where the daemon measures the
-#    kernel and initramfs for the /boot space gate.
-#  - PrivateDevices=, ProtectKernelTunables=, MemoryDenyWriteExecute=, PrivateNetwork=,
-#    IPAddressDeny=: the registry download needs the network, and none of the others was
-#    proven safe with bootc.
-
 [Unit]
 Description=Apex update service
 Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0008-update-policy.md
-# The state files (/var/lib/apex), the ostree sysroot bootc writes (/sysroot), and /boot,
-# which holds the deployments bootc stages and the grubenv the boot counter lives in (read
-# and remounted by the grubenv writer).
 RequiresMountsFor=/var/lib/apex /sysroot /boot
 
 [Service]
-# Ready once the bus name is owned (D-Bus activation waits for exactly that).
 Type=dbus
-# The name the daemon requests; also what the activation file hands over to this unit.
 BusName=io.github.sekirokenjii.Apex.Update1
-# M1 contract §2. It runs bootc and the grubenv writer as its children.
 ExecStart=/usr/libexec/apex/apex-updated
-# The daemon sends READY=1 and a STATUS= line ("State: downloading (42 %)") that
-# systemctl status shows. With Type=dbus readiness is still the bus name; this only lets
-# the notifications in instead of logging them as unexpected.
+# Readiness is still the bus name; this only admits the daemon's STATUS= lines.
 NotifyAccess=main
 
-# Creates /var/lib/apex (M1 contract §1) even before tmpfiles ran.
 StateDirectory=apex
-# The state directory is 0700 root (M1 contract §1).
 StateDirectoryMode=0700
-# State files are created 0600. So is grubenv if grub2-editenv creates or replaces it:
-# GRUB reads it through the firmware and ignores the mode, and every other reader
-# (apex-boot-assess, grub2-editenv) runs as root.
+# grubenv too, when grub2-editenv replaces it: GRUB ignores the mode, and every other
+# reader runs as root.
 UMask=0077
 
-# The daemon never reads a user's home (security review: no user-controlled input), and
-# bootc, unshare, mount and grub2-editenv do not use /home, /root or /run/user.
+# ProtectSystem=, SystemCallFilter=, CapabilityBoundingSet=, NoNewPrivileges= and the other
+# settings tests/data_files.rs keeps out break bootc or the grubenv writer, which runs
+# `unshare --mount` and then `mount -o remount,rw /boot`.
 ProtectHome=yes
-# Private /tmp and /var/tmp (both still on disk, removed when the service stops); bootc
-# and skopeo only use them for their own temporary files, the grubenv writer not at all.
 PrivateTmp=yes
-# Read-only cgroup tree: neither the daemon, bootc nor the grubenv writer manage cgroups.
 ProtectControlGroups=yes
-# D-Bus, journald and systemd (AF_UNIX), the registry (AF_INET, AF_INET6), and the
-# address lookups glibc's resolver does over rtnetlink (AF_NETLINK). Nothing else; the
-# grubenv writer opens no sockets.
+# AF_NETLINK: glibc's resolver looks up local addresses over rtnetlink.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-# Only native x86-64 system calls; nothing in the stack (bootc, util-linux, grub2-tools)
-# needs the 32-bit ABI.
 SystemCallArchitectures=native
-# The execution domain cannot be changed (personality(2)).
 LockPersonality=yes
-# No realtime scheduling: a download must never starve the desktop.
 RestrictRealtime=yes
-# The clock is never set. This also narrows device access to the pseudo devices and the
-# RTC (DeviceAllow=char-rtc), which the ostree backend does not need: it opens no block
-# device (bootc only locates the ESP on the composefs backend, which Apex does not use).
-# The grubenv writer's remount opens no device node either: it reconfigures the mounted
-# /boot through the mount point (mount(2) with MS_REMOUNT, or fspick+fsconfig).
+# Also limits devices to the pseudo devices and the RTC: neither bootc on the ostree backend
+# nor the /boot remount opens a block device.
 ProtectClock=yes
-# The hostname is never changed.
 ProtectHostname=yes
-# The kernel log is never read.
 ProtectKernelLogs=yes

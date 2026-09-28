@@ -1,7 +1,3 @@
-//! Shared support for the integration tests: bootc status documents, manifests, and a
-//! harness that runs the real engine, queue and worker over `FakeRunner`, `FakeSystem`, a
-//! recording grubenv writer and a state directory in a temporary directory.
-
 #![allow(
     dead_code,
     unreachable_pub,
@@ -37,7 +33,6 @@ pub const OLDER_VERSION: &str = "45.20260918.1";
 
 pub const STABLE_IMAGE: &str = "ghcr.io/sekirokenjii/apex:45";
 
-/// The fake clock's time (2026-09-25 about 04:53 UTC).
 pub const NOW: u64 = 1_790_300_000;
 
 pub fn image(digest: &str, version: &str) -> ImageStatus {
@@ -70,7 +65,6 @@ pub fn booted() -> BootEntry {
     entry(BOOTED, BOOTED_VERSION, BOOTED_CSUM)
 }
 
-/// The staged deployment, locked (`download_only`) or applied.
 pub fn staged(download_only: bool) -> BootEntry {
     BootEntry {
         download_only,
@@ -82,7 +76,6 @@ pub fn rollback() -> BootEntry {
     entry(ROLLBACK, OLDER_VERSION, ROLLBACK_CSUM)
 }
 
-/// A bootc status document.
 pub fn host(booted: BootEntry, staged: Option<BootEntry>, rollback: Option<BootEntry>) -> Host {
     Host {
         api_version: "org.containers.bootc/v1".into(),
@@ -106,7 +99,6 @@ pub fn host(booted: BootEntry, staged: Option<BootEntry>, rollback: Option<BootE
     }
 }
 
-/// `bootc status` answering with `host`.
 pub fn status(host: &Host) -> Scripted {
     Scripted::new(BootcCommand::Status).stdout(serde_json::to_vec(host).expect("status JSON"))
 }
@@ -135,7 +127,6 @@ pub fn manifest(version: &str, packages: Vec<Package>) -> Manifest {
     }
 }
 
-/// The fake system with manifests for the booted, staged and rollback deployments.
 pub fn fake_state() -> FakeState {
     let manifests = [
         (
@@ -166,7 +157,6 @@ pub fn fake_state() -> FakeState {
     }
 }
 
-/// The real engine, queue and worker over fakes.
 pub struct Harness {
     pub fake: Arc<FakeRunner>,
     pub system: Arc<FakeSystem>,
@@ -186,7 +176,6 @@ impl Harness {
         Self::over(dir, state, grub)
     }
 
-    /// A harness over the state directory `dir`; grubenv is read from what `grub` holds.
     fn over(dir: TempDir, state: FakeState, grub: SharedGrubWriter) -> Self {
         let store = StateDir::new(dir.path());
         let fake = Arc::new(FakeRunner::new());
@@ -210,9 +199,7 @@ impl Harness {
         }
     }
 
-    /// The machine restarts: this daemon stops (after its script was used up), and a new
-    /// one starts over the same state files and grubenv, with the clock at `now`. Nothing
-    /// the old one kept in memory survives.
+    /// A new daemon over the same state files and grubenv; nothing kept in memory survives.
     pub fn reboot(self, now: u64) -> Self {
         self.fake.assert_finished();
         self.daemon.shutdown();
@@ -231,13 +218,11 @@ impl Harness {
         self.daemon.submit(op).await
     }
 
-    /// Runs a refresh answering with `host`.
     pub async fn refresh(&self, host: &Host) {
         self.push(status(host));
         self.run(Op::Refresh).await.expect("refresh");
     }
 
-    /// Records a check that found `digest` at `version`, `age` seconds before `NOW`.
     pub fn last_check(&self, digest: &str, version: &str, age: u64) {
         self.store
             .write_last_check(&LastCheck {

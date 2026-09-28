@@ -1,25 +1,8 @@
-//! Text from outside the daemon, made fit for D-Bus strings and terminals.
-//!
-//! Error messages and string properties carry text the daemon does not control: bootc's
-//! stderr (which relays a registry's JSON error messages before any signature check), image
-//! labels, and the state files. D-Bus forbids NUL inside a string: zvariant writes it but
-//! refuses to read it back, so a single NUL makes a zbus client unable to decode the reply
-//! or the property, and `GLib` clients cut the string short. Other control characters (CR,
-//! BEL, backspace, ESC and the C1 introducer U+009B) let that text rewrite the terminal line
-//! `apexctl` prints it on, and the bidirectional overrides reorder what is shown.
-//!
-//! [`display_text`] is applied to every error reply (`service::reply`) and every published
-//! property ([`crate::properties::Properties::sanitized`]), so it holds whatever the source.
-
-/// Longest text published, in characters; longer text is cut and ends with `…`.
 pub const MAX_CHARS: usize = 2048;
 
-/// `text` without control characters, bidirectional formatting characters, or more than
-/// [`MAX_CHARS`] characters.
-///
-/// Tab, line feed, carriage return and the other whitespace controls become a space; any
-/// other control character (C0, DEL, C1) and the bidirectional embeddings, overrides and
-/// isolates become U+FFFD, so it stays visible that something was there. Idempotent.
+/// A NUL in a D-Bus string makes zbus clients fail to decode the reply, and control and
+/// bidi characters from a registry would rewrite the line `apexctl` prints. U+FFFD keeps
+/// visible that something was there.
 pub fn display_text(text: &str) -> String {
     let clean = !text.chars().any(unsafe_char) && text.chars().nth(MAX_CHARS).is_none();
     if clean {
@@ -41,8 +24,7 @@ pub fn display_text(text: &str) -> String {
     out
 }
 
-/// Control characters and the bidirectional formatting characters (embeddings and
-/// overrides U+202A–U+202E, isolates U+2066–U+2069).
+/// Bidi embeddings and overrides are U+202A–U+202E, isolates U+2066–U+2069.
 fn unsafe_char(c: char) -> bool {
     c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }

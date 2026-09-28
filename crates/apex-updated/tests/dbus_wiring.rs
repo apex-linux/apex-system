@@ -1,8 +1,3 @@
-//! The real interface over a peer-to-peer D-Bus connection (no bus daemon): the served
-//! introspection equals the contract XML, properties and methods work through the
-//! `apex_dbus` proxy, errors keep their contract names, and property changes are signalled.
-//! Authorization uses the allow-all fake (or its refusing variant).
-
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -30,17 +25,13 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedValue;
 use zbus::{Connection, Guid, connection};
 
-/// A connected (server, client) pair; the server serves the harness's daemon.
-///
-/// It returns once the emitter's first signal, which names every property, has arrived, so
-/// the streams a test creates afterwards see only later changes.
+/// Returns once the emitter's first signal has arrived, so later streams see only changes.
 async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
     let (server, client, first) = connect_announced(h, auth).await;
     assert_eq!(first.len(), 12, "{first:?}");
     (server, client)
 }
 
-/// [`connect`], also returning the emitter's first signal: property name → value.
 async fn connect_announced(
     h: &Harness,
     auth: FakeAuthorizer,
@@ -97,10 +88,9 @@ async fn proxy(client: &Connection) -> Update1Proxy<'static> {
         .expect("proxy")
 }
 
-/// Members of the interface in an introspection document, normalized:
+const EMITS_CHANGED_SIGNAL_DEFAULT: &str = "true";
+
 /// `"method Apply" => "in expected_digest s"`, `"property State" => "s read changes=true"`.
-/// A property without the `EmitsChangedSignal` annotation counts as `true`, the D-Bus
-/// default.
 fn members(xml: &str) -> BTreeMap<String, String> {
     let node = zbus_xml::Node::try_from(xml).expect("introspection XML parses");
     let interface = node
@@ -141,7 +131,7 @@ fn members(xml: &str) -> BTreeMap<String, String> {
             .annotations()
             .iter()
             .find(|a| a.name() == "org.freedesktop.DBus.Property.EmitsChangedSignal")
-            .map_or("true", zbus_xml::Annotation::value);
+            .map_or(EMITS_CHANGED_SIGNAL_DEFAULT, zbus_xml::Annotation::value);
         out.insert(
             format!("property {}", property.name()),
             format!("{} {access} changes={emits}", property.ty().to_string()),
@@ -211,8 +201,7 @@ async fn properties_and_methods_over_the_wire() {
         .collect();
     assert!(keys.is_sorted(), "sorted by (name, arch): {keys:?}");
 
-    // Errors keep their contract names. The state is fresh, so an Apply of a digest that
-    // is not staged is refused without queueing (no bootc status runs).
+    // The state is fresh, so this is refused without queueing and no bootc status runs.
     match p.apply(REMOTE).await {
         Err(ApexError::DigestMismatch(message)) => assert!(message.contains(STAGED)),
         other => panic!("expected DigestMismatch, got {other:?}"),
@@ -222,7 +211,6 @@ async fn properties_and_methods_over_the_wire() {
         Err(ApexError::InvalidArgument(_))
     ));
 
-    // Root reports: green clears nothing here but must be accepted.
     p.report_boot(BootVerdict::Green, BOOTED)
         .await
         .expect("green from root");
@@ -287,7 +275,6 @@ async fn callers_are_authorized() {
         p.switch_channel(Channel::Testing).await,
         Err(ApexError::NotAuthorized(_))
     ));
-    // Root-only methods check the uid, not polkit.
     assert!(matches!(
         p.automatic().await,
         Err(ApexError::NotAuthorized(_))
@@ -296,7 +283,6 @@ async fn callers_are_authorized() {
         p.report_boot(BootVerdict::Green, BOOTED).await,
         Err(ApexError::NotAuthorized(_))
     ));
-    // Read-only calls need no authorization.
     p.ping().await.expect("ping");
     p.get_changes().await.expect("changes");
     h.fake.assert_finished();
@@ -314,12 +300,11 @@ async fn callers_are_authorized() {
 #[tokio::test]
 async fn property_changes_are_signalled() {
     let h = Harness::new();
-    // Fresh state, so reading the properties does not queue a refresh of its own.
+    // Fresh, so reading the properties queues no refresh.
     h.refresh(&host(booted(), None, None)).await;
     let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
     let p = Update1Proxy::builder(&client).build().await.expect("proxy");
     let mut changes = p.receive_state_changed().await;
-    // The first item is the current value.
     let first = next(&mut changes).await;
     assert_eq!(first.get().await.unwrap(), State::UpToDate);
 
@@ -356,9 +341,6 @@ async fn automatic_runs_for_root() {
     h.fake.assert_finished();
 }
 
-/// Each polkit-guarded method asks for the action contract §8 assigns it
-/// (`PolkitAction::guarding`), in particular `AcknowledgeHealthFailure` for `discard`, not
-/// `apply`. The other methods ask polkit nothing.
 #[tokio::test]
 async fn each_method_asks_polkit_for_its_contract_action() {
     let h = Harness::new();
@@ -367,7 +349,6 @@ async fn each_method_asks_polkit_for_its_contract_action() {
     let (_server, client) = connect(&h, auth.clone()).await;
     let p = proxy(&client).await;
 
-    // Every guarded method is refused, so none of them reaches bootc.
     let refused = [
         ("Check", p.check().await),
         ("Download", p.download(false).await),
@@ -386,7 +367,6 @@ async fn each_method_asks_polkit_for_its_contract_action() {
             "{member}: {result:?}"
         );
     }
-    // Not polkit: read-only, or uid 0 only.
     p.ping().await.expect("ping");
     p.get_changes().await.expect("changes");
     assert!(matches!(
@@ -413,11 +393,8 @@ async fn each_method_asks_polkit_for_its_contract_action() {
     h.fake.assert_finished();
 }
 
-/// Every `PropertiesChanged` of the interface seen so far: property name → the values
-/// signalled, in order.
 type Seen = BTreeMap<String, Vec<OwnedValue>>;
 
-/// Reads signals into `seen` until `done` holds (at most 10 s).
 async fn watch_until(
     stream: &mut PropertiesChangedStream,
     seen: &mut Seen,
@@ -475,7 +452,6 @@ fn progress(seen: &Seen) -> Vec<f64> {
         .collect()
 }
 
-/// The booted deployment, following the testing channel.
 fn testing_booted() -> apex_bootc::BootEntry {
     let mut entry = booted();
     if let Some(image) = &mut entry.image {
@@ -484,18 +460,13 @@ fn testing_booted() -> apex_bootc::BootEntry {
     entry
 }
 
-/// Every property emits `PropertiesChanged` when its value changes (the XML header): a run
-/// through refresh, download, a failed check, a red boot report and its acknowledgement
-/// changes all twelve, and each change arrives as a signal over the wire, observed here
-/// with a plain `org.freedesktop.DBus.Properties` proxy (no cache, no property reads).
 #[tokio::test]
 async fn every_property_signals_its_changes() {
     const DAY: u64 = 86_400;
     const REMOTE_VERSION: &str = "45.20260924.9";
     let mut state = fake_state();
-    // Metered: the automatic download is deferred, so DeferredReason is set.
+    // Sets DeferredReason and Stale.
     state.metered = Some(true);
-    // A month later: the newest known build is more than seven days old, so Stale is set.
     state.now = NOW + 30 * DAY;
     let h = Harness::with(state, SharedGrubWriter::new());
     h.last_check(REMOTE, REMOTE_VERSION, 120);
@@ -505,8 +476,6 @@ async fn every_property_signals_its_changes() {
     let p = proxy(&client).await;
     let mut seen = Seen::new();
 
-    // The first refresh: State, Booted, Rollback, Available, Channel, LastCheck,
-    // DeferredReason and Stale leave their defaults.
     let before = host(testing_booted(), None, Some(rollback()));
     h.refresh(&before).await;
     watch_until(&mut stream, &mut seen, |s| {
@@ -528,7 +497,6 @@ async fn every_property_signals_its_changes() {
     assert_eq!(texts(&seen, "Channel"), ["testing"]);
     assert_eq!(digests(&seen, "Available"), [Some(REMOTE.to_owned())]);
 
-    // A download with progress: State, Progress, Staged and Available.
     let staged_remote = apex_bootc::BootEntry {
         download_only: true,
         ..entry(REMOTE, REMOTE_VERSION, STAGED_CSUM)
@@ -558,7 +526,6 @@ async fn every_property_signals_its_changes() {
     assert!(texts(&seen, "State").contains(&"downloading".to_owned()));
     assert_eq!(digests(&seen, "Available").last(), Some(&None));
 
-    // A failed check: LastError.
     h.push(
         Scripted::new(BootcCommand::UpgradeCheck)
             .exit_code(1)
@@ -568,7 +535,6 @@ async fn every_property_signals_its_changes() {
     watch_until(&mut stream, &mut seen, |s| s.contains_key("LastError")).await;
     assert!(texts(&seen, "LastError")[0].contains("no such host"));
 
-    // A red boot report, then its acknowledgement: HealthFailure there and back.
     p.report_boot(BootVerdict::Red, BOOTED).await.expect("red");
     watch_until(&mut stream, &mut seen, |s| {
         texts(s, "HealthFailure").last().map(String::as_str) == Some(BOOTED)
@@ -585,7 +551,6 @@ async fn every_property_signals_its_changes() {
         Some("staged")
     );
 
-    // All twelve properties of the contract were signalled.
     let signalled: BTreeSet<String> = seen.keys().cloned().collect();
     let contract: BTreeSet<String> = members(INTROSPECTION_XML)
         .into_keys()
@@ -596,10 +561,6 @@ async fn every_property_signals_its_changes() {
     h.fake.assert_finished();
 }
 
-/// D-Bus activation delivers the call that started the service as soon as it owns its name,
-/// long before the first `bootc status` has returned. Property reads and `GetChanges` must
-/// answer with the real state, not the placeholders (`unknown`, `{}` = "no such
-/// deployment", `[]` = "nothing staged").
 #[tokio::test]
 async fn reads_right_after_activation_wait_for_the_first_refresh() {
     let h = Harness::new();
@@ -607,7 +568,7 @@ async fn reads_right_after_activation_wait_for_the_first_refresh() {
         status(&host(booted(), Some(staged(true)), Some(rollback())))
             .delay(Duration::from_millis(500)),
     );
-    // As main does: the startup refresh is queued, and a client arrives meanwhile.
+    // As main does: the startup refresh is queued, not awaited.
     drop(h.daemon.queue().submit(Op::Refresh));
     let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
     let p = proxy(&client).await;
@@ -617,7 +578,7 @@ async fn reads_right_after_activation_wait_for_the_first_refresh() {
     assert!(!p.get_changes().await.unwrap().is_empty());
     h.fake.assert_finished();
 
-    // The same through a caching proxy, whose first read fills its cache with GetAll.
+    // A caching proxy fills its cache with GetAll at its first read.
     let h = Harness::new();
     h.push(status(&host(booted(), Some(staged(true)), None)).delay(Duration::from_millis(500)));
     drop(h.daemon.queue().submit(Op::Refresh));
@@ -632,10 +593,6 @@ async fn reads_right_after_activation_wait_for_the_first_refresh() {
     h.fake.assert_finished();
 }
 
-/// A client's property cache survives the service's idle exit and is updated only by
-/// signals. A new instance therefore signals every property once, including those at their
-/// default (`LastError` "", `HealthFailure` "", empty dictionaries), so values cached from
-/// the previous instance are replaced.
 #[tokio::test]
 async fn a_new_instance_signals_every_property_once() {
     let h = Harness::new();
@@ -655,8 +612,6 @@ async fn a_new_instance_signals_every_property_once() {
     h.fake.assert_finished();
 }
 
-/// Text a registry controls reaches clients as valid D-Bus strings: without the fix a NUL
-/// in bootc's error line made both the error reply and `LastError` undecodable for zbus.
 #[tokio::test]
 async fn control_characters_never_reach_the_wire() {
     let h = Harness::new();
@@ -680,8 +635,6 @@ async fn control_characters_never_reach_the_wire() {
     h.fake.assert_finished();
 }
 
-/// A burst of `Apply` calls with made-up digests (any active-session process may send
-/// them without a prompt) runs no bootc command, and the daily automatic run still gets in.
 #[tokio::test]
 async fn a_burst_of_bogus_applies_neither_queues_nor_starves_the_automatic_run() {
     let h = Harness::new();

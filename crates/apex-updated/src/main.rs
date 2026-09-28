@@ -1,10 +1,3 @@
-//! `apex-updated`: the Apex update service (`/usr/libexec/apex/apex-updated`).
-//!
-//! Started by D-Bus activation (`apex-updated.service`, `Type=dbus`). It serves the
-//! interface, refreshes its state, requests `io.github.sekirokenjii.Apex.Update1`, signals
-//! every property once, tells systemd it is ready, and exits after five idle minutes or on
-//! `SIGTERM`/`SIGINT`. It exits with a failure if the operation worker dies.
-
 use std::io::IsTerminal as _;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -28,18 +21,14 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 
-/// How often the idle rule is evaluated.
 const IDLE_POLL: Duration = Duration::from_secs(15);
-/// After releasing the name, how long calls that were already on their way may take.
-const DRAIN: Duration = Duration::from_secs(2);
-/// How long a cancelled operation may take to stop (bootc gets SIGTERM, then SIGKILL after
-/// 5 s).
+const DRAIN_AFTER_RELEASING_NAME: Duration = Duration::from_secs(2);
+// bootc gets SIGTERM, then SIGKILL after 5 s.
 const STOP_GRACE: Duration = Duration::from_secs(15);
 
 fn main() -> ExitCode {
     init_logging();
-    // One thread: zbus on tokio spawns no executor of its own, and the few blocking calls
-    // (grub2-editenv) go to tokio's blocking pool on demand.
+    // zbus spawns no executor of its own, and grub2-editenv runs on the blocking pool.
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -54,8 +43,6 @@ fn main() -> ExitCode {
     }
 }
 
-/// The journal when started by systemd with stderr connected to it (`JOURNAL_STREAM`),
-/// stderr otherwise. `RUST_LOG` overrides the default level (`info`).
 fn init_logging() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let registry = tracing_subscriber::registry().with(filter);
@@ -77,9 +64,8 @@ fn init_logging() {
         .init();
 }
 
-/// Whether stderr is the journal stream systemd set up (systemd.exec(5), `JOURNAL_STREAM`:
-/// compare its `device:inode` with stderr's, so a variable inherited by a process whose
-/// stderr was redirected does not count).
+/// systemd.exec(5): `JOURNAL_STREAM` is inherited, so it counts only when its
+/// `device:inode` is stderr's.
 fn stderr_is_journal() -> bool {
     let Some(value) = std::env::var_os("JOURNAL_STREAM") else {
         return false;
@@ -92,8 +78,6 @@ fn stderr_is_journal() -> bool {
         .is_some_and(|v| journal_stream_is(v, stat.st_dev, stat.st_ino))
 }
 
-/// Whether a `JOURNAL_STREAM` value (`<device>:<inode>`, decimal) names this device and
-/// inode.
 fn journal_stream_is(value: &str, device: u64, inode: u64) -> bool {
     value.split_once(':').is_some_and(|(d, i)| {
         d.parse::<u64>().is_ok_and(|d| d == device) && i.parse::<u64>().is_ok_and(|i| i == inode)
@@ -114,8 +98,6 @@ async fn run() -> anyhow::Result<()> {
         .context("cannot connect to the system bus")?;
 
     let store = StateDir::default();
-    // Temporary files of writers that died before their rename; each write cleans up after
-    // earlier writes of its own file, this covers files that are rarely written.
     let removed = store.remove_stale_temp_files();
     if removed > 0 {
         tracing::info!(
@@ -143,12 +125,8 @@ async fn run() -> anyhow::Result<()> {
         .at(OBJECT_PATH, service)
         .await
         .context("cannot serve the update interface")?;
-    // Own the name only once the state is known (or PING_WAIT has passed): the bus delivers
-    // the call that activated this instance right after RequestName, and it must find the
-    // real state, not placeholders (the handlers wait for it too). With Type=dbus, systemd
-    // considers the service started at that point as well.
+    // The bus delivers the activating call right after RequestName; it must find real state.
     daemon.engine().first_refresh().await;
-    // Never queue behind another owner: a second instance must not run at all.
     let reply = connection
         .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
         .await
@@ -160,9 +138,7 @@ async fn run() -> anyhow::Result<()> {
         daemon.shutdown();
         anyhow::bail!("{BUS_NAME} is already owned by another process ({reply:?})");
     }
-    // Started once the name is owned, so its first signal (every property, see
-    // emit_property_changes) reaches clients subscribed by the well-known name and replaces
-    // what they cached from an earlier instance.
+    // Once the name is owned, so the first signal reaches clients matching on that name.
     let emitter = tokio::spawn(emit_property_changes(
         connection.clone(),
         daemon.engine().subscribe(),
@@ -195,20 +171,17 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!(reason = %reason, "stopping");
     notify(&[NotifyState::Stopping]);
 
-    // Release the name first: new callers then activate a fresh instance instead of
-    // reaching one that is going away. Calls already dispatched still finish.
+    // Released first, so new callers activate a fresh instance instead of reaching this one.
     if let Err(error) = connection.release_name(BUS_NAME).await {
         tracing::debug!(%error, "cannot release the bus name");
     }
     if matches!(reason, Stop::Idle) {
-        tokio::time::sleep(DRAIN).await;
+        tokio::time::sleep(DRAIN_AFTER_RELEASING_NAME).await;
     }
     daemon.shutdown();
     if let Stop::WorkerEnded(ended) = reason {
         emitter.abort();
-        // A worker that ends while the queue is open has panicked (it only returns after
-        // shutdown): exit with a failure, so systemd records it and the next call activates
-        // a fresh instance.
+        // The worker only returns after shutdown: fail, so activation starts a fresh one.
         return Err(match ended {
             Err(join) if join.is_panic() => anyhow::anyhow!("an update operation panicked"),
             Err(join) => anyhow::anyhow!("the operation worker stopped: {join}"),
@@ -222,13 +195,9 @@ async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Why the service stops.
 enum Stop {
-    /// `SIGTERM` or `SIGINT`.
     Signal(&'static str),
-    /// No activity for [`IDLE_TIMEOUT`].
     Idle,
-    /// The operation worker ended while the service was running.
     WorkerEnded(Result<(), tokio::task::JoinError>),
 }
 
@@ -242,7 +211,6 @@ impl std::fmt::Display for Stop {
     }
 }
 
-/// A one-line status for `systemctl status`.
 fn status_text(properties: &Properties) -> String {
     if properties.progress >= 0.0 {
         format!(

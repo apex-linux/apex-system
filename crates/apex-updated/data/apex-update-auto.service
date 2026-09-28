@@ -1,14 +1,6 @@
-# apex-update-auto.service: one automatic update run, started by apex-update-auto.timer.
-#
-# apexctl only asks apex-updated (over the system bus) to run Automatic: check for an
-# update, then download it when every gate passes and no user intent exists. The daemon
-# accepts Automatic from uid 0 only, so this runs as root, and it never reboots.
-# Installed as /usr/lib/systemd/system/apex-update-auto.service.
-
 [Unit]
 Description=Apex automatic update check and download
 Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0008-update-policy.md
-# Only meaningful on an ostree (bootc) system.
 ConditionPathExists=/run/ostree-booted
 Wants=network-online.target
 After=network-online.target
@@ -16,11 +8,11 @@ After=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/apexctl update automatic
-# A download can take up to bootc's two-hour timeout, plus the check (5 min).
+# bootc's two-hour download timeout plus the check.
 TimeoutStartSec=3h
 
-# apexctl is a D-Bus client: it needs the system bus socket and nothing else, so it is
-# confined much harder than the daemon.
+# Runs as root because apex-updated accepts Automatic only from uid 0; apexctl needs
+# nothing but the system bus socket.
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

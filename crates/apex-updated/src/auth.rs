@@ -1,20 +1,3 @@
-//! Who may call what (contract §8).
-//!
-//! - Polkit actions are checked with `CheckAuthorization` on a **system-bus-name** subject
-//!   (`Subject::new_for_message_header`), never a PID, so a caller cannot race a PID reuse.
-//!   `AllowUserInteraction` is passed exactly when the caller set
-//!   `ALLOW_INTERACTIVE_AUTHORIZATION` on the message, as the D-Bus specification asks,
-//!   whatever the action's shipped default: for a `yes` action polkit never asks anyway,
-//!   and a local rule that makes an action stricter (say `apply` → `AUTH_ADMIN`) gets its
-//!   dialog instead of a silent refusal.
-//! - uid 0 is always allowed (XML contract). It is recognised with the bus's own
-//!   credentials (`GetConnectionUnixUser`), which is also how `Automatic` and `ReportBoot`
-//!   are restricted to root.
-//!
-//! [`Authorizer`] is the boundary; [`PolkitAuthorizer`] is the only production
-//! implementation. The allow-all fake lives in `apex_updated::testing` (cargo feature
-//! `testing`), which the daemon never compiles.
-
 use std::collections::HashMap;
 
 use apex_dbus::{ApexError, PolkitAction};
@@ -26,21 +9,17 @@ use zbus_polkit::policykit1::{AuthorityProxy, CheckAuthorizationFlags, Subject};
 
 use crate::BoxFuture;
 
-/// Authorization checks for method calls.
 pub trait Authorizer: Send + Sync + std::fmt::Debug {
-    /// Succeeds if the sender of `header` may perform `action`; otherwise
-    /// [`ApexError::NotAuthorized`] with a message for the user.
     fn authorize<'a>(
         &'a self,
         header: &'a Header<'_>,
         action: PolkitAction,
     ) -> BoxFuture<'a, Result<(), ApexError>>;
 
-    /// The Unix uid of the sender of `header`, from the bus credentials.
+    /// The sender's uid as the bus daemon knows it.
     fn caller_uid<'a>(&'a self, header: &'a Header<'_>) -> BoxFuture<'a, Result<u32, ApexError>>;
 }
 
-/// Succeeds only for callers running as uid 0 (`Automatic`, `ReportBoot`).
 pub async fn require_root(auth: &dyn Authorizer, header: &Header<'_>) -> Result<(), ApexError> {
     match auth.caller_uid(header).await? {
         0 => Ok(()),
@@ -50,9 +29,8 @@ pub async fn require_root(auth: &dyn Authorizer, header: &Header<'_>) -> Result<
     }
 }
 
-/// Whether a polkit check for the call in `header` may show an authentication dialog:
-/// exactly when the caller set `ALLOW_INTERACTIVE_AUTHORIZATION` on the message, for every
-/// action (see the module documentation).
+/// As the D-Bus specification asks, whatever the action's default: a local polkit rule may
+/// make a `yes` action need a password, and then the caller gets its dialog.
 pub fn allows_interaction(header: &Header<'_>) -> bool {
     header
         .primary()
@@ -60,7 +38,6 @@ pub fn allows_interaction(header: &Header<'_>) -> bool {
         .contains(Flags::AllowInteractiveAuth)
 }
 
-/// What the user was trying to do, for refusal messages.
 pub fn describe(action: PolkitAction) -> &'static str {
     match action {
         PolkitAction::Check => "check for updates",
@@ -73,7 +50,6 @@ pub fn describe(action: PolkitAction) -> &'static str {
     }
 }
 
-/// The refusal message for a polkit answer that did not authorize.
 pub fn refusal(action: PolkitAction, is_challenge: bool, dismissed: bool) -> ApexError {
     let what = describe(action);
     ApexError::NotAuthorized(if dismissed {
@@ -85,7 +61,6 @@ pub fn refusal(action: PolkitAction, is_challenge: bool, dismissed: bool) -> Ape
     })
 }
 
-/// Polkit on the system bus.
 #[derive(Debug)]
 pub struct PolkitAuthorizer {
     connection: Connection,
@@ -93,7 +68,6 @@ pub struct PolkitAuthorizer {
 }
 
 impl PolkitAuthorizer {
-    /// Uses `connection` (the system bus) to reach polkit and the bus daemon.
     pub fn new(connection: Connection) -> Self {
         Self {
             connection,
@@ -111,11 +85,11 @@ impl PolkitAuthorizer {
         if self.uid(header).await? == 0 {
             return Ok(());
         }
+        // A bus-name subject, never a PID, which another process could reuse.
         let subject = Subject::new_for_message_header(header).map_err(|e| {
             ApexError::NotAuthorized(format!("The caller cannot be identified: {e}"))
         })?;
-        // `BitFlags` lives in enumflags2, which zbus_polkit does not re-export; naming it
-        // would take a direct dependency for one empty value.
+        // Naming the empty `BitFlags` would need a direct enumflags2 dependency.
         #[allow(clippy::default_trait_access)]
         let flags = if allows_interaction(header) {
             CheckAuthorizationFlags::AllowUserInteraction.into()
@@ -191,8 +165,6 @@ mod tests {
         builder.build(&("sha256:d",)).unwrap()
     }
 
-    /// The dialog follows the caller's flag, also for actions whose shipped default is
-    /// `yes` (a local polkit rule may make them `auth_admin`).
     #[test]
     fn interaction_follows_the_callers_flag() {
         assert!(allows_interaction(&call(true).header()));
