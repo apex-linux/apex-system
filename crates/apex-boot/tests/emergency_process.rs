@@ -1,10 +1,5 @@
-//! Runs the built `apex-boot-assess` with the flag the drop-ins pass, as a dry run against
-//! fixture files below `--root`: exit status, console text and time, and that the watchdog
-//! never touches the system bus (the address points at a socket this test listens on).
-//!
 //! Only dry runs: a real run reads the host's `/boot/grub2/grubenv` and could schedule a
-//! real reboot. The scheduling itself is covered by `emergency_watchdog.rs` with fake
-//! programs and by `emergency_units.rs` with the host's real `systemd-run`.
+//! real reboot.
 
 #![allow(
     clippy::unwrap_used,
@@ -25,7 +20,6 @@ use apex_boot::emergency::{EMERGENCY_DROP_IN, Schedule, WATCHDOG_TIME_BUDGET, re
 const BINARY: &str = env!("CARGO_BIN_EXE_apex-boot-assess");
 const TARGET: &str = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
 
-/// The arguments the drop-in passes, taken from the installed text.
 fn drop_in_args() -> Vec<String> {
     let line = EMERGENCY_DROP_IN
         .lines()
@@ -36,7 +30,7 @@ fn drop_in_args() -> Vec<String> {
     words.map(str::to_owned).collect()
 }
 
-/// A `--root` with `boot/grub2/grubenv` holding `vars` (none: no grubenv at all).
+/// `None`: no grubenv at all.
 fn root_with(vars: Option<&[(&str, &str)]>) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     if let Some(vars) = vars {
@@ -51,8 +45,6 @@ fn root_with(vars: Option<&[(&str, &str)]>) -> tempfile::TempDir {
     root
 }
 
-/// Runs the binary as the drop-in does, plus `--dry-run --root ROOT`, with the system bus
-/// address pointing at a listener no connection may reach.
 fn dry_run(root: &Path) -> (Output, Duration) {
     let bus_name = format!("apex-boot-emergency-test-{}", std::process::id());
     let listener =
@@ -90,7 +82,6 @@ fn text(bytes: &[u8]) -> String {
 fn the_drop_in_command_dry_runs_every_case() {
     assert_eq!(drop_in_args(), ["--emergency-watchdog"]);
 
-    // A counted boot of an armed update: the announcement, then the command it would run.
     let root = root_with(Some(&[
         ("apex_target", TARGET),
         ("apex_counter", "1"),
@@ -119,12 +110,10 @@ fn the_drop_in_command_dry_runs_every_case() {
     );
     assert!(took < WATCHDOG_TIME_BUDGET, "took {took:?}");
 
-    // The GRUB fixture is unchanged: the watchdog only reads.
     let env = fs::read(root.path().join("boot/grub2/grubenv")).unwrap();
     let vars = apex_boot::BootVars::from_env(&GrubEnv::parse(&env).unwrap()).unwrap();
     assert_eq!(vars.apex_counter, Some(1));
 
-    // Not armed, not counted, exhausted: exit 0 and only the dry run's reason.
     for (vars, reason) in [
         (&[("apex_ok", "0")][..], "no update is on trial"),
         (
@@ -155,7 +144,6 @@ fn the_drop_in_command_dry_runs_every_case() {
         assert_eq!(stdout.lines().count(), 1, "{stdout}");
     }
 
-    // No grubenv (/boot not mounted): one line, exit status 1 (the drop-in ignores it).
     let root = root_with(None);
     let (output, _) = dry_run(root.path());
     let stdout = text(&output.stdout);
@@ -165,7 +153,6 @@ fn the_drop_in_command_dry_runs_every_case() {
         "{stdout}"
     );
 
-    // In an initramfs: nothing, even with an armed, counted grubenv.
     let root = root_with(Some(&[("apex_target", TARGET), ("apex_counter", "2")]));
     fs::create_dir_all(root.path().join("etc")).unwrap();
     fs::write(root.path().join("etc/initrd-release"), "").unwrap();

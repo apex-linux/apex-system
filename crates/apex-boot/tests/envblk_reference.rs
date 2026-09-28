@@ -1,15 +1,5 @@
-//! Checks `apex_boot::grubenv` against a line-by-line transliteration of GRUB's
-//! `grub-core/lib/envblk.c`: the functions below keep the C control flow, pointer
-//! arithmetic and "broken" early returns, so any difference in behaviour shows up as a
-//! property failure.
-//!
-//! The source is Fedora's GRUB, which Apex boots: rhboot/grub2, branches `fedora-45` and
-//! `rhel-10-main` (identical in this file), fetched 2026-09-24 from
-//! `https://raw.githubusercontent.com/rhboot/grub2/fedora-45/grub-core/lib/envblk.c`. Its
-//! `grub_envblk_iterate` skips only lines that start with `#` (Ubuntu's GRUB, the
-//! `grub-editenv` the host tests may run, also skips lines starting with `\n` or `\r`).
-//! Its `grub_envblk_set`, `grub_envblk_delete` and `find_next_line` are the functions
-//! transliterated below.
+//! A line-by-line transliteration of Fedora GRUB's `grub-core/lib/envblk.c` (rhboot/grub2
+//! `fedora-45`), so any difference from `apex_boot::grubenv` shows up as a property failure.
 
 use apex_boot::grubenv::{CREATE_WARNING, EditError, GrubEnv, SIGNATURE};
 use proptest::prelude::*;
@@ -35,23 +25,19 @@ fn c_escaped_value_len(value: &[u8]) -> usize {
         .sum()
 }
 
-/// `grub_envblk_open`: `size < sizeof (SIGNATURE)` or a mismatch fails. `sizeof` counts the
-/// C string's NUL, so the size must exceed the signature's length.
+/// `sizeof` counts the C string's NUL, so the size must exceed the signature's length.
 fn c_open(buf: &[u8]) -> bool {
     buf.len() > SIGNATURE.len() && buf.starts_with(SIGNATURE)
 }
 
-/// Variables as GRUB's iterate hook sees them: (name, value) C strings, in block order.
 type Vars = Vec<(Vec<u8>, Vec<u8>)>;
 
-/// `grub_envblk_set`. Returns 0/1 like the C function.
 fn c_set(buf: &mut [u8], name: &[u8], value: &[u8]) -> bool {
     let nl = name.len();
     let vl = c_escaped_value_len(value);
     let mut p = SIGNATURE.len();
     let pend = buf.len();
 
-    // First, look at free space.
     let mut space = pend - 1;
     while buf[space] == b'#' {
         space -= 1;
@@ -64,9 +50,7 @@ fn c_set(buf: &mut [u8], name: &[u8], value: &[u8]) -> bool {
     let mut found = false;
     while p + nl + 1 < space {
         if &buf[p..p + nl] == name && buf[p + nl] == b'=' {
-            // Found the same name.
             p += nl + 1;
-            // Check the length of the current value.
             let mut len = 0;
             while p + len < pend && buf[p + len] != b'\n' {
                 if buf[p + len] == b'\\' {
@@ -96,7 +80,6 @@ fn c_set(buf: &mut [u8], name: &[u8], value: &[u8]) -> bool {
     }
 
     if !found {
-        // Append a new variable.
         if pend - space < nl + 1 + vl + 1 {
             return false; // No space.
         }
@@ -106,7 +89,6 @@ fn c_set(buf: &mut [u8], name: &[u8], value: &[u8]) -> bool {
         p += 1;
     }
 
-    // Write the value.
     for &c in value {
         if c == b'\\' || c == b'\n' {
             buf[p] = b'\\';
@@ -119,14 +101,12 @@ fn c_set(buf: &mut [u8], name: &[u8], value: &[u8]) -> bool {
     true
 }
 
-/// `grub_envblk_delete`.
 fn c_delete(buf: &mut [u8], name: &[u8]) {
     let nl = name.len();
     let mut p = SIGNATURE.len();
     let pend = buf.len();
     while p + nl + 1 < pend {
         if &buf[p..p + nl] == name && buf[p + nl] == b'=' {
-            // Found.
             let mut len = nl + 1;
             while p + len < pend {
                 if buf[p + len] == b'\n' {
@@ -149,8 +129,7 @@ fn c_delete(buf: &mut [u8], name: &[u8]) {
     }
 }
 
-/// `grub_envblk_iterate` with a hook that collects (name, value) as C strings. The flag is
-/// true when the loop returned early on a broken entry.
+/// The flag is true when the loop returned early on a broken entry.
 fn c_iterate(buf: &[u8]) -> (Vars, bool) {
     fn c_string(bytes: &[u8]) -> Vec<u8> {
         bytes.iter().copied().take_while(|&b| b != 0).collect()
@@ -198,7 +177,6 @@ fn c_iterate(buf: &[u8]) -> (Vars, bool) {
     (vars, false)
 }
 
-/// The block `grub2-editenv create` writes.
 fn created_block() -> Vec<u8> {
     let mut buf = SIGNATURE.to_vec();
     buf.extend_from_slice(CREATE_WARNING);
@@ -235,7 +213,6 @@ fn arb_op() -> impl Strategy<Value = Op> {
     ]
 }
 
-/// A block body built from arbitrary lines, to fuzz the reader.
 fn arb_block() -> impl Strategy<Value = Vec<u8>> {
     let byte = prop::sample::select(vec![
         b'a', b'b', b'=', b'\n', b'\\', b'#', b'\r', b'\0', b'x', 0xff,
@@ -251,8 +228,6 @@ fn arb_block() -> impl Strategy<Value = Vec<u8>> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
-    /// Any sequence of edits yields byte-identical blocks, and the same successes and
-    /// failures, in the model and in GRUB's code.
     #[test]
     fn edits_match_grub(ops in prop::collection::vec(arb_op(), 0..40)) {
         let mut c_buf = created_block();
@@ -275,7 +250,6 @@ proptest! {
             }
             prop_assert_eq!(model.to_bytes(), c_buf.clone(), "after {:?}", op);
         }
-        // Reading back: same variables as GRUB's iterate, and an exact round trip.
         let parsed = GrubEnv::parse(&c_buf).unwrap();
         prop_assert_eq!(&parsed, &model);
         prop_assert_eq!(parsed.to_bytes(), c_buf.clone());
@@ -286,9 +260,6 @@ proptest! {
         prop_assert_eq!(vars, c_vars);
     }
 
-    /// The reader never panics, accepts exactly the blocks GRUB reads completely (except a
-    /// name containing a newline, which it rejects on purpose), sees the same variables,
-    /// and reproduces every block it accepts byte for byte.
     #[test]
     fn reader_matches_grub(buf in arb_block()) {
         let parsed = GrubEnv::parse(&buf);
@@ -310,8 +281,6 @@ proptest! {
         }
     }
 
-    /// Edits on arbitrary readable blocks also match GRUB, including blocks GRUB cannot
-    /// write to.
     #[test]
     fn edits_on_arbitrary_blocks_match_grub(buf in arb_block(), op in arb_op()) {
         let Ok(mut model) = GrubEnv::parse(&buf) else { return Ok(()); };
@@ -333,7 +302,6 @@ proptest! {
 
 #[test]
 fn reference_agrees_on_the_fixed_cases() {
-    // A value that shrinks and one that grows, in place.
     let mut buf = created_block();
     assert!(c_set(&mut buf, b"a", b"long value"));
     assert!(c_set(&mut buf, b"b", b"x"));

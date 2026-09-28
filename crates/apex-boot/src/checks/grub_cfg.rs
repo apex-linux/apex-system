@@ -1,14 +1,7 @@
-//! The installed `/boot/grub2/grub.cfg` and the boot counting snippet in it.
-//!
-//! bootupd writes the static GRUB config only at `bootc install`, so an image that ships a
-//! new snippet does not change what GRUB runs. Without the snippet the counter never moves
-//! and a broken update is never rolled back, which is why the snippet's presence is a
-//! required check ([`GrubCfgMarkerCheck`]). Any version this image can drive
-//! ([`MIN_COMPATIBLE_VERSION`] up to [`MARKER_VERSION`]) passes it; an older compatible
-//! version is only reported ([`GrubCfgCurrentCheck`]). Otherwise the first image that ships
-//! a new snippet version would fail its own assessment on every machine installed earlier,
-//! and be rolled back and denylisted there, while the only repair (reinstalling the
-//! snippet) has to come from that very image.
+//! Whether `/boot/grub2/grub.cfg` carries the boot counting snippet. bootupd writes it
+//! only at `bootc install`, so any version this image can drive passes the required check
+//! and an older one is only reported: otherwise the first image that ships a new version
+//! would be rolled back on every machine installed earlier.
 
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -16,49 +9,27 @@ use std::path::{Path, PathBuf};
 use crate::checks::{Check, names};
 use crate::snippet::{MARKER, MARKER_PREFIX, MARKER_VERSION, MIN_COMPATIBLE_VERSION};
 
-/// The GRUB config bootupd generates.
 pub const GRUB_CFG_PATH: &str = "/boot/grub2/grub.cfg";
 
-/// Why the snippet is not usable in a GRUB config.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MarkerError {
-    /// No marker line at all.
     #[error("grub.cfg does not contain the Apex boot counting snippet ({MARKER:?})")]
     Missing,
-    /// The snippet is a version this image cannot drive: older than
-    /// [`MIN_COMPATIBLE_VERSION`], newer than [`MARKER_VERSION`] (installed by a later
-    /// image), or not a version number at all.
     #[error("grub.cfg contains {found:?}; this image works with snippet versions {min} to {max}")]
-    Unsupported {
-        /// The marker line found.
-        found: String,
-        /// The oldest version the image drives.
-        min: u32,
-        /// The newest version the image drives (the one it ships).
-        max: u32,
-    },
-    /// More than one copy of the snippet (of any version) is included, so every boot
-    /// would be counted more than once.
+    Unsupported { found: String, min: u32, max: u32 },
+    /// Every boot would be counted more than once.
     #[error("grub.cfg contains the Apex boot counting snippet {count} times")]
-    Duplicated {
-        /// How many marker lines there are.
-        count: usize,
-    },
-    /// The snippet comes after `blscfg`, so it cannot choose between the boot entries
-    /// reliably.
+    Duplicated { count: usize },
+    /// The snippet can only choose between boot entries before `blscfg` creates them.
     #[error("the Apex boot counting snippet comes after blscfg in grub.cfg")]
     AfterBlscfg,
 }
 
-/// Checks the text of a GRUB config: exactly one snippet marker line (any line starting
-/// with [`MARKER_PREFIX`], trailing whitespace and `\r` ignored) whose version this image
-/// can drive ([`MIN_COMPATIBLE_VERSION`] to [`MARKER_VERSION`]), placed before the `blscfg`
-/// command that creates the boot entries. Returns the version found.
+/// Returns the version of the one snippet marker line.
 pub fn scan(grub_cfg: &str) -> Result<u32, MarkerError> {
     scan_for(grub_cfg, MIN_COMPATIBLE_VERSION..=MARKER_VERSION)
 }
 
-/// [`scan`] for an image that drives the snippet versions in `supported`.
 pub fn scan_for(grub_cfg: &str, supported: RangeInclusive<u32>) -> Result<u32, MarkerError> {
     let mut markers: Vec<(usize, &str)> = Vec::new();
     let mut blscfg_line = None;
@@ -88,8 +59,6 @@ pub fn scan_for(grub_cfg: &str, supported: RangeInclusive<u32>) -> Result<u32, M
     }
 }
 
-/// The version of a marker line: the decimal number after [`MARKER_PREFIX`], in its one
-/// canonical spelling.
 fn marker_version(line: &str) -> Option<u32> {
     let digits = line.strip_prefix(MARKER_PREFIX)?;
     digits
@@ -101,24 +70,20 @@ fn marker_version(line: &str) -> Option<u32> {
 fn read_cfg(path: &Path) -> Result<String, String> {
     let bytes =
         std::fs::read(path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
-    // Menu titles may hold any bytes; the marker is ASCII, so a lossy view is enough.
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// The required check reading [`GRUB_CFG_PATH`] (`grub.cfg` is mode 0600, so this needs
-/// root): the snippet is there once, before `blscfg`, in a version this image can drive.
+/// `grub.cfg` is mode 0600, so this needs root.
 #[derive(Debug, Clone)]
 pub struct GrubCfgMarkerCheck {
     path: PathBuf,
 }
 
 impl GrubCfgMarkerCheck {
-    /// The check on `/boot/grub2/grub.cfg`.
     pub fn system() -> Self {
         Self::new(GRUB_CFG_PATH)
     }
 
-    /// The check on another file.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -136,16 +101,12 @@ impl Check for GrubCfgMarkerCheck {
     }
 }
 
-/// The reported check [`names::GRUB_CFG_CURRENT`]: the snippet in `grub.cfg` is the
-/// version this image ships. An older, still compatible one works but misses the newer
-/// behaviour; `apexctl boot repair-grub` (M2) reinstalls it.
 #[derive(Debug, Clone)]
 pub struct GrubCfgCurrentCheck {
     path: PathBuf,
 }
 
 impl GrubCfgCurrentCheck {
-    /// The check on another file.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -157,12 +118,11 @@ impl Check for GrubCfgCurrentCheck {
     }
 
     fn run(&self) -> Result<(), String> {
-        current(scan(&read_cfg(&self.path)?), MARKER_VERSION)
+        current_version_verdict(scan(&read_cfg(&self.path)?), MARKER_VERSION)
     }
 }
 
-/// The reported verdict on a scan result for an image that ships version `shipped`.
-fn current(scanned: Result<u32, MarkerError>, shipped: u32) -> Result<(), String> {
+fn current_version_verdict(scanned: Result<u32, MarkerError>, shipped: u32) -> Result<(), String> {
     match scanned {
         Ok(found) if found == shipped => Ok(()),
         Ok(found) => Err(format!(
@@ -178,7 +138,6 @@ mod tests {
     use super::*;
     use crate::snippet::SNIPPET;
 
-    /// What bootupd generates: the pre config, then each fragment wrapped in markers.
     fn bootupd_cfg(fragments: &[(&str, &str)]) -> String {
         use std::fmt::Write as _;
         let mut cfg = String::from("# Generated by bootupd / do not edit\n\nset timeout=1\n");
@@ -188,7 +147,6 @@ mod tests {
         cfg
     }
 
-    /// A snippet of another version, as an older or newer image would have installed it.
     fn snippet_version(version: &str) -> String {
         SNIPPET.replacen(MARKER, &format!("{MARKER_PREFIX}{version}"), 1)
     }
@@ -213,7 +171,6 @@ mod tests {
         let cfg = bootupd_cfg(&[("10_blscfg.cfg", "blscfg\n")]);
         assert_eq!(scan(&cfg), Err(MarkerError::Missing));
         assert_eq!(scan(""), Err(MarkerError::Missing));
-        // Indented or commented differently is not the marker.
         assert_eq!(scan("  # apex-bootcount v1\n"), Err(MarkerError::Missing));
     }
 
@@ -235,7 +192,6 @@ mod tests {
                 "{version:?}"
             );
         }
-        // An older copy next to the current one would count every boot twice.
         let both = bootupd_cfg(&[
             ("07_old.cfg", "# apex-bootcount v0\n"),
             ("08_apex-bootcount.cfg", SNIPPET),
@@ -244,10 +200,6 @@ mod tests {
         assert_eq!(scan(&both), Err(MarkerError::Duplicated { count: 2 }));
     }
 
-    /// Finding: an image that bumps the snippet version must not fail its own required
-    /// check on machines that still run an older, compatible snippet. Here a v2 image
-    /// that still drives v1 meets a machine installed with v1: the required check passes
-    /// and only the reported one asks for a reinstall.
     #[test]
     fn an_older_compatible_snippet_is_reported_not_required() {
         let installed = bootupd_cfg(&[
@@ -257,19 +209,17 @@ mod tests {
         let found = scan_for(&installed, 1..=2);
         assert_eq!(found, Ok(1));
         assert_eq!(
-            current(found, 2),
+            current_version_verdict(found, 2),
             Err(
                 "grub.cfg has boot counting snippet v1, this image ships v2; \
                  reinstall it with `apexctl boot repair-grub`"
                     .to_owned()
             )
         );
-        // An image that dropped v1 on purpose fails the required check.
         assert!(matches!(
             scan_for(&installed, 2..=2),
             Err(MarkerError::Unsupported { min: 2, max: 2, .. })
         ));
-        // Today's image drives every version it declares.
         for version in MIN_COMPATIBLE_VERSION..=MARKER_VERSION {
             let body = snippet_version(&version.to_string());
             let cfg = bootupd_cfg(&[
@@ -277,7 +227,7 @@ mod tests {
                 ("10_blscfg.cfg", "blscfg\n"),
             ]);
             assert_eq!(scan(&cfg), Ok(version));
-            assert_eq!(current(scan(&cfg), version), Ok(()));
+            assert_eq!(current_version_verdict(scan(&cfg), version), Ok(()));
         }
     }
 
@@ -298,7 +248,6 @@ mod tests {
             ("50_apex-bootcount.cfg", SNIPPET),
         ]);
         assert_eq!(scan(&cfg), Err(MarkerError::AfterBlscfg));
-        // `insmod blscfg` or a comment is not the command.
         let cfg = format!("insmod blscfg\n# blscfg\n{SNIPPET}blscfg\n");
         assert_eq!(scan(&cfg), Ok(MARKER_VERSION));
     }

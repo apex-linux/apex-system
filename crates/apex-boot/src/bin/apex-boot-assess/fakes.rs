@@ -1,5 +1,3 @@
-//! Test doubles for [`crate::ports`].
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -10,10 +8,8 @@ use crate::ports::{
     BootedImage, Clock, FailureStore, HostStatus, Rebooter, SessionInfo, Sessions, Updater,
 };
 
-/// `unix_now` of a [`FakeClock`] that has not advanced.
 pub(crate) const UNIX_START: u64 = 1_790_000_000;
 
-/// A session with an age in seconds.
 pub(crate) fn session(id: &str, class: &str, state: &str, seat: &str, age: u64) -> SessionInfo {
     SessionInfo {
         id: id.to_owned(),
@@ -24,7 +20,7 @@ pub(crate) fn session(id: &str, class: &str, state: &str, seat: &str, age: u64) 
     }
 }
 
-/// A clock that only moves when something sleeps on it.
+/// Moves only when something sleeps on it or advances it.
 #[derive(Debug)]
 pub(crate) struct FakeClock {
     start: Instant,
@@ -32,7 +28,6 @@ pub(crate) struct FakeClock {
 }
 
 impl FakeClock {
-    /// A clock at its start.
     pub(crate) fn new() -> Self {
         Self {
             start: Instant::now(),
@@ -40,12 +35,10 @@ impl FakeClock {
         }
     }
 
-    /// Time slept so far.
     pub(crate) fn elapsed(&self) -> Duration {
         *self.elapsed.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Moves the clock forward.
     pub(crate) fn advance(&self, by: Duration) {
         *self.elapsed.lock().unwrap_or_else(PoisonError::into_inner) += by;
     }
@@ -68,7 +61,6 @@ impl Clock for FakeClock {
 /// What logind answers at a given time since the clock's start.
 pub(crate) type Script = Box<dyn Fn(Duration) -> Result<Vec<SessionInfo>, String> + Send + Sync>;
 
-/// logind answering from a script over the fake clock's time.
 pub(crate) struct FakeSessions {
     clock: Arc<FakeClock>,
     script: Mutex<Script>,
@@ -76,7 +68,6 @@ pub(crate) struct FakeSessions {
 }
 
 impl FakeSessions {
-    /// logind following `script`.
     pub(crate) fn new(
         clock: Arc<FakeClock>,
         script: impl Fn(Duration) -> Result<Vec<SessionInfo>, String> + Send + Sync + 'static,
@@ -88,7 +79,6 @@ impl FakeSessions {
         }
     }
 
-    /// Replaces the script (for example, a user logs in before the reboot).
     pub(crate) fn set(
         &self,
         script: impl Fn(Duration) -> Result<Vec<SessionInfo>, String> + Send + Sync + 'static,
@@ -96,7 +86,6 @@ impl FakeSessions {
         *self.script.lock().unwrap_or_else(PoisonError::into_inner) = Box::new(script);
     }
 
-    /// Number of `list` calls.
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
@@ -110,18 +99,15 @@ impl Sessions for FakeSessions {
     }
 }
 
-/// `apex-updated`, healthy or not.
 #[derive(Default)]
 pub(crate) struct FakeUpdater {
-    /// Pings that still fail (`u32::MAX` means all).
-    ping_failures: Mutex<u32>,
-    /// How long a failing ping takes, on `clock`.
-    ping_delay: Duration,
-    /// How long a successful ping takes, on `clock` (a daemon holding `Ping`).
+    /// `u32::MAX` means all.
+    ping_failures_left: Mutex<u32>,
+    failing_ping_delay: Duration,
     ping_answer_after: Duration,
     clock: Option<Arc<FakeClock>>,
     report_error: Option<String>,
-    /// Runs when `ReportBoot` is called, before its reply (the daemon's work).
+    /// The daemon's work, before its reply.
     on_report: Option<Box<dyn Fn(Verdict) + Send + Sync>>,
     booted: Option<Result<Option<String>, String>>,
     pings: AtomicUsize,
@@ -136,15 +122,14 @@ impl std::fmt::Debug for FakeUpdater {
 }
 
 impl FakeUpdater {
-    /// Answers everything; knows no booted digest.
+    /// Knows no booted digest.
     pub(crate) fn healthy() -> Self {
         Self::default()
     }
 
-    /// Not on the bus: every call fails at once.
     pub(crate) fn unreachable() -> Self {
         Self {
-            ping_failures: Mutex::new(u32::MAX),
+            ping_failures_left: Mutex::new(u32::MAX),
             report_error: Some("cannot connect to the system bus: connection refused".to_owned()),
             booted: Some(Err(
                 "cannot connect to the system bus: connection refused".to_owned()
@@ -153,40 +138,35 @@ impl FakeUpdater {
         }
     }
 
-    /// The first `times` pings fail with "Ping timed out" after `delay` on `clock`.
     pub(crate) fn ping_failing_times(
         mut self,
         times: u32,
         delay: Duration,
         clock: &Arc<FakeClock>,
     ) -> Self {
-        self.ping_failures = Mutex::new(times);
-        self.ping_delay = delay;
+        self.ping_failures_left = Mutex::new(times);
+        self.failing_ping_delay = delay;
         self.clock = Some(Arc::clone(clock));
         self
     }
 
-    /// Every `Ping` succeeds after `delay` on `clock`, or times out after the caller's
-    /// timeout when that is shorter.
+    /// Times out instead when the caller's timeout is shorter.
     pub(crate) fn answering_ping_after(mut self, delay: Duration, clock: &Arc<FakeClock>) -> Self {
         self.ping_answer_after = delay;
         self.clock = Some(Arc::clone(clock));
         self
     }
 
-    /// `ReportBoot` fails with `error`.
     pub(crate) fn report_failing(mut self, error: &str) -> Self {
         self.report_error = Some(error.to_owned());
         self
     }
 
-    /// `effect` runs on every `ReportBoot`, before the reply (or the failure).
     pub(crate) fn on_report(mut self, effect: impl Fn(Verdict) + Send + Sync + 'static) -> Self {
         self.on_report = Some(Box::new(effect));
         self
     }
 
-    /// The timeout of the last `Ping`.
     pub(crate) fn last_ping_timeout(&self) -> Option<Duration> {
         *self
             .last_ping_timeout
@@ -194,18 +174,16 @@ impl FakeUpdater {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The daemon's answer for the booted digest.
     pub(crate) fn with_booted(mut self, booted: Result<Option<String>, String>) -> Self {
         self.booted = Some(booted);
         self
     }
 
-    /// Number of pings.
     pub(crate) fn pings(&self) -> usize {
         self.pings.load(Ordering::SeqCst)
     }
 
-    /// Every `ReportBoot` call, failed ones included.
+    /// Failed ones included.
     pub(crate) fn reports(&self) -> Vec<(Verdict, Option<Digest>)> {
         self.reports
             .lock()
@@ -222,7 +200,7 @@ impl Updater for FakeUpdater {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(timeout);
         let mut failures = self
-            .ping_failures
+            .ping_failures_left
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if *failures == 0 {
@@ -242,9 +220,9 @@ impl Updater for FakeUpdater {
         }
         drop(failures);
         if let Some(clock) = &self.clock {
-            clock.advance(self.ping_delay);
+            clock.advance(self.failing_ping_delay);
         }
-        Err(if self.ping_delay.is_zero() {
+        Err(if self.failing_ping_delay.is_zero() {
             "cannot connect to the system bus: connection refused".to_owned()
         } else {
             "Ping timed out".to_owned()
@@ -267,8 +245,6 @@ impl Updater for FakeUpdater {
     }
 }
 
-/// `bootc status`: a fixed answer that a test can replace (for example after the daemon's
-/// `bootc rollback`).
 #[derive(Debug)]
 pub(crate) struct FakeHost {
     answer: Mutex<Result<BootedImage, String>>,
@@ -276,7 +252,6 @@ pub(crate) struct FakeHost {
 }
 
 impl FakeHost {
-    /// bootc answers `answer`.
     pub(crate) fn new(answer: Result<BootedImage, String>) -> Self {
         Self {
             answer: Mutex::new(answer),
@@ -284,30 +259,24 @@ impl FakeHost {
         }
     }
 
-    /// bootc reports `digest` as booted and first in the boot order, from the stable
-    /// image, verified.
     pub(crate) fn booted(digest: &Digest) -> Self {
         Self::new(Ok(booted_image(digest, None)))
     }
 
-    /// `digest` is booted, and `first` comes first in the boot order: the rollback
-    /// deployment is queued when `first` is not the booted one.
+    /// A rollback to `first` is queued when it is not the booted one.
     pub(crate) fn booted_with_first(digest: &Digest, first: &Digest) -> Self {
         Self::new(Ok(booted_image(digest, Some(first))))
     }
 
-    /// Replaces the answer.
     pub(crate) fn set(&self, answer: Result<BootedImage, String>) {
         *self.answer.lock().unwrap_or_else(PoisonError::into_inner) = answer;
     }
 
-    /// Number of `bootc status` calls.
     pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 }
 
-/// `bootc status` for `booted`, with `first` as entry 0 when given and not the booted one.
 pub(crate) fn booted_image(booted: &Digest, first: Option<&Digest>) -> BootedImage {
     let queued = first.filter(|f| *f != booted);
     BootedImage {
@@ -330,7 +299,6 @@ impl HostStatus for FakeHost {
     }
 }
 
-/// `health-failure.json` in memory.
 #[derive(Debug, Default)]
 pub(crate) struct FakeStore {
     error: Option<String>,
@@ -338,7 +306,6 @@ pub(crate) struct FakeStore {
 }
 
 impl FakeStore {
-    /// A store whose writes fail with `error`.
     pub(crate) fn failing(error: &str) -> Self {
         Self {
             error: Some(error.to_owned()),
@@ -346,7 +313,6 @@ impl FakeStore {
         }
     }
 
-    /// Every record written successfully.
     pub(crate) fn records(&self) -> Vec<HealthFailure> {
         self.records
             .lock()
@@ -368,7 +334,6 @@ impl FailureStore for FakeStore {
     }
 }
 
-/// `systemctl reboot` that only counts.
 #[derive(Debug, Default)]
 pub(crate) struct FakeRebooter {
     error: Option<String>,
@@ -376,7 +341,6 @@ pub(crate) struct FakeRebooter {
 }
 
 impl FakeRebooter {
-    /// A rebooter that fails with `error`.
     pub(crate) fn failing(error: &str) -> Self {
         Self {
             error: Some(error.to_owned()),
@@ -384,7 +348,7 @@ impl FakeRebooter {
         }
     }
 
-    /// Number of reboot requests, failed ones included.
+    /// Failed ones included.
     pub(crate) fn reboots(&self) -> usize {
         self.reboots.load(Ordering::SeqCst)
     }

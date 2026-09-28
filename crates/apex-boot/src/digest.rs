@@ -5,42 +5,26 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Algorithm prefix of every digest Apex handles.
 const PREFIX: &str = "sha256:";
-/// Number of hex characters in a SHA-256 digest.
 const HEX_LEN: usize = 64;
 
-/// A validated OCI manifest digest: `sha256:` followed by exactly 64 lowercase hex digits.
-///
-/// Only the canonical lowercase spelling is accepted, so two `Digest`s are equal exactly
-/// when their strings are equal. That is what the comparisons in the decision table and
-/// the digest stored in grubenv rely on.
+/// Only the canonical lowercase spelling is accepted, so two digests are equal exactly when
+/// their strings are, which the decision table and grubenv rely on.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Digest(String);
 
-/// Why a string is not a [`Digest`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DigestError {
-    /// The string does not start with `sha256:`.
     #[error("digest must start with \"sha256:\"")]
     MissingPrefix,
-    /// The hex part does not have 64 characters.
     #[error("digest must have 64 hex digits after \"sha256:\", found {found}")]
-    WrongLength {
-        /// Number of bytes after the prefix.
-        found: usize,
-    },
-    /// A character of the hex part is not `0-9` or `a-f` (uppercase is rejected).
+    WrongLength { found: usize },
     #[error("digest has a character that is not lowercase hex at byte {position}")]
-    NotLowercaseHex {
-        /// Byte offset in the whole string.
-        position: usize,
-    },
+    NotLowercaseHex { position: usize },
 }
 
 impl Digest {
-    /// Validates `s` and wraps it.
     pub fn parse(s: &str) -> Result<Self, DigestError> {
         let hex = s.strip_prefix(PREFIX).ok_or(DigestError::MissingPrefix)?;
         if hex.len() != HEX_LEN {
@@ -57,12 +41,10 @@ impl Digest {
         Ok(Self(s.to_owned()))
     }
 
-    /// The full digest, `sha256:…`.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The 64 hex digits without the algorithm prefix.
     pub fn hex(&self) -> &str {
         &self.0[PREFIX.len()..]
     }
@@ -166,7 +148,6 @@ mod tests {
             Digest::parse(&spaced),
             Err(DigestError::NotLowercaseHex { position: 70 })
         );
-        // Multi-byte characters are rejected, not sliced.
         let unicode = format!("sha256:{}é", &GOOD[7..69]);
         assert_eq!(unicode.len() - 7, 64);
         assert!(matches!(

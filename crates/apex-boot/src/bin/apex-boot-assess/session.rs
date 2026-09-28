@@ -1,20 +1,3 @@
-//! Sessions: the required session check, the bounded wait before the checks, and whether a
-//! user is logged in (which forbids a reboot).
-//!
-//! Two different questions are asked of the same logind data:
-//!
-//! - **Does the desktop work?** (required check, ADR 0009) A greeter or user session on a
-//!   seat has been active for [`SESSION_MIN_ACTIVE`]. A greeter whose gnome-shell crashes is
-//!   replaced by a new session, so a crash loop never produces a session that old. Sessions
-//!   without a seat (SSH) prove nothing about the desktop and do not count.
-//! - **Is somebody logged in?** (the decision's `user_session_active`, and the re-check before
-//!   a reboot) Any user-class session that is not closing, with or without a seat and
-//!   whether or not it is in the foreground: rebooting would end it. This question fails
-//!   safe: a session whose properties could not be read counts as a user's, and when logind
-//!   cannot answer at all the caller assumes somebody may be logged in. ADR 0009 forbids
-//!   rebooting a user's session; if logind is really broken nobody can log in through GDM
-//!   anyway, and GRUB counts each boot the user then power-cycles.
-
 use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -24,23 +7,17 @@ use apex_boot::{Check, FnCheck, SESSION_MIN_ACTIVE};
 
 use crate::ports::{Clock, SessionInfo, Sessions};
 
-/// How often logind is asked while waiting.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// How long the session check itself keeps looking. Its last logind query may start right
-/// at this deadline and take up to 5 s ([`apex_boot::LOGIND_TIMEOUT`]), which still ends before the
-/// runner's [`apex_boot::CHECK_TIMEOUT`], so the check ends with a reason, not a timeout.
-///
-/// The check polls instead of looking once because the session found by the wait can be
-/// gone by the time the checks run: logging in closes the greeter, and the new user session
-/// needs [`SESSION_MIN_ACTIVE`] of its own.
+/// With a last [`apex_boot::LOGIND_TIMEOUT`] still inside [`apex_boot::CHECK_TIMEOUT`]. The
+/// check polls because logging in closes the greeter the wait found, and the new user
+/// session needs [`SESSION_MIN_ACTIVE`] of its own.
 pub(crate) const SESSION_CHECK_BUDGET: Duration = Duration::from_secs(24);
 
-/// The classes that prove the desktop (ADR 0009: "a greeter or user session").
 const DESKTOP_CLASSES: [&str; 2] = ["greeter", "user"];
 
-/// Whether `session` proves the desktop: a greeter or user session on a seat, active, and
-/// created at least `min_active` ago.
+/// A crashing gnome-shell is replaced by a new session, so a crash loop never gets old
+/// enough; sessions without a seat (SSH) prove nothing about the desktop.
 pub(crate) fn proves_desktop(session: &SessionInfo, min_active: Duration) -> bool {
     DESKTOP_CLASSES.contains(&session.class.as_str())
         && session.state == "active"
@@ -48,7 +25,6 @@ pub(crate) fn proves_desktop(session: &SessionInfo, min_active: Duration) -> boo
         && session.age.is_some_and(|age| age >= min_active)
 }
 
-/// The first session that proves the desktop, if any.
 pub(crate) fn desktop_session(
     sessions: &[SessionInfo],
     min_active: Duration,
@@ -56,19 +32,14 @@ pub(crate) fn desktop_session(
     sessions.iter().find(|s| proves_desktop(s, min_active))
 }
 
-/// Whether a user may be logged in: a session of any user class (`user`, `user-early`,
-/// `user-incomplete`, `user-light`, …) that is not closing, or a session whose class
-/// could not be read (empty; see [`crate::ports::Sessions::list`]).
-///
-/// Closing sessions are excluded because they are logged out already; with systemd's
-/// default `KillUserProcesses=no` they linger as long as any process of theirs does.
+/// Fails safe: a session whose class could not be read may be somebody's. Closing sessions
+/// are logged out already but linger with systemd's default `KillUserProcesses=no`.
 pub(crate) fn user_logged_in(sessions: &[SessionInfo]) -> bool {
     sessions
         .iter()
         .any(|s| s.class.is_empty() || (s.class.starts_with("user") && s.state != "closing"))
 }
 
-/// One line describing the sessions, for failure reasons and the journal.
 pub(crate) fn describe(sessions: &[SessionInfo]) -> String {
     if sessions.is_empty() {
         return "no sessions".to_owned();
@@ -95,8 +66,6 @@ pub(crate) fn describe(sessions: &[SessionInfo]) -> String {
     out
 }
 
-/// Asks logind every [`POLL_INTERVAL`] until a session proves the desktop or `deadline`
-/// passes. Returns the session, or why none was found (the last listing or its error).
 pub(crate) fn poll_for_desktop(
     sessions: &dyn Sessions,
     clock: &dyn Clock,
@@ -124,7 +93,6 @@ pub(crate) fn poll_for_desktop(
     }
 }
 
-/// The required session check ([`names::SESSION`]).
 pub(crate) fn check(sessions: Arc<dyn Sessions>, clock: Arc<dyn Clock>) -> Box<dyn Check> {
     Box::new(FnCheck::new(names::SESSION, move || {
         let deadline = clock.now() + SESSION_CHECK_BUDGET;
@@ -177,8 +145,6 @@ mod tests {
         assert!(!user_logged_in(&[session(
             "7", "manager", "active", "", 60
         )]));
-        // Young, in the background, remote or early: still somebody's session. One whose
-        // properties could not be read may be somebody's too.
         for s in [
             session("2", "user", "active", "seat0", 0),
             session("2", "user", "online", "seat0", 60),
@@ -218,7 +184,6 @@ mod tests {
     #[test]
     fn polling_waits_for_the_session_to_be_old_enough() {
         let clock = Arc::new(FakeClock::new());
-        // The greeter appears after 30 s.
         let sessions = FakeSessions::new(Arc::clone(&clock), |t| {
             Ok(if t >= Duration::from_secs(30) {
                 vec![session(
@@ -275,8 +240,6 @@ mod tests {
 
     #[test]
     fn the_check_survives_the_handover_from_greeter_to_user() {
-        // The user logs in right when the checks start: the greeter is gone, the user
-        // session is new and becomes old enough within the check's budget.
         let clock = Arc::new(FakeClock::new());
         let sessions = Arc::new(FakeSessions::new(Arc::clone(&clock), |t| {
             Ok(vec![session("3", "user", "active", "seat0", t.as_secs())])
@@ -327,7 +290,6 @@ mod tests {
 
         #[test]
         fn a_user_desktop_session_is_always_a_login(sessions in proptest::collection::vec(arb_session(), 0..6)) {
-            // Whoever proves the desktop as a user is logged in; a greeter alone never is.
             if sessions.iter().any(|s| s.class == "user" && proves_desktop(s, SESSION_MIN_ACTIVE)) {
                 prop_assert!(user_logged_in(&sessions));
             }

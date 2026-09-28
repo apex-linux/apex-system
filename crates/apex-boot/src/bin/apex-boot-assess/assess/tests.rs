@@ -1,7 +1,3 @@
-//! Glue tests: every row of the decision table driven end to end through [`gather`] and
-//! [`perform`], with fakes for logind, `apex-updated`, bootc, the record, the reboot and
-//! grubenv writes, and stub checks for units and grub.cfg.
-
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,19 +31,16 @@ fn previous() -> Digest {
 
 type Script = fn(Duration) -> Result<Vec<SessionInfo>, String>;
 
-/// Only the greeter, up for a long time.
 #[expect(clippy::unnecessary_wraps, reason = "a logind script")]
 fn nobody(_: Duration) -> Result<Vec<SessionInfo>, String> {
     Ok(vec![session("c1", "greeter", "active", "seat0", 600)])
 }
 
-/// A user in the foreground; the greeter is gone.
 #[expect(clippy::unnecessary_wraps, reason = "a logind script")]
 fn logged_in(_: Duration) -> Result<Vec<SessionInfo>, String> {
     Ok(vec![session("2", "user", "active", "seat0", 600)])
 }
 
-/// One boot as the tests describe it.
 struct Scenario {
     grubenv: Vec<(&'static str, String)>,
     host: Arc<FakeHost>,
@@ -58,11 +51,9 @@ struct Scenario {
     writer_fails_at: Option<usize>,
     store: FakeStore,
     rebooter: FakeRebooter,
-    /// Content of the qualification hook file, if it exists.
-    force_red: Option<String>,
+    force_red_content: Option<String>,
 }
 
-/// What happened.
 struct Run {
     decision: Decision,
     gathered: Gathered,
@@ -85,7 +76,6 @@ impl Scenario {
         ])
     }
 
-    /// An ordinary boot.
     fn unarmed() -> Self {
         Self::with_grubenv(vec![("apex_ok", "0".to_owned())])
     }
@@ -101,17 +91,15 @@ impl Scenario {
             writer_fails_at: None,
             store: FakeStore::default(),
             rebooter: FakeRebooter::default(),
-            force_red: None,
+            force_red_content: None,
         }
     }
 
-    /// `digest` runs and is entry 0.
     fn booted(mut self, digest: &Digest) -> Self {
         self.host = Arc::new(FakeHost::booted(digest));
         self
     }
 
-    /// `digest` runs and `first` is entry 0 (a rollback to it is queued).
     fn booted_with_first(mut self, digest: &Digest, first: &Digest) -> Self {
         self.host = Arc::new(FakeHost::booted_with_first(digest, first));
         self
@@ -132,9 +120,8 @@ impl Scenario {
         self
     }
 
-    /// The qualification hook names `content`.
     fn force_red(mut self, content: &str) -> Self {
-        self.force_red = Some(content.to_owned());
+        self.force_red_content = Some(content.to_owned());
         self
     }
 
@@ -147,7 +134,7 @@ impl Scenario {
         }
         fs::write(&path, env.to_bytes()).unwrap();
         let force_red = dir.path().join("state/force-red");
-        if let Some(content) = &self.force_red {
+        if let Some(content) = &self.force_red_content {
             write_private(&force_red, content);
         }
 
@@ -168,7 +155,7 @@ impl Scenario {
             })),
             grub_cfg: Box::new(FnCheck::new(names::GRUB_CFG_MARKER, || Ok(()))),
             reported: vec![Box::new(FnCheck::new(names::CHARGE_THRESHOLD, || Ok(())))],
-            force_red,
+            force_red_path: force_red,
         };
         let gathered = gather(&ports, local, &path).unwrap();
         let decision = decide(&gathered.input);
@@ -217,7 +204,6 @@ impl Run {
     }
 }
 
-/// Writes `content` to `path` as the hook expects it: a 0600 file in a 0700 directory.
 fn write_private(path: &std::path::Path, content: &str) {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = path.parent().unwrap();
@@ -246,7 +232,7 @@ fn checks_run_in_the_documented_order() {
     let required: Vec<&str> = run
         .gathered
         .input
-        .checks
+        .required_checks
         .iter()
         .map(|c| c.name.as_str())
         .collect();
@@ -260,7 +246,6 @@ fn checks_run_in_the_documented_order() {
     assert_eq!(reported, [names::CHARGE_THRESHOLD, names::IMAGE_SOURCE]);
     assert!(run.gathered.reported.iter().all(|c| c.outcome.is_pass()));
     assert_eq!(run.gathered.booted_source, BootedSource::Bootc);
-    // The greeter was already up: no waiting.
     assert_eq!(run.clock.elapsed(), Duration::ZERO);
 }
 
@@ -289,7 +274,6 @@ fn green_confirms_the_target_and_clears_the_arming() {
     assert!(!run.failed());
 }
 
-/// Finding: an ordinary boot must not rewrite grubenv.
 #[test]
 fn an_ordinary_green_boot_leaves_grubenv_alone() {
     let run = Scenario::unarmed().booted(&previous()).run();
@@ -301,8 +285,6 @@ fn an_ordinary_green_boot_leaves_grubenv_alone() {
 
 #[test]
 fn a_failed_report_does_not_undo_the_confirmation() {
-    // The daemon answered Ping but not ReportBoot: the boot is still confirmed in grubenv,
-    // and the exit status shows the failed report.
     let mut scenario = Scenario::armed(1);
     scenario.updater = FakeUpdater::healthy().report_failing("ReportBoot timed out after 30 s");
     let run = scenario.run();
@@ -350,7 +332,6 @@ fn red_without_a_session_does_not_reboot_into_a_new_login() {
         run.outcomes.last(),
         Some(&StepOutcome::Skipped(Skip::UserLoggedIn))
     );
-    // Recorded and reported, so the daemon offers "Roll back" instead.
     assert_eq!(run.store.records().len(), 1);
     assert_eq!(run.updater.reports(), [(Verdict::Red, Some(target()))]);
     assert!(!run.failed());
@@ -371,7 +352,6 @@ fn red_without_a_session_and_an_unreachable_daemon_still_reboots() {
     };
     assert_eq!(failed_checks, &[names::UPDATER_PING.to_owned()]);
     assert!(reboot);
-    // The record survives the daemon; the failed report does not cancel the reboot.
     assert_eq!(run.store.records().len(), 1);
     assert!(matches!(run.outcome(2), StepOutcome::Failed(err) if err.contains("system bus")));
     assert_eq!(run.rebooter.reboots(), 1);
@@ -400,7 +380,6 @@ fn red_with_a_session_and_an_unreachable_daemon_is_not_lost() {
         run.decision.failed_checks(),
         [names::UPDATER_PING.to_owned()]
     );
-    // health-failure.json carries the failure until the daemon reads it.
     let records = run.store.records();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].digest, target());
@@ -441,15 +420,11 @@ fn fallback_hedges_reports_then_clears() {
     );
     assert_eq!(run.vars().apex_target, None);
     assert_eq!(run.vars().apex_counter, None);
-    // No reconciliation after a successful report: bootc status ran once, in gather.
     assert_eq!(run.outcome(3), &StepOutcome::Skipped(Skip::NotNeeded));
     assert_eq!(run.host.calls(), 1);
     assert!(!run.failed());
 }
 
-/// Finding: the daemon finishes a queued fallback (`bootc rollback`) even after the
-/// caller's 30 s timeout. The assessment must not assume nothing happened: it reads the
-/// boot order again and disarms, so GRUB does not boot the failed target from entry 1.
 #[test]
 fn a_fallback_reply_lost_after_the_rollback_still_disarms() {
     let mut scenario = Scenario::fell_back();
@@ -465,18 +440,17 @@ fn a_fallback_reply_lost_after_the_rollback_still_disarms() {
             unset(&["apex_target", "apex_counter"])
         ]
     );
-    assert_eq!(run.outcome(2), &StepOutcome::Skipped(Skip::AfterFailure(1)));
+    assert_eq!(
+        run.outcome(2),
+        &StepOutcome::Skipped(Skip::AfterFailure { failed_step: 1 })
+    );
     assert_eq!(run.outcome(3), &StepOutcome::Done);
     assert!(!run.vars().is_armed());
     assert_eq!(run.vars().apex_counter, None);
     assert_eq!(run.host.calls(), 2);
-    // The report failed, so the exit status still says so.
     assert!(run.failed());
 }
 
-/// The report failed and the rollback has not happened (yet): the hedge stays. GRUB then
-/// counts boots of entry 0, whichever deployment that is by then; it never goes back to -1,
-/// which would boot the target from entry 1 once a late rollback swapped the entries.
 #[test]
 fn fallback_keeps_the_hedge_while_the_rollback_is_not_seen() {
     for updater in [
@@ -491,11 +465,13 @@ fn fallback_keeps_the_hedge_while_the_rollback_is_not_seen() {
         assert_eq!(run.vars().apex_target, Some(target()));
         assert_eq!(run.vars().apex_counter, Some(3));
         assert!(matches!(run.outcome(1), StepOutcome::Failed(_)));
-        assert_eq!(run.outcome(2), &StepOutcome::Skipped(Skip::AfterFailure(1)));
+        assert_eq!(
+            run.outcome(2),
+            &StepOutcome::Skipped(Skip::AfterFailure { failed_step: 1 })
+        );
         assert_eq!(run.outcome(3), &StepOutcome::Done);
         assert!(run.failed());
     }
-    // bootc cannot say either: the hedge stays, and the step says why.
     let mut scenario = Scenario::fell_back();
     let host = Arc::clone(&scenario.host);
     scenario.updater = FakeUpdater::healthy()
@@ -510,8 +486,6 @@ fn fallback_keeps_the_hedge_while_the_rollback_is_not_seen() {
     );
 }
 
-/// A rollback must never be requested while grubenv cannot follow it: if the hedge cannot
-/// be written, nothing is reported and GRUB keeps booting the previous deployment.
 #[test]
 fn a_failed_hedge_never_asks_for_the_rollback() {
     let mut scenario = Scenario::fell_back();
@@ -521,15 +495,13 @@ fn a_failed_hedge_never_asks_for_the_rollback() {
     for step in 1..4 {
         assert_eq!(
             run.outcome(step),
-            &StepOutcome::Skipped(Skip::AfterFailure(0))
+            &StepOutcome::Skipped(Skip::AfterFailure { failed_step: 0 })
         );
     }
     assert_eq!(run.vars().apex_counter, Some(-1));
     assert!(run.failed());
 }
 
-/// Finding: GRUB booted the previous entry (a load failure with `fallback=1`, or a manual
-/// pick) while the target is still entry 0. The arming stays, so GRUB keeps counting.
 #[test]
 fn a_skipped_target_keeps_its_arming() {
     let run = Scenario::armed(1)
@@ -581,8 +553,6 @@ fn the_daemon_names_the_booted_digest_when_bootc_cannot() {
     );
 }
 
-/// Finding: with the booted digest unknown, nothing proves GRUB's entry 0 is the target,
-/// so the assessment never reboots.
 #[test]
 fn an_unknown_booted_digest_while_armed_is_red_without_a_reboot() {
     let mut scenario = Scenario::armed(1);
@@ -602,14 +572,12 @@ fn an_unknown_booted_digest_while_armed_is_red_without_a_reboot() {
     assert_eq!(run.rebooter.reboots(), 0);
 }
 
-// The qualification hook: /var/lib/apex/force-red naming the booted digest.
-
 #[test]
 fn the_hook_turns_the_armed_target_red_and_the_counter_moves() {
     let run = Scenario::armed(1)
         .force_red(&format!("{}\n", target()))
         .run();
-    let last = run.gathered.input.checks.last().unwrap();
+    let last = run.gathered.input.required_checks.last().unwrap();
     assert_eq!(last.name, names::FORCED_RED);
     assert!(!last.outcome.is_pass());
     assert!(matches!(
@@ -636,14 +604,12 @@ fn the_hook_on_an_unarmed_boot_only_reports() {
 
 #[test]
 fn the_hook_changes_nothing_for_another_digest() {
-    // After the counted rollback the previous deployment runs and the file still names
-    // the target: the previous deployment is judged on its own checks.
     let run = Scenario::armed(1).force_red(previous().as_str()).run();
     assert!(matches!(run.decision, Decision::Green { .. }));
     assert!(
         run.gathered
             .input
-            .checks
+            .required_checks
             .iter()
             .all(|c| c.name != names::FORCED_RED)
     );
@@ -683,7 +649,10 @@ fn a_failed_grubenv_write_cancels_the_reboot_but_not_the_record_or_report() {
     assert!(matches!(run.outcome(0), StepOutcome::Failed(_)));
     assert_eq!(run.outcome(1), &StepOutcome::Done);
     assert_eq!(run.outcome(2), &StepOutcome::Done);
-    assert_eq!(run.outcome(3), &StepOutcome::Skipped(Skip::AfterFailure(0)));
+    assert_eq!(
+        run.outcome(3),
+        &StepOutcome::Skipped(Skip::AfterFailure { failed_step: 0 })
+    );
     assert_eq!(run.rebooter.reboots(), 0);
     assert!(run.failed());
 }
@@ -742,7 +711,7 @@ fn no_session_at_all_fails_the_session_check_after_the_wait() {
     let run = Scenario::armed(1)
         .sessions(|_| Ok(vec![session("c3", "greeter", "active", "seat0", 3)]))
         .run();
-    let session_check = &run.gathered.input.checks[0];
+    let session_check = &run.gathered.input.required_checks[0];
     assert_eq!(
         session_check.outcome,
         CheckOutcome::Fail(
@@ -759,7 +728,6 @@ fn no_session_at_all_fails_the_session_check_after_the_wait() {
     ));
 }
 
-/// Finding: when logind cannot answer, a user may be logged in; never reboot on a guess.
 #[test]
 fn logind_down_means_red_and_no_reboot() {
     let run = Scenario::armed(1)
@@ -801,7 +769,6 @@ fn the_reboot_is_skipped_when_logind_cannot_answer_the_recheck() {
         run.outcomes.last(),
         Some(&StepOutcome::Skipped(Skip::SessionUnknown))
     );
-    // Recorded and reported, so the failure waits for the user.
     assert_eq!(run.store.records().len(), 1);
     assert_eq!(run.updater.reports(), [(Verdict::Red, Some(target()))]);
 }
@@ -822,7 +789,7 @@ fn an_uninterpretable_grubenv_stops_before_any_check() {
         failed_units: Box::new(FnCheck::new(names::FAILED_UNITS, || Ok(()))),
         grub_cfg: Box::new(FnCheck::new(names::GRUB_CFG_MARKER, || Ok(()))),
         reported: Vec::new(),
-        force_red: dir.path().join("force-red"),
+        force_red_path: dir.path().join("force-red"),
     };
 
     let missing = dir.path().join("missing");
@@ -851,7 +818,6 @@ fn an_uninterpretable_grubenv_stops_before_any_check() {
     assert_eq!(sessions.calls(), 0);
 }
 
-/// Every check ends by itself, with a reason, before the runner would call it a timeout.
 #[test]
 fn checks_finish_before_the_runner_times_them_out() {
     use crate::ping::{PING_BUDGET, PING_TIMEOUT};
@@ -860,22 +826,13 @@ fn checks_finish_before_the_runner_times_them_out() {
     use apex_boot::{CHECK_TIMEOUT, LOGIND_TIMEOUT};
 
     assert!(SESSION_CHECK_BUDGET + LOGIND_TIMEOUT < CHECK_TIMEOUT);
-    // Every Ping attempt ends by PING_BUDGET.
     assert!(PING_BUDGET < CHECK_TIMEOUT && PING_TIMEOUT <= PING_BUDGET);
     assert!(SYSTEMCTL_TIMEOUT < CHECK_TIMEOUT);
 }
 
-/// [`apex_boot::ASSESS_TIME_BUDGET`] is the one statement of the worst case (the unit test
-/// in `tests/unit_file.rs` holds `TimeoutStartSec=` to it). The library may not depend on
-/// apex-bootc. apex-bootc's status timeout and kill grace fit in the library's bound, and
-/// the binary enforces that bound itself (`system::BootcStatus`), because apex-bootc may
-/// then wait another 10 s to reap a killed process.
 #[test]
 fn the_time_budget_uses_the_real_bootc_bound() {
     assert!(apex_bootc::STATUS_TIMEOUT + apex_bootc::KILL_GRACE <= apex_boot::BOOTC_STATUS_BOUND);
-    // The waits of this binary that the budget names are the library's constants: the
-    // session wait is SESSION_WAIT, and each check ends within CHECK_TIMEOUT (see
-    // checks_finish_before_the_runner_times_them_out).
     assert_eq!(apex_boot::ASSESS_TIME_BUDGET, Duration::from_secs(305));
 }
 
@@ -890,7 +847,7 @@ fn steps_are_described_on_one_line() {
             },
             booted_digest: booted,
             default_deployment: DefaultDeployment::Booted,
-            checks: vec![CheckResult::fail(names::SESSION, "no session")],
+            required_checks: vec![CheckResult::fail(names::SESSION, "no session")],
             user_session_active: false,
         })
         .steps()
@@ -919,8 +876,6 @@ fn steps_are_described_on_one_line() {
     );
 }
 
-// Failure policy over arbitrary decisions and failures.
-
 fn arb_input() -> impl Strategy<Value = AssessInput> {
     let digest = || prop_oneof![Just(target()), Just(previous())];
     let default = prop_oneof![
@@ -945,7 +900,7 @@ fn arb_input() -> impl Strategy<Value = AssessInput> {
                 },
                 booted_digest: booted,
                 default_deployment: default,
-                checks: names::REQUIRED
+                required_checks: names::REQUIRED
                     .iter()
                     .zip(passes)
                     .map(|(name, pass)| {
@@ -1006,39 +961,32 @@ proptest! {
 
         prop_assert_eq!(outcomes.len(), steps.len());
         let env_failed = writer_fails_at.is_some_and(|n| n < writer.calls().len());
-        // Never reboot after a failed grubenv write, into a login, or unless decided.
         if rebooter.reboots() > 0 {
             prop_assert!(decision.reboot());
             prop_assert!(!env_failed);
             prop_assert!(!login_before_reboot);
         }
         let fallback = matches!(decision, Decision::Fallback { .. });
-        // A fallback asks for the rollback only after its hedge is in grubenv.
         if fallback && writer_fails_at == Some(0) {
             prop_assert!(updater.reports().is_empty());
         }
-        // After a failed required report only the reconciliation runs, and it writes at
-        // most the disarm.
         if fallback && report_fails && writer_fails_at != Some(0) {
-            prop_assert_eq!(&outcomes[2], &StepOutcome::Skipped(Skip::AfterFailure(1)));
+            prop_assert_eq!(&outcomes[2], &StepOutcome::Skipped(Skip::AfterFailure { failed_step: 1 }));
             prop_assert!(!matches!(outcomes[3], StepOutcome::Skipped(_)));
             prop_assert!(writer.calls().len() <= 2);
         }
-        // The reconciliation runs exactly when the required report failed.
         for (step, outcome) in steps.iter().zip(&outcomes) {
             if matches!(step, Step::ReconcileFallback { .. }) {
                 let report_failed = matches!(outcomes[1], StepOutcome::Failed(_));
                 prop_assert_eq!(!matches!(outcome, StepOutcome::Skipped(_)), report_failed);
             }
         }
-        // Otherwise the decided reboot happens exactly when nothing forbids it.
         if decision.reboot() && !env_failed && !login_before_reboot {
             prop_assert_eq!(rebooter.reboots(), 1);
         }
-        // Every step that is not skipped is attempted; a skip names a real reason.
         for (step, outcome) in steps.iter().zip(&outcomes) {
             match outcome {
-                StepOutcome::Skipped(Skip::AfterFailure(i)) => {
+                StepOutcome::Skipped(Skip::AfterFailure { failed_step: i }) => {
                     prop_assert!(matches!(outcomes[*i], StepOutcome::Failed(_)));
                     prop_assert!(step.skipped_after_failure_of(&steps[*i]));
                 }
@@ -1054,7 +1002,6 @@ proptest! {
                 StepOutcome::Done | StepOutcome::Failed(_) => {}
             }
         }
-        // The exit status says whether anything failed.
         prop_assert_eq!(any_failed(&outcomes), outcomes.iter().any(|o| matches!(o, StepOutcome::Failed(_))));
         let reported = updater.reports().len();
         prop_assert!(reported <= 1);

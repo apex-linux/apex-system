@@ -1,10 +1,6 @@
-//! Runs the early-boot watchdog ([`apex_boot::emergency::run`]) against fixture grubenv
-//! files, the host's real `head`, and fake `systemd-run` and `systemctl` scripts that record
-//! their argv and check the cleared environment.
-//!
-//! Everything is in one test function on purpose: the scripts are written before anything
-//! is executed, so no other test thread can fork while a script is open for writing (which
-//! would make its exec fail with ETXTBSY).
+//! Everything is in one test function: every fake script is written before anything runs,
+//! so no other test thread can fork while a script is open for writing, or its exec fails
+//! with ETXTBSY.
 
 #![allow(
     clippy::unwrap_used,
@@ -24,9 +20,7 @@ use apex_boot::emergency::{
 
 const TARGET: &str = "sha256:4444444444444444444444444444444444444444444444444444444444444444";
 
-/// A fake program: checks the environment the watchdog gives it, appends its argv (one
-/// argument per line, then a `--end--` line) to `<path>.log`, prints `stderr` and exits
-/// with `code`, or hangs.
+/// Appends its argv, one argument per line and then `--end--`, to `<path>.log`.
 fn write_fake(dir: &Path, name: &str, stderr: &str, code: Option<i32>) -> PathBuf {
     let path = dir.join(name);
     let log = dir.join(format!("{name}.log"));
@@ -51,7 +45,6 @@ printf '%s' '{stderr}' >&2
     path
 }
 
-/// Every call a fake recorded, each as its argv.
 fn calls(program: &Path) -> Vec<Vec<String>> {
     let log = PathBuf::from(format!("{}.log", program.display()));
     let Ok(text) = fs::read_to_string(&log) else {
@@ -87,7 +80,6 @@ struct Fakes {
     head_hangs: PathBuf,
 }
 
-/// Runs the watchdog and returns what it did and printed.
 fn watch(host: &Host, dry_run: bool) -> (Outcome, String, Duration) {
     let mut console = Vec::new();
     let started = Instant::now();
@@ -103,7 +95,7 @@ fn watch(host: &Host, dry_run: bool) -> (Outcome, String, Duration) {
 fn the_watchdog_against_fake_programs() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    // Every script is written before the first one runs (see the module docs).
+    // Every script is written before the first one runs.
     let fakes = Fakes {
         run_ok: write_fake(d, "systemd-run-ok", "", Some(0)),
         run_taken: write_fake(
@@ -128,7 +120,6 @@ fn the_watchdog_against_fake_programs() {
         query_timeout: Duration::from_secs(10),
         ..Host::system()
     };
-    // The real head(1) reads the fixtures.
     assert!(base.head.exists(), "{:?}", base.head);
 
     scheduling(&fakes, &base);
@@ -137,8 +128,6 @@ fn the_watchdog_against_fake_programs() {
     unreadable_grubenv(&fakes, &base);
 }
 
-/// An armed boot GRUB counted: the reboot is scheduled with the exact command line, in a
-/// cleared environment, and announced; or it was already, or it is only shown.
 fn scheduling(fakes: &Fakes, base: &Host) {
     let env_path = &base.grubenv;
     fs::write(
@@ -165,7 +154,6 @@ fn scheduling(fakes: &Fakes, base: &Host) {
     assert_eq!(calls(&fakes.run_ok), [schedule_args()]);
     assert!(calls(&fakes.ctl_inactive).is_empty());
 
-    // The same boot in a dry run: announced, the command shown, nothing run.
     let (outcome, console, _) = watch(base, true);
     assert_eq!(outcome, Outcome::WouldReboot { remaining: 2 });
     assert!(
@@ -182,8 +170,6 @@ fn scheduling(fakes: &Fakes, base: &Host) {
     );
     assert!(calls(&fakes.run_ok).is_empty());
 
-    // An earlier entry into emergency mode scheduled it already: systemd-run refuses the
-    // name, the timer is active, and the console says so.
     let host = Host {
         systemd_run: fakes.run_taken.clone(),
         systemctl: fakes.ctl_active.clone(),
@@ -208,8 +194,6 @@ fn scheduling(fakes: &Fakes, base: &Host) {
     );
 }
 
-/// `systemd-run` fails or hangs and no timer exists: the console says what to do instead,
-/// and the run still ends in bounded time.
 fn failing_to_schedule(fakes: &Fakes, base: &Host) {
     let host = Host {
         systemd_run: fakes.run_taken.clone(),
@@ -234,7 +218,6 @@ fn failing_to_schedule(fakes: &Fakes, base: &Host) {
     assert_eq!(calls(&fakes.run_taken).len(), 1);
     assert_eq!(calls(&fakes.ctl_inactive).len(), 1);
 
-    // systemd-run hangs: killed at its timeout, and the run still ends in bounded time.
     let host = Host {
         systemd_run: fakes.run_hangs.clone(),
         schedule_timeout: Duration::from_millis(300),
@@ -250,7 +233,6 @@ fn failing_to_schedule(fakes: &Fakes, base: &Host) {
     assert_eq!(calls(&fakes.ctl_inactive).len(), 1);
 }
 
-/// Boots the watchdog leaves alone: silent, and nothing is run.
 fn leaving_the_shell_alone(fakes: &Fakes, base: &Host, d: &Path) {
     let env_path = &base.grubenv;
     for (vars, reason) in [
@@ -284,13 +266,11 @@ fn leaving_the_shell_alone(fakes: &Fakes, base: &Host, d: &Path) {
         let (outcome, console, _) = watch(base, false);
         assert_eq!(outcome, Outcome::Stay(reason), "{vars:?}");
         assert_eq!(console, "", "{vars:?}");
-        // The dry run says why.
         let (_, console, _) = watch(base, true);
         assert_eq!(console, format!("Apex (dry run): no reboot: {reason}\n"));
     }
     assert!(calls(&fakes.run_ok).is_empty());
 
-    // In an initramfs nothing is read (head points nowhere) or run.
     fs::write(d.join("initrd-release"), "").unwrap();
     let host = Host {
         head: d.join("missing-head"),
@@ -303,8 +283,6 @@ fn leaving_the_shell_alone(fakes: &Fakes, base: &Host, d: &Path) {
     assert!(calls(&fakes.run_ok).is_empty());
 }
 
-/// grubenv that cannot be read or interpreted: one line, no reboot; a read that hangs is
-/// abandoned at its timeout.
 fn unreadable_grubenv(fakes: &Fakes, base: &Host) {
     let env_path = &base.grubenv;
     fs::remove_file(env_path).unwrap();
@@ -349,7 +327,6 @@ fn unreadable_grubenv(fakes: &Fakes, base: &Host) {
     }
     assert!(calls(&fakes.run_ok).is_empty());
 
-    // A read that hangs (a stalled /boot) is abandoned at its timeout.
     let host = Host {
         head: fakes.head_hangs.clone(),
         read_timeout: Duration::from_millis(300),

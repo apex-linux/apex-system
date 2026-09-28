@@ -12,7 +12,6 @@ publish.workspace = true
 [lib]
 name = "apex_boot"
 
-# Installed as /usr/libexec/apex/apex-boot-assess (M1 contract §2).
 [[bin]]
 name = "apex-boot-assess"
 path = "src/bin/apex-boot-assess/main.rs"
@@ -20,7 +19,7 @@ path = "src/bin/apex-boot-assess/main.rs"
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
-# Used only by the apex-boot-assess binary (M1 contract §9); the library needs none of them.
+# Used only by the apex-boot-assess binary; the library needs none of them.
 anyhow.workspace = true
 apex-bootc.workspace = true
 apex-dbus.workspace = true

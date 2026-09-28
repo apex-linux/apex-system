@@ -1,40 +1,5 @@
-//! `apex-boot-assess`: judges each boot once and acts on the verdict (ADR 0009).
-//!
-//! Run by `apex-boot-assess.service` after `graphical.target`. It
-//!
-//! 1. waits (bounded) for a greeter or user session;
-//! 2. runs the required checks (session, `NetworkManager` and logind active, `apex-updated`
-//!    answers `Ping`, no required unit failed, the grub.cfg snippet marker) and the
-//!    file-based reported ones in one concurrent batch through the library's runner (30 s per
-//!    check), while `bootc status` names the booted digest and the image source;
-//! 3. adds the failed check `forced-red` when the qualification hook
-//!    `/var/lib/apex/force-red` names the booted digest (see `--help`);
-//! 4. reads the Apex variables from grubenv, takes the boot order from the same `bootc
-//!    status`, and asks logind whether a user may be logged in (assumed when logind cannot
-//!    answer);
-//! 5. applies [`apex_boot::decide()`] and performs its steps: grubenv through `grub2-editenv`
-//!    (in a private mount namespace in which the read-only `/boot` is remounted read-write,
-//!    [`apex_boot::Editenv::system`]), `/var/lib/apex/health-failure.json`, `ReportBoot` to
-//!    `apex-updated`, after a failed fallback report a second `bootc status` to reconcile
-//!    grubenv with the boot order, and `systemctl reboot` only for a failed update while
-//!    nobody is logged in.
-//!
-//! The whole run is bounded by [`apex_boot::ASSESS_TIME_BUDGET`].
-//!
-//! Exit status: 0 when every step succeeded; 1 when grubenv could not be interpreted
-//! (nothing was changed) or any step failed (the others were still carried out as far as
-//! the library's failure policy allows).
-//!
-//! With `--emergency-watchdog` (run by the `emergency.service` and `rescue.service`
-//! drop-ins) it does none of that: it runs [`apex_boot::emergency::run`], which schedules a
-//! reboot in 60 s only when GRUB counted this boot of an update on trial, and prints to the
-//! console (standard output). No tokio runtime, no D-Bus, no logging to stderr; bounded by
-//! [`apex_boot::emergency::WATCHDOG_TIME_BUDGET`]. Exit status 1 when grubenv could not be
-//! read or the reboot could not be scheduled (the drop-in ignores it).
-//!
-//! Threads: a tokio `current_thread` runtime on the main thread drives zbus and apex-bootc;
-//! the assessment itself runs on a blocking thread and reaches the runtime through its
-//! handle (see [`system`]).
+//! `apex-boot-assess`: judges each boot once and acts on the verdict, or with
+//! `--emergency-watchdog` runs the early-boot watchdog of the emergency and rescue shells.
 
 mod assess;
 mod cli;
@@ -79,8 +44,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// The early-boot watchdog: everything it says goes to standard output, which the shell
-/// units connect to the console.
+/// The shell units connect standard output to the console.
 fn emergency_watchdog(args: &Args) -> ExitCode {
     let paths = args.paths();
     let host = emergency::Host {
@@ -96,7 +60,7 @@ fn emergency_watchdog(args: &Args) -> ExitCode {
     }
 }
 
-/// Logs to stderr, which systemd sends to the journal with its own timestamps.
+/// systemd adds its own timestamps in the journal.
 fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
@@ -116,7 +80,7 @@ fn run(args: Args) -> anyhow::Result<ExitCode> {
         .context("cannot start the tokio runtime")?;
     let handle = runtime.handle().clone();
     // The main thread drives the runtime (I/O, timers, zbus's tasks) while the assessment
-    // blocks on its own thread.
+    // blocks on its own thread and reaches the runtime through its handle.
     let result = runtime.block_on(async move {
         tokio::task::spawn_blocking(move || assess_system(&args, handle)).await
     });
@@ -139,7 +103,7 @@ fn assess_system(args: &Args, handle: Handle) -> anyhow::Result<ExitCode> {
         failed_units: Box::new(FailedUnitsCheck::system()),
         grub_cfg: Box::new(GrubCfgMarkerCheck::new(&paths.grub_cfg)),
         reported: reported::file_checks(&paths.root),
-        force_red: paths.force_red.clone(),
+        force_red_path: paths.force_red.clone(),
     };
 
     tracing::info!(
@@ -160,9 +124,7 @@ fn assess_system(args: &Args, handle: Handle) -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Without --dry-run the paths are the system's (--grubenv and --root require it), so
-    // this is /boot/grub2/grubenv, written in a private mount namespace with /boot
-    // remounted read-write.
+    // Without --dry-run this is always /boot/grub2/grubenv: --grubenv and --root require it.
     let mut writer = Editenv::for_file(&paths.grubenv);
     let store = FileStore::new(paths.health_failure.clone());
     let outcomes = assess::perform(

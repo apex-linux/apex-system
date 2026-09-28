@@ -1,41 +1,10 @@
-//! Writing grubenv: the [`GrubEnvWriter`] boundary, its production implementation
-//! ([`Editenv`], which runs `grub2-editenv`), and a recording fake ([`RecordingWriter`]).
+//! Writing grubenv. `bootc install` mounts `/boot` read-only, so [`Editenv::system`] runs
+//! `grub2-editenv` in a private mount namespace in which `/boot` is remounted read-write;
+//! the host never sees a writable `/boot`.
 //!
-//! # `/boot` is read-only on bootc systems
-//!
-//! `bootc install` mounts `/boot` read-only (it writes `ro` into the fstab entry), so
-//! `grub2-editenv` cannot write `/boot/grub2/grubenv` on the host. [`Editenv::system`]
-//! therefore runs every write in a private mount namespace in which `/boot` has been
-//! remounted read-write (M1 contract §5):
-//!
-//! ```text
-//! /usr/bin/unshare --mount --propagation private -- \
-//!     /usr/bin/sh -c 'SCRIPT' /boot/grub2/grubenv set|unset ARG...
-//! SCRIPT = /usr/bin/mount -n -o remount,rw /boot && exec /usr/bin/grub2-editenv "$0" "$@"
-//! ```
-//!
-//! - `unshare` gives the helper its own mount namespace, and `--propagation private` stops
-//!   any mount event from travelling back. The remount changes only that namespace's copy of
-//!   the `/boot` mount, so the host never sees a writable `/boot`. The namespace disappears
-//!   when `grub2-editenv` exits. ostree does the same for its own writes: it remounts
-//!   `/sysroot` and `/boot` read-write inside a private mount namespace.
-//! - The script is a compile-time constant ([`REMOUNT_SCRIPT`]). The grubenv path and the
-//!   arguments reach it only as positional parameters (`$0`, `"$@"`), never as script text.
-//!   Every argument is validated before anything runs: names must be Apex variables
-//!   ([`BootVar::from_name`]) and values digests or integers ([`BootVar::check_value`]).
-//! - When `/boot` is already writable, the remount changes nothing. `-n` skips
-//!   `/run/mount/utab`, which is meaningless in a namespace that is about to disappear and
-//!   read-only under `ProtectSystem=strict`.
-//! - The superblock of `/boot` stays read-write afterwards, while the host's mount of it
-//!   stays read-only. ostree leaves the same state after every deployment operation.
-//!
-//! Why a helper process instead of `unshare(CLONE_NEWNS)` in this process: both callers are
-//! multi-threaded (`apex-updated` and `apex-boot-assess` run tokio plus blocking and check
-//! threads). In a multi-threaded process `unshare(CLONE_NEWNS)` moves only the calling
-//! thread into the new namespace. That thread belongs to a pool that runs unrelated work
-//! later, which would then see a writable `/boot`. Doing it between `fork` and `exec`
-//! (`CommandExt::pre_exec`) needs unsafe code, which the workspace denies. `unshare(1)`
-//! does it in a fresh, single-threaded process.
+//! That namespace comes from `unshare(1)` rather than `unshare(CLONE_NEWNS)` here: in a
+//! multi-threaded process only the calling pool thread would move, and doing it between
+//! `fork` and `exec` needs unsafe code.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -46,82 +15,52 @@ use crate::grubenv::{EditError, GrubEnv};
 use crate::process;
 use crate::vars::{BootVar, EnvOp, ValueError};
 
-/// The grubenv file GRUB loads (M1 contract §5).
 pub const GRUBENV_PATH: &str = "/boot/grub2/grubenv";
 
-/// The `grub2-editenv` executable (package `grub2-tools-minimal`).
 pub const GRUB2_EDITENV: &str = "/usr/bin/grub2-editenv";
 
-/// `unshare(1)` (package `util-linux-core`).
 pub const UNSHARE: &str = "/usr/bin/unshare";
 
-/// The shell that runs [`REMOUNT_SCRIPT`].
 pub const SH: &str = "/usr/bin/sh";
 
-/// `mount(8)` (package `util-linux-core`).
 pub const MOUNT: &str = "/usr/bin/mount";
 
-/// The mount that holds grubenv and is read-only on bootc systems.
 pub const BOOT_MOUNT: &str = "/boot";
 
-/// Runs inside the private mount namespace: remount `/boot` read-write, then replace the
-/// shell with `grub2-editenv`, passing on the grubenv path (`$0`) and the validated
-/// arguments (`"$@"`) unchanged. `&&` means `grub2-editenv` never runs when the remount
-/// failed.
+/// A constant, so the grubenv path and the arguments reach it only as positional
+/// parameters, never as script text. `-n` skips `/run/mount/utab`, which is read-only under
+/// `ProtectSystem=strict`.
 pub const REMOUNT_SCRIPT: &str = concat!(
     "/usr/bin/mount -n -o remount,rw /boot",
     " && exec /usr/bin/grub2-editenv \"$0\" \"$@\""
 );
 
-/// How long one `grub2-editenv` call (including the namespace setup) may take before it is
-/// killed. The call returns at most [`crate::KILL_REAP_GRACE`] later, even if the killed
-/// helper hangs in uninterruptible sleep.
 pub const EDITENV_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Something that edits the GRUB environment block.
-///
-/// Each call is one `grub2-editenv` invocation: it reads the block, applies every
-/// assignment or removal in order, and writes the block back once. That makes a single
-/// call the unit of consistency; for example [`crate::vars::arm_ops`] is a single `set`.
+/// Each call is one `grub2-editenv` invocation, which writes the block back once: a single
+/// call is the unit of consistency.
 pub trait GrubEnvWriter {
-    /// `grub2-editenv <file> set name=value…`.
     fn set(&mut self, assignments: &[(&str, &str)]) -> Result<(), WriteError>;
 
-    /// `grub2-editenv <file> unset name…`.
     fn unset(&mut self, names: &[&str]) -> Result<(), WriteError>;
 }
 
-/// Why a grubenv write failed.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
-    /// A name is not an Apex variable, or a value is not one Apex writes; nothing was run.
     #[error(transparent)]
     Value(#[from] ValueError),
-    /// The helper could not be started, waited for, or finished in time.
     #[error("running grub2-editenv failed: {message}")]
-    Run {
-        /// What went wrong.
-        message: String,
-    },
-    /// The helper exited unsuccessfully (`unshare`, the remount or `grub2-editenv`).
+    Run { message: String },
     #[error("writing grubenv failed ({status}): {stderr}")]
-    Failed {
-        /// The exit status as text.
-        status: String,
-        /// Its standard error, trimmed.
-        stderr: String,
-    },
-    /// The in-memory model refused the edit (fakes only).
+    Failed { status: String, stderr: String },
     #[error(transparent)]
     Edit(#[from] EditError),
-    /// A fake was told to fail this call.
     #[error("injected failure")]
     Injected,
 }
 
-/// Applies `ops` in order with as few calls as possible: each run of consecutive `Set`s
-/// becomes one `set` call and each run of consecutive `Unset`s one `unset` call. Stops at
-/// the first failed call; the calls before it have taken effect.
+/// One call per run of consecutive `Set`s or `Unset`s. Stops at the first failed call; the
+/// calls before it have taken effect.
 pub fn apply_ops<W: GrubEnvWriter + ?Sized>(
     writer: &mut W,
     ops: &[EnvOp],
@@ -152,20 +91,16 @@ pub fn apply_ops<W: GrubEnvWriter + ?Sized>(
     Ok(())
 }
 
-/// Checks every assignment (Apex variable, valid value) and returns the
-/// `grub2-editenv set` arguments.
 pub fn set_args(assignments: &[(&str, &str)]) -> Result<Vec<OsString>, ValueError> {
     assignments
         .iter()
         .map(|(name, value)| {
             BootVar::from_name(name)?.check_value(value)?;
-            // grub2-editenv splits at the first '='; a name never contains one.
             Ok(OsString::from(format!("{name}={value}")))
         })
         .collect()
 }
 
-/// Checks every name (Apex variable) and returns the `grub2-editenv unset` arguments.
 pub fn unset_args(names: &[&str]) -> Result<Vec<OsString>, ValueError> {
     names
         .iter()
@@ -173,20 +108,13 @@ pub fn unset_args(names: &[&str]) -> Result<Vec<OsString>, ValueError> {
         .collect()
 }
 
-/// How [`Editenv`] starts `grub2-editenv`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Launch {
-    /// `<program> <file> <verb> <args…>`, for files that are not on the read-only `/boot`.
     Direct { program: PathBuf, grubenv: PathBuf },
-    /// `unshare … sh -c REMOUNT_SCRIPT /boot/grub2/grubenv <verb> <args…>`.
     PrivateBootRw,
 }
 
-/// The production writer: runs `grub2-editenv` with a cleared environment and a timeout,
-/// never through a shell that sees its arguments as code.
-///
-/// It writes only the Apex variables, with values [`BootVar::check_value`] accepts; any
-/// other name or value is refused before anything runs ([`WriteError::Value`]).
+/// Refuses every name and value but the Apex variables' before anything runs.
 #[derive(Debug, Clone)]
 pub struct Editenv {
     launch: Launch,
@@ -194,8 +122,7 @@ pub struct Editenv {
 }
 
 impl Editenv {
-    /// `grub2-editenv` on `/boot/grub2/grubenv`, in a private mount namespace in which
-    /// `/boot` is read-write (see the module docs). Needs root (`CAP_SYS_ADMIN`).
+    /// Needs `CAP_SYS_ADMIN`.
     pub fn system() -> Self {
         Self {
             launch: Launch::PrivateBootRw,
@@ -203,9 +130,6 @@ impl Editenv {
         }
     }
 
-    /// The writer for `grubenv`: [`Editenv::system`] for exactly [`GRUBENV_PATH`], and a
-    /// direct `grub2-editenv` for any other file (tests and inspection copies, which are
-    /// not on `/boot`).
     pub fn for_file(grubenv: impl Into<PathBuf>) -> Self {
         let grubenv = grubenv.into();
         if grubenv == Path::new(GRUBENV_PATH) {
@@ -215,8 +139,6 @@ impl Editenv {
         }
     }
 
-    /// A direct writer for another program or file (tests, or `grub-editenv` on other
-    /// systems): `<program> <grubenv> set|unset …`, with no namespace and no remount.
     pub fn new(program: impl Into<PathBuf>, grubenv: impl Into<PathBuf>) -> Self {
         Self {
             launch: Launch::Direct {
@@ -227,24 +149,23 @@ impl Editenv {
         }
     }
 
-    /// Replaces the per-call timeout.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    /// Whether writes run in a private mount namespace with `/boot` remounted read-write.
     pub fn remounts_boot(&self) -> bool {
         self.launch == Launch::PrivateBootRw
     }
 
-    /// The complete command line (program first) for `verb` (`set` or `unset`) and
-    /// already validated `args`.
     pub fn command_line(&self, verb: &str, args: &[OsString]) -> Vec<OsString> {
         let mut line: Vec<OsString> = match &self.launch {
             Launch::Direct { program, grubenv } => {
-                vec![program.clone().into_os_string(), file_arg(grubenv)]
+                vec![
+                    program.clone().into_os_string(),
+                    non_option_file_arg(grubenv),
+                ]
             }
             Launch::PrivateBootRw => [
                 UNSHARE,
@@ -291,8 +212,7 @@ impl Editenv {
     }
 }
 
-/// A file argument that can never be taken for an option: relative paths get `./`.
-fn file_arg(path: &Path) -> OsString {
+fn non_option_file_arg(path: &Path) -> OsString {
     if path.is_absolute() {
         path.as_os_str().to_owned()
     } else {
@@ -318,21 +238,14 @@ impl GrubEnvWriter for Editenv {
     }
 }
 
-/// One call a [`RecordingWriter`] received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditenvCall {
-    /// A `set` call with its assignments.
     Set(Vec<(String, String)>),
-    /// An `unset` call with its names.
     Unset(Vec<String>),
 }
 
-/// A fake writer for tests: records every call and applies it to an in-memory block with
-/// GRUB's semantics, so a test can read the result back.
-///
-/// It validates like [`Editenv`]: a call with a name that is not an Apex variable or a
-/// value Apex never writes fails with [`WriteError::Value`] and is not recorded, because
-/// the production writer would not have run anything either.
+/// Validates like [`Editenv`], so a refused call is not recorded: the production writer
+/// would not have run anything either.
 #[derive(Debug, Clone, Default)]
 pub struct RecordingWriter {
     env: GrubEnv,
@@ -341,7 +254,6 @@ pub struct RecordingWriter {
 }
 
 impl RecordingWriter {
-    /// A fake whose block starts as `env`.
     pub fn new(env: GrubEnv) -> Self {
         Self {
             env,
@@ -350,20 +262,17 @@ impl RecordingWriter {
         }
     }
 
-    /// Makes the call with this zero-based index fail with [`WriteError::Injected`]
-    /// without changing the block. The failed call is still recorded.
+    /// The failed call is still recorded; the block stays unchanged.
     #[must_use]
     pub fn failing_at(mut self, call: usize) -> Self {
         self.fail_at = Some(call);
         self
     }
 
-    /// The block after every successful call.
     pub fn env(&self) -> &GrubEnv {
         &self.env
     }
 
-    /// Every call received, in order.
     pub fn calls(&self) -> &[EditenvCall] {
         &self.calls
     }
@@ -385,7 +294,6 @@ impl GrubEnvWriter for RecordingWriter {
         if self.should_fail() {
             return Err(WriteError::Injected);
         }
-        // grub2-editenv edits a copy and writes it once: all or nothing.
         let mut next = self.env.clone();
         for (name, value) in assignments {
             next.set(name, value)?;
@@ -421,7 +329,6 @@ mod tests {
 
     const TARGET: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
 
-    /// The argument list as text, for assertions.
     fn lossy(argv: &[OsString]) -> Vec<String> {
         argv.iter()
             .map(|arg| OsStr::to_string_lossy(arg).into_owned())
@@ -484,7 +391,6 @@ mod tests {
 
     #[test]
     fn fake_reports_model_errors_atomically() {
-        // Room for the signature and 15 more bytes: "apex_ok=1\n" fits, the pair does not.
         let mut writer = RecordingWriter::new(GrubEnv::empty(40).unwrap());
         let err = writer
             .set(&[("apex_ok", "1"), ("apex_counter", "3")])
@@ -513,7 +419,6 @@ mod tests {
 
     #[test]
     fn editenv_validates_before_running() {
-        // The program does not exist: validation must fail first.
         let mut writer = Editenv::new("/nonexistent/grub2-editenv", "/nonexistent/grubenv");
         for (name, value) in [
             ("bad name", "1"),
@@ -544,7 +449,6 @@ mod tests {
                 "{name}={value:?}"
             );
         }
-        // One bad assignment refuses the whole call.
         assert!(matches!(
             writer.set(&[("apex_ok", "1"), ("apex_counter", "x")]),
             Err(WriteError::Value(_))
@@ -553,7 +457,6 @@ mod tests {
             writer.unset(&["-v"]),
             Err(WriteError::Value(ValueError::UnknownVariable { .. }))
         ));
-        // Nothing to do: nothing is run.
         writer.set(&[]).unwrap();
         writer.unset(&[]).unwrap();
         let err = writer.set(&[("apex_ok", "1")]).unwrap_err();
@@ -571,7 +474,6 @@ mod tests {
         );
     }
 
-    /// The exact production command line (M1 contract §5).
     #[test]
     fn system_command_line_is_exact() {
         let writer = Editenv::system();
@@ -627,7 +529,6 @@ mod tests {
             format!("{MOUNT} -n -o remount,rw {BOOT_MOUNT} && exec {GRUB2_EDITENV} \"$0\" \"$@\"")
         );
         assert!(GRUBENV_PATH.starts_with(&format!("{BOOT_MOUNT}/")));
-        // The only expansions are the positional parameters, always quoted.
         assert_eq!(REMOUNT_SCRIPT.matches('$').count(), 2);
         assert!(!REMOUNT_SCRIPT.contains(['`', ';', '\'', '\n']));
     }
@@ -642,7 +543,6 @@ mod tests {
             assert_eq!(argv[0], GRUB2_EDITENV);
             assert_eq!(argv[2..], ["unset", "apex_ok"]);
         }
-        // A relative file can never be read as an option.
         let writer = Editenv::new("/usr/bin/grub-editenv", "-grubenv");
         assert_eq!(
             lossy(&writer.command_line("unset", &[])),
@@ -650,9 +550,6 @@ mod tests {
         );
     }
 
-    /// Runs the script's shell mechanics with harmless stand-ins: the remount replaced by
-    /// `true` or `false`, `grub2-editenv` by `echo`. `$0` must be the file and `"$@"` the
-    /// verb and arguments, and a failed remount must stop everything.
     #[test]
     fn the_script_passes_its_arguments_on_and_stops_when_the_remount_fails() {
         let script = |remount: &str| {

@@ -1,9 +1,6 @@
-//! Runs the real `data/08_apex-bootcount.cfg` through a small interpreter for the subset of
-//! GRUB script it uses (`if`/`elif`/`else`/`fi`, `[ -n … ]`, `[ … = … ]`, `[ … != … ]`,
-//! `set`, `save_env`), and checks that it does exactly what `apex_boot::snippet::grub_boot`
-//! models, for every combination of variable values that matters. The interpreter panics
-//! on anything outside that subset, so the snippet cannot silently grow beyond what is
-//! tested here. When `grub-script-check` is installed, GRUB's own parser checks the syntax.
+//! Runs the real `data/08_apex-bootcount.cfg` through an interpreter for the GRUB script
+//! subset it uses. The interpreter panics on anything else, so the snippet cannot silently
+//! grow beyond what is tested here.
 
 #![allow(
     clippy::unwrap_used,
@@ -76,7 +73,6 @@ fn condition(line: &str, keyword: &str) -> Cond {
     }
 }
 
-/// Parses statements until `elif`, `else`, `fi` or the end.
 fn block(lines: &[&str], i: &mut usize) -> Vec<Stmt> {
     let mut stmts = Vec::new();
     while let Some(line) = lines.get(*i) {
@@ -141,9 +137,7 @@ fn parse(script: &str) -> Vec<Stmt> {
 }
 
 struct Grub<'a> {
-    /// GRUB's variables, as `load_env` left them.
     vars: HashMap<String, String>,
-    /// The environment block `save_env` writes to.
     env: &'a mut GrubEnv,
 }
 
@@ -201,8 +195,6 @@ fn menu_entry(value: Option<&String>, variable: &str) -> Option<BootEntry> {
     }
 }
 
-/// Boots the real snippet: `load_env` (every variable, last line wins), then the script.
-/// Returns the entry GRUB starts (`default`) and the one it tries next (`fallback`).
 fn boot_real_snippet(env: &mut GrubEnv) -> BootChoice {
     let mut vars = HashMap::new();
     for (name, value) in env.vars() {
@@ -286,13 +278,10 @@ fn snippet_counts_three_boots_then_falls_back() {
         [counting, counting, counting, fallen_back, fallen_back]
     );
     assert_eq!(env.get("apex_counter"), Some(&b"-1"[..]));
-    // fallback and default are never saved.
     assert_eq!(env.get("fallback"), None);
     assert_eq!(env.get("default"), None);
 }
 
-/// Fedora's grub2-set-bootflag writes `boot_success=1` after a login; it must not stop an
-/// armed boot from being counted.
 #[test]
 fn a_foreign_boot_success_does_not_confirm_an_armed_boot() {
     let mut env = GrubEnv::new();
@@ -304,7 +293,6 @@ fn a_foreign_boot_success_does_not_confirm_an_armed_boot() {
     let choice = boot_real_snippet(&mut env);
     assert_eq!(choice.entry, BootEntry::Default);
     assert_eq!(env.get("apex_counter"), Some(&b"1"[..]));
-    // Foreign variables are left exactly as they were.
     assert_eq!(env.get("boot_success"), Some(&b"1"[..]));
     assert_eq!(env.get("boot_counter"), Some(&b"3"[..]));
 }

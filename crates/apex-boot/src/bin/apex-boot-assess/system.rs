@@ -1,11 +1,6 @@
-//! The production implementations of [`crate::ports`]: logind and `apex-updated` over the
-//! system bus (zbus), `bootc status` (apex-bootc), `systemctl reboot`, and the real clock.
-//!
-//! The glue and the checks are synchronous and run on their own threads, while zbus and
-//! apex-bootc are async on the process's tokio `current_thread` runtime. Each call here is
-//! therefore `Handle::block_on` from a non-runtime thread; this works because the main thread
-//! sits in `Runtime::block_on` for the whole assessment and drives the runtime's I/O, timers
-//! and zbus's own tasks (see `main`).
+//! The production ports. zbus and apex-bootc are async on the tokio runtime, so each call
+//! here is `Handle::block_on` from a non-runtime thread; this works because the main thread
+//! drives the runtime for the whole assessment.
 
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -27,10 +22,8 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::ports::{BootedImage, Clock, HostStatus, Rebooter, SessionInfo, Sessions, Updater};
 
-/// The system bus, connected on first use and shared by every caller.
-///
-/// A failed connection is not cached, so a later call tries again (the session wait polls
-/// for two minutes; the bus may come back).
+/// A failed connection is not cached: the session wait polls for two minutes, and the bus
+/// may come back.
 #[derive(Debug)]
 pub(crate) struct Bus {
     handle: Handle,
@@ -38,7 +31,6 @@ pub(crate) struct Bus {
 }
 
 impl Bus {
-    /// A bus for the runtime behind `handle`.
     pub(crate) fn new(handle: Handle) -> Self {
         Self {
             handle,
@@ -46,8 +38,7 @@ impl Bus {
         }
     }
 
-    /// Runs `call` with the connection, all of it (connecting included) bounded by
-    /// `timeout`. Blocks the calling thread, which must not be a runtime thread.
+    /// Blocks the calling thread, which must not be a runtime thread.
     fn call<T, E, F>(&self, what: &str, timeout: Duration, call: F) -> Result<T, String>
     where
         E: Into<ApexError>,
@@ -72,10 +63,8 @@ impl Bus {
     }
 }
 
-/// A readable line for a failed call. For transport and non-contract errors this is zbus's
-/// own text, which names the remote D-Bus error (for example
-/// `org.freedesktop.DBus.Error.ServiceUnknown: …`); `ApexError`'s `Display` shortens some of
-/// them to "FDO error".
+/// zbus's own text names the remote D-Bus error, which `ApexError`'s `Display` shortens to
+/// "FDO error".
 fn describe(err: &ApexError) -> String {
     match err {
         ApexError::ZBus(err) => err.to_string(),
@@ -90,7 +79,6 @@ fn describe(err: &ApexError) -> String {
     gen_blocking = false
 )]
 trait LoginManager {
-    /// `(session id, uid, user name, seat id, object path)` for every session.
     fn list_sessions(&self) -> zbus::Result<Vec<(String, u32, String, String, OwnedObjectPath)>>;
 }
 
@@ -100,27 +88,22 @@ trait LoginManager {
     gen_blocking = false
 )]
 trait LoginSession {
-    /// `greeter`, `user`, `user-early`, `lock-screen`, `background`, …
     #[zbus(property)]
     fn class(&self) -> zbus::Result<String>;
 
-    /// `online`, `active` or `closing`.
     #[zbus(property)]
     fn state(&self) -> zbus::Result<String>;
 
-    /// `CLOCK_MONOTONIC` in µs when the session was created.
     #[zbus(property)]
     fn timestamp_monotonic(&self) -> zbus::Result<u64>;
 }
 
-/// systemd-logind on the system bus.
 #[derive(Debug, Clone)]
 pub(crate) struct Logind {
     bus: Arc<Bus>,
 }
 
 impl Logind {
-    /// logind on `bus`.
     pub(crate) fn new(bus: Arc<Bus>) -> Self {
         Self { bus }
     }
@@ -138,9 +121,7 @@ impl Sessions for Logind {
                     .cache_properties(CacheProperties::No)
                     .build()
                     .await?;
-                // A session whose properties cannot be read (it may have ended since
-                // ListSessions, or logind is struggling) is listed with an empty class, which
-                // counts as possibly somebody's session: never reboot on a guess.
+                // An empty class counts as possibly somebody's session: never reboot on a guess.
                 let (Ok(class), Ok(state), Ok(created)) = (
                     session.class().await,
                     session.state().await,
@@ -168,28 +149,26 @@ impl Sessions for Logind {
     }
 }
 
-/// `CLOCK_MONOTONIC`, the clock of logind's `TimestampMonotonic`. (The realtime `Timestamp`
-/// jumps when NTP sets the clock during boot, which could make a new session look old.)
+/// logind's realtime `Timestamp` jumps when NTP sets the clock during boot, which could make
+/// a new session look old.
 fn monotonic_now() -> Option<Duration> {
     clock_gettime(ClockId::CLOCK_MONOTONIC)
         .ok()
         .map(Duration::from)
 }
 
-/// Age of a session created at `created_us` (µs of `CLOCK_MONOTONIC`; 0 means unknown).
+/// `created_us` is 0 when unknown.
 fn session_age(created_us: u64, now: Option<Duration>) -> Option<Duration> {
     (created_us > 0).then_some(())?;
     Some(now?.saturating_sub(Duration::from_micros(created_us)))
 }
 
-/// `apex-updated` through the contract proxy. The first call D-Bus-activates it.
 #[derive(Debug, Clone)]
 pub(crate) struct Daemon {
     bus: Arc<Bus>,
 }
 
 impl Daemon {
-    /// The daemon on `bus`.
     pub(crate) fn new(bus: Arc<Bus>) -> Self {
         Self { bus }
     }
@@ -202,7 +181,6 @@ async fn update1(connection: &zbus::Connection) -> zbus::Result<Update1Proxy<'st
         .await
 }
 
-/// The D-Bus spelling of a verdict. Exhaustive, so a new verdict cannot be forgotten.
 pub(crate) fn to_dbus(verdict: Verdict) -> BootVerdict {
     match verdict {
         Verdict::Green => BootVerdict::Green,
@@ -239,25 +217,17 @@ impl Updater for Daemon {
     }
 }
 
-/// `bootc status --format=json --format-version=1`, read-only, through apex-bootc. Its own
-/// 30 s timeout and 5 s kill grace apply, and the whole call is bounded here by
-/// [`BOOTC_STATUS_BOUND`]: after `SIGKILL` apex-bootc may wait a further 10 s for the process
-/// to be reaped, which the time budget does not cover, so such a call is abandoned (the
-/// dropped run kills the process group again).
+/// After `SIGKILL` apex-bootc may wait another 10 s for the process to be reaped, which the
+/// time budget does not cover, so the call is abandoned at [`BOOTC_STATUS_BOUND`].
 ///
-/// bootc takes the ostree sysroot lock even for `status`: ostree remounts `/sysroot` and
-/// `/boot` read-write in the current mount namespace and opens `/sysroot/ostree/lock` with
-/// `O_CREAT|O_RDWR`. bootc creates its own namespace (`unshare -m`) only when it runs in
-/// PID 1's; under the unit's sandbox it already runs in the unit's private namespace, so
-/// those remounts stay inside the unit and never reach the host. See the unit file for what
-/// this needs (`CAP_SYS_ADMIN`, `CAP_SYS_PTRACE`, the `@mount` system calls).
+/// bootc takes the ostree sysroot lock even for `status`, remounting `/sysroot` and `/boot`
+/// read-write in the unit's private mount namespace, never the host's.
 #[derive(Debug, Clone)]
 pub(crate) struct BootcStatus {
     handle: Handle,
 }
 
 impl BootcStatus {
-    /// bootc on the runtime behind `handle`.
     pub(crate) fn new(handle: Handle) -> Self {
         Self { handle }
     }
@@ -277,7 +247,6 @@ impl HostStatus for BootcStatus {
     }
 }
 
-/// Runs `work`, giving up (and dropping it) after `bound`.
 async fn bounded<T>(
     what: &str,
     bound: Duration,
@@ -291,7 +260,6 @@ async fn bounded<T>(
     })
 }
 
-/// What the assessment needs from a parsed status.
 pub(crate) fn booted_image(host: &Host) -> BootedImage {
     let image = host.booted().and_then(|entry| entry.image.as_ref());
     BootedImage {
@@ -304,7 +272,6 @@ pub(crate) fn booted_image(host: &Host) -> BootedImage {
     }
 }
 
-/// `systemctl reboot`, run directly (no shell) with a clean environment.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Systemctl;
 
@@ -326,8 +293,6 @@ impl Rebooter for Systemctl {
                 Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
                 Ok(None) => {
                     let _ = child.kill();
-                    // Reap it if it dies in time; a child stuck in uninterruptible sleep is
-                    // abandoned rather than waited for (KILL_REAP_GRACE).
                     let reap_by = Instant::now() + KILL_REAP_GRACE;
                     while matches!(child.try_wait(), Ok(None)) && Instant::now() < reap_by {
                         thread::sleep(Duration::from_millis(50));
@@ -343,7 +308,6 @@ impl Rebooter for Systemctl {
     }
 }
 
-/// The real clock.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SystemClock;
 
@@ -397,7 +361,6 @@ mod tests {
         assert_eq!(session_age(70_000_000, now), Some(Duration::from_secs(30)));
         assert_eq!(session_age(0, now), None);
         assert_eq!(session_age(70_000_000, None), None);
-        // A creation time after "now" (impossible, but harmless) is age zero.
         assert_eq!(session_age(200_000_000, now), Some(Duration::ZERO));
         assert!(monotonic_now().is_some());
     }
@@ -465,7 +428,6 @@ mod tests {
                 rollback_queued: false,
             }
         );
-        // After GRUB fell back: the failed target is the rollback deployment and first.
         let fell_back = r#"{
           "apiVersion": "org.containers.bootc/v1",
           "kind": "BootcHost",
@@ -498,7 +460,6 @@ mod tests {
             image.rollback_digest.as_deref(),
             Some("sha256:1111111111111111111111111111111111111111111111111111111111111111")
         );
-        // A host bootc does not manage: nothing is known.
         let empty = Host::from_json(
             br#"{"apiVersion":"org.containers.bootc/v1","kind":"BootcHost","metadata":{},"spec":{},"status":{"booted":null}}"#,
         )

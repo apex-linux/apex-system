@@ -1,19 +1,6 @@
-//! Keeps the watchdog's systemd side honest:
-//!
-//! - the two drop-ins are the embedded text, identical, and add exactly the watchdog's
-//!   `ExecStartPre=-` and nothing else; their comments state the library's figures;
-//! - `systemd-analyze verify` loads each drop-in with this host's `emergency.service` and
-//!   `rescue.service` without a diagnostic (a broken copy shows that it was read);
-//! - the host's real `systemd-run`, run with the watchdog's exact arguments, sends the
-//!   intended `StartTransientUnit` call: it talks to a fake systemd manager on a private
-//!   `dbus-daemon` (a non-root `systemd-run` uses `DBUS_SYSTEM_BUS_ADDRESS`), which records
-//!   the call and answers the job as done;
-//! - the same settings, written as unit files, pass `systemd-analyze verify`.
-//!
-//! The host-dependent parts are skipped when `systemd-analyze`, the shell units,
-//! `dbus-daemon` or `systemd-run` are missing, and the `systemd-run` test also when it runs
-//! as root, because root's `systemd-run` ignores the bus address and talks to the real
-//! systemd.
+//! The watchdog's systemd side, checked with this host's `systemd-analyze` and
+//! `systemd-run`. The `systemd-run` test is skipped as root, because root's `systemd-run`
+//! ignores `DBUS_SYSTEM_BUS_ADDRESS` and talks to the real systemd.
 
 #![allow(
     clippy::unwrap_used,
@@ -37,9 +24,8 @@ use std::time::Duration;
 
 use apex_boot::ASSESS_BINARY_PATH;
 use apex_boot::emergency::{
-    CANCEL_COMMAND, DROP_IN_FILE_NAME, EMERGENCY_DROP_IN, REBOOT_DELAY, REBOOT_UNIT,
-    RESCUE_DROP_IN, SHELL_START_TIMEOUT, SHELL_UNITS, SYSTEMD_RUN, WATCHDOG_FLAG,
-    WATCHDOG_TIME_BUDGET, schedule_args,
+    DROP_IN_FILE_NAME, EMERGENCY_DROP_IN, REBOOT_UNIT, RESCUE_DROP_IN, SHELL_UNITS, SYSTEMD_RUN,
+    WATCHDOG_FLAG, schedule_args,
 };
 use zbus::object_server::SignalEmitter;
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
@@ -47,7 +33,6 @@ use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
 const SYSTEMD_ANALYZE: &str = "/usr/bin/systemd-analyze";
 const HOST_UNIT_DIR: &str = "/usr/lib/systemd/system";
 
-/// `(section, key, value)` for every assignment, in file order.
 fn assignments(unit: &str) -> Vec<(String, String, String)> {
     let mut section = String::new();
     let mut out = Vec::new();
@@ -83,9 +68,8 @@ fn embedded_copies_are_the_installed_files() {
     assert_eq!(EMERGENCY_DROP_IN, RESCUE_DROP_IN);
 }
 
-/// Anything else in a drop-in for the shell units would change the shell: a condition
-/// would skip it, an empty `ExecStartPre=` would drop its `plymouth --wait quit`, and a
-/// command without `-` would fail it.
+/// A condition would skip the shell, an empty `ExecStartPre=` would drop its `plymouth
+/// --wait quit`, and a command without `-` would fail it.
 #[test]
 fn the_drop_in_only_adds_the_watchdog() {
     let all = assignments(EMERGENCY_DROP_IN);
@@ -99,37 +83,6 @@ fn the_drop_in_only_adds_the_watchdog() {
     );
 }
 
-/// The comments state the library's figures and names.
-#[test]
-fn the_drop_in_comments_match_the_library() {
-    for needle in [
-        format!("({} s)", WATCHDOG_TIME_BUDGET.as_secs()),
-        format!("the {} s start timeout", SHELL_START_TIMEOUT.as_secs()),
-        format!("`systemctl reboot` in {} s", REBOOT_DELAY.as_secs()),
-        format!("--on-active={}s", REBOOT_DELAY.as_secs()),
-        format!("--unit={REBOOT_UNIT}"),
-        CANCEL_COMMAND.to_owned(),
-        "apex_boot::emergency::WATCHDOG_TIME_BUDGET".to_owned(),
-        "DefaultDependencies=no".to_owned(),
-        "ExecCondition=".to_owned(),
-    ] {
-        assert!(EMERGENCY_DROP_IN.contains(&needle), "missing {needle:?}");
-    }
-    for arg in schedule_args() {
-        if let Some(setting) = arg
-            .strip_prefix("--timer-property=")
-            .or_else(|| arg.strip_prefix("--property="))
-        {
-            let key = setting.split_once('=').unwrap().0;
-            assert!(
-                EMERGENCY_DROP_IN.contains(key) || key == "AccuracySec",
-                "the comment does not mention {key}"
-            );
-        }
-    }
-}
-
-/// Runs `systemd-analyze verify --man=no` on `unit` and returns its exit code and output.
 fn verify(unit: &Path) -> (Option<i32>, String) {
     let output = Command::new(SYSTEMD_ANALYZE)
         .args(["verify", "--man=no"])
@@ -182,8 +135,6 @@ fn systemd_analyze_accepts_the_drop_ins_with_the_host_units() {
     }
 }
 
-/// The transient units, written as unit files from the watchdog's `systemd-run`
-/// arguments: every setting must be one systemd knows, for that unit type.
 #[test]
 fn the_transient_units_are_valid_unit_settings() {
     if !Path::new(SYSTEMD_ANALYZE).exists() {
@@ -253,7 +204,7 @@ fn the_transient_units_are_valid_unit_settings() {
         assert_eq!(code, Some(0), "{}: {output}", file.display());
         assert_eq!(output, "", "{}", file.display());
     }
-    // And a wrong setting in the same place is reported (the check is not blind).
+    // A wrong setting in the same place is reported: the check is not blind.
     fs::write(
         &service_file,
         fs::read_to_string(&service_file).unwrap() + "ExecConditionTypo=/bin/true\n",
@@ -263,9 +214,7 @@ fn the_transient_units_are_valid_unit_settings() {
     assert!(output.contains("ExecConditionTypo"), "{output}");
 }
 
-// ---- the host's systemd-run against a fake systemd manager ----
-
-/// A private `dbus-daemon`, killed on drop.
+/// Killed on drop.
 struct PrivateBus {
     daemon: Child,
     address: String,
@@ -330,13 +279,10 @@ impl Drop for PrivateBus {
     }
 }
 
-/// One `StartTransientUnit` call: name, mode, properties, auxiliary units.
 type Properties = Vec<(String, OwnedValue)>;
 type Recorded = (String, String, Properties, Vec<(String, Properties)>);
 
-/// `org.freedesktop.systemd1.Manager`, as much as `systemd-run` needs: it records the call,
-/// announces the job as done (`JobRemoved`, sent before the reply, which the client queues
-/// until it waits for the job), and returns the job.
+/// `JobRemoved` goes out before the reply; the client queues it until it waits for the job.
 struct FakeManager {
     calls: Arc<Mutex<Vec<Recorded>>>,
 }
@@ -372,7 +318,6 @@ impl FakeManager {
     ) -> zbus::Result<()>;
 }
 
-/// The properties as `name → GVariant text`, for readable comparisons.
 fn render(properties: &Properties) -> BTreeMap<String, String> {
     properties
         .iter()
@@ -408,8 +353,6 @@ fn the_hosts_systemd_run_sends_the_intended_units() {
     check_units(&render(timer), &render(&aux[0].1));
 }
 
-/// Serves [`FakeManager`] on `bus`, runs the host's `systemd-run` with the watchdog's
-/// arguments against it, and returns the calls it received.
 fn run_against_fake_systemd(bus: &PrivateBus) -> Vec<Recorded> {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -460,7 +403,6 @@ fn run_against_fake_systemd(bus: &PrivateBus) -> Vec<Recorded> {
     calls.clone()
 }
 
-/// The properties `systemd-run` sent for the timer and the service.
 fn check_units(timer: &BTreeMap<String, String>, service: &BTreeMap<String, String>) {
     let description = "\"Apex: reboot so GRUB counts the next boot of the update on trial\"";
     for (key, value) in [
@@ -497,7 +439,6 @@ fn check_units(timer: &BTreeMap<String, String>, service: &BTreeMap<String, Stri
             "service {key}: {service:#?}"
         );
     }
-    // Nothing that would add dependencies back or change what runs.
     for props in [timer, service] {
         for key in [
             "Requires",

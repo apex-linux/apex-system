@@ -1,36 +1,23 @@
-//! The `--dry-run` output: the inputs, the decision and the steps it would take, as JSON.
-//!
-//! The field names are stable for scripts and the KVM qualification to read: `decision`
-//! (the row, e.g. `red-armed-no-session`), `verdict`, `digest`, `reboot`, `failed_checks`,
-//! `steps` and `input`.
+//! The `--dry-run` JSON. Its field names are stable for scripts and the KVM qualification.
 
 use apex_boot::{CheckOutcome, CheckResult, Decision, Digest, Step};
 use serde::Serialize;
 
 use crate::assess::Gathered;
 
-/// The whole document.
 #[derive(Debug, Serialize)]
 pub(crate) struct DryRun {
-    /// [`Decision::kind`].
     decision: &'static str,
-    /// The journal line ([`Decision`]'s `Display`).
     summary: String,
-    /// The `ReportBoot` verdict.
     verdict: &'static str,
-    /// The `ReportBoot` digest; `null` is sent as `""`.
+    /// `null` is sent as `""`.
     digest: Option<String>,
-    /// Whether the decision reboots.
     reboot: bool,
-    /// Failed required checks.
     failed_checks: Vec<String>,
-    /// What would be done, in order.
     steps: Vec<StepView>,
-    /// What the decision was made from.
     input: InputView,
 }
 
-/// One step.
 #[derive(Debug, Serialize)]
 #[serde(tag = "step", rename_all = "kebab-case")]
 enum StepView {
@@ -53,7 +40,6 @@ enum StepView {
     Reboot,
 }
 
-/// The decision's input plus the reported checks.
 #[derive(Debug, Serialize)]
 struct InputView {
     apex_target: Option<String>,
@@ -61,14 +47,12 @@ struct InputView {
     apex_ok: Option<bool>,
     booted_digest: Option<String>,
     booted_source: &'static str,
-    /// Entry 0 at the next boot: `booted`, `rollback sha256:…`, or `unknown`.
     default_deployment: String,
     user_session_active: bool,
     required: Vec<CheckView>,
     reported: Vec<CheckView>,
 }
 
-/// One check result.
 #[derive(Debug, Serialize)]
 struct CheckView {
     name: String,
@@ -124,7 +108,6 @@ fn step_view(step: &Step) -> StepView {
 }
 
 impl DryRun {
-    /// The document for a decision and what it was made from.
     pub(crate) fn new(gathered: &Gathered, decision: &Decision) -> Self {
         let input = &gathered.input;
         Self {
@@ -143,13 +126,12 @@ impl DryRun {
                 booted_source: gathered.booted_source.as_str(),
                 default_deployment: input.default_deployment.to_string(),
                 user_session_active: input.user_session_active,
-                required: input.checks.iter().map(check_view).collect(),
+                required: input.required_checks.iter().map(check_view).collect(),
                 reported: gathered.reported.iter().map(check_view).collect(),
             },
         }
     }
 
-    /// Pretty-printed JSON.
     pub(crate) fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)
     }
@@ -183,7 +165,7 @@ mod tests {
                 },
                 booted_digest: Some(digest('a')),
                 default_deployment: DefaultDeployment::Booted,
-                checks,
+                required_checks: checks,
                 user_session_active: false,
             },
             reported: vec![
@@ -208,7 +190,7 @@ mod tests {
                 },
                 booted_digest: Some(digest('b')),
                 default_deployment: DefaultDeployment::Rollback(Some(digest('a'))),
-                checks: names::REQUIRED
+                required_checks: names::REQUIRED
                     .iter()
                     .map(|n| CheckResult::pass(*n))
                     .collect(),

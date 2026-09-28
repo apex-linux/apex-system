@@ -1,24 +1,6 @@
-//! The qualification hook "forced red" (ADR 0009, Consequences: "an injected red check
-//! leads to a counted rollback").
-//!
-//! The KVM qualification needs a deployment that fails its assessment on purpose, so it can
-//! watch GRUB count the boots down and fall back. It writes that deployment's digest to
-//! [`FORCE_RED_PATH`] as root. When the file names the booted digest, the assessment adds
-//! the failed required check [`names::FORCED_RED`], and the decision table treats the boot
-//! like any other red boot.
-//!
-//! It never influences anything otherwise:
-//!
-//! - absent file: the normal case, nothing happens;
-//! - a file that names another digest, or a boot whose digest is unknown: nothing happens;
-//! - a file that is not a regular file (a symlink, a FIFO, a directory), is larger than
-//!   [`MAX_LEN`] bytes, cannot be read, or that is writable by group or others, or whose
-//!   directory is: ignored, with the reason for the journal.
-//!
-//! `/var/lib/apex` is `0700 root` (M1 contract §1), so only root can create the file; the
-//! mode checks keep that true if the directory is ever misconfigured. Because the file
-//! names one digest, it cannot outlive the deployment it targets: after the counted
-//! rollback the previous deployment boots with another digest and is judged normally.
+//! The qualification hook: a boot whose digest `/var/lib/apex/force-red` names fails the
+//! required check [`names::FORCED_RED`], so the KVM qualification can watch a counted
+//! rollback. The file names one digest, so it cannot outlive the deployment it targets.
 
 use std::fs;
 use std::io::Read as _;
@@ -28,26 +10,20 @@ use std::path::Path;
 use super::{CheckResult, names};
 use crate::digest::Digest;
 
-/// The hook file (below `--root` in tests).
 pub const FORCE_RED_PATH: &str = "/var/lib/apex/force-red";
 
-/// Largest hook file that is read. A digest is 71 bytes; anything much larger is not a
-/// hook file.
+/// A digest is 71 bytes; anything much larger is not a hook file.
 pub const MAX_LEN: u64 = 4096;
 
-/// What the hook file says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookFile {
-    /// There is no hook file.
     Absent,
-    /// There is a file, but it is not used; the reason is for the journal.
     Ignored(String),
-    /// The file's content with surrounding whitespace removed.
     Names(String),
 }
 
-/// Reads the hook file at `path`. Never fails: every problem makes the file
-/// [`HookFile::Ignored`].
+/// Only root can create the file in `/var/lib/apex` (0700); the mode checks keep that true
+/// if the directory is ever misconfigured.
 pub fn read(path: &Path) -> HookFile {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
@@ -96,8 +72,6 @@ fn owner_only_writable(path: &Path, mode: u32) -> Result<(), String> {
     }
 }
 
-/// The failed required check the hook adds for a boot of `booted`, if the file names
-/// exactly that digest.
 pub fn check(hook: &HookFile, booted: Option<&Digest>) -> Option<CheckResult> {
     match (hook, booted) {
         (HookFile::Names(named), Some(booted)) if named == booted.as_str() => {
@@ -122,7 +96,6 @@ mod tests {
         Digest::parse(BOOTED).unwrap()
     }
 
-    /// A private directory with the hook file holding `content`, mode 0600.
     fn hook_dir(content: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         fs::set_permissions(dir.path(), Permissions::from_mode(0o700)).unwrap();
@@ -170,35 +143,28 @@ mod tests {
         }
         let (_dir, path) = hook_dir(BOOTED.as_bytes());
         assert_eq!(check(&read(&path), None), None);
-        // Two digests on two lines are not "the booted digest".
         let (_dir, path) = hook_dir(format!("{OTHER}\n{BOOTED}\n").as_bytes());
         assert_eq!(check(&read(&path), Some(&booted())), None);
     }
 
     #[test]
     fn unsafe_or_odd_files_are_ignored() {
-        // Writable by others.
         let (_dir, path) = hook_dir(BOOTED.as_bytes());
         fs::set_permissions(&path, Permissions::from_mode(0o646)).unwrap();
         assert!(matches!(read(&path), HookFile::Ignored(r) if r.contains("group or others")));
-        // Its directory writable by the group.
         let (dir, path) = hook_dir(BOOTED.as_bytes());
         fs::set_permissions(dir.path(), Permissions::from_mode(0o770)).unwrap();
         assert!(matches!(read(&path), HookFile::Ignored(r) if r.contains("group or others")));
-        // A symlink to a good file.
         let (dir, target) = hook_dir(BOOTED.as_bytes());
         let link = dir.path().join("force-red-link");
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert!(matches!(read(&link), HookFile::Ignored(r) if r.contains("regular file")));
-        // A directory.
         let (dir, _) = hook_dir(b"");
         let sub = dir.path().join("sub");
         fs::create_dir(&sub).unwrap();
         assert!(matches!(read(&sub), HookFile::Ignored(_)));
-        // Too large.
         let (_dir, path) = hook_dir(&vec![b' '; 5000]);
         assert!(matches!(read(&path), HookFile::Ignored(r) if r.contains("larger")));
-        // Not UTF-8.
         let (_dir, path) = hook_dir(b"sha256:\xff");
         assert!(matches!(read(&path), HookFile::Ignored(r) if r.contains("cannot read")));
         assert_eq!(
@@ -221,7 +187,6 @@ mod tests {
             eprintln!("skipped: mkfifo not available");
             return;
         }
-        // Opening a FIFO for reading would block until a writer appears.
         assert!(matches!(read(&fifo), HookFile::Ignored(r) if r.contains("regular file")));
     }
 }

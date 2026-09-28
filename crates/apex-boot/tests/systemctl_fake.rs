@@ -1,7 +1,5 @@
-//! Runs the unit checks against a fake `systemctl` script that also verifies the exact
-//! argv and the cleared environment. Everything is in one test function on purpose: the
-//! scripts are written and executed in sequence, so no other test thread can fork while a
-//! script is open for writing (which would make exec fail with ETXTBSY).
+//! Everything is in one test function: no other test thread may fork while a fake script is
+//! open for writing, or its exec fails with ETXTBSY.
 
 #![allow(
     clippy::unwrap_used,
@@ -67,7 +65,6 @@ fn checks(systemctl: &Path) -> (FailedUnitsCheck, ActiveUnitsCheck) {
 fn unit_checks_against_a_fake_systemctl() {
     let dir = tempfile::tempdir().unwrap();
 
-    // Healthy: an unrelated unit failed, the core services run.
     let healthy = write_fake(
         dir.path(),
         "healthy",
@@ -82,7 +79,6 @@ fn unit_checks_against_a_fake_systemctl() {
     let (failed, active) = checks(&healthy);
     assert_eq!(failed.run(), Ok(()));
     assert_eq!(active.run(), Ok(()));
-    // The same through the concurrent runner.
     let results = run_checks(vec![Box::new(failed), Box::new(active)]);
     assert_eq!(
         results
@@ -95,7 +91,7 @@ fn unit_checks_against_a_fake_systemctl() {
         ]
     );
 
-    // A required unit failed, logind is down (is-active exits 3 in that case).
+    // is-active exits 3 when a unit is not active.
     let broken = write_fake(
         dir.path(),
         "broken",
@@ -118,7 +114,6 @@ fn unit_checks_against_a_fake_systemctl() {
         Err("not active: systemd-logind.service (inactive)".to_owned())
     );
 
-    // systemctl cannot reach systemd.
     let unreachable = write_fake(
         dir.path(),
         "unreachable",
@@ -136,7 +131,6 @@ fn unit_checks_against_a_fake_systemctl() {
     let err = active.run().unwrap_err();
     assert!(err.contains("Failed to connect to bus"), "{err}");
 
-    // is-active printing too few lines is an error, not a pass.
     let truncated = write_fake(
         dir.path(),
         "truncated",
@@ -152,7 +146,6 @@ fn unit_checks_against_a_fake_systemctl() {
     let err = active.run().unwrap_err();
     assert!(err.contains("expected 2 unit states"), "{err}");
 
-    // A missing systemctl is a failure with the reason.
     let (failed, _) = checks(&dir.path().join("missing"));
     let err = failed.run().unwrap_err();
     assert!(err.contains("cannot start"), "{err}");

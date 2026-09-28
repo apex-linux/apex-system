@@ -1,9 +1,3 @@
-//! The glue: gather what [`apex_boot::decide()`] needs, then carry out the decision's steps.
-//!
-//! Everything here is synchronous and talks to the world only through [`crate::ports`],
-//! the library's [`Check`]s and a [`GrubEnvWriter`], so the tests drive every decision path
-//! with fakes.
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -18,47 +12,31 @@ use apex_boot::{
 use crate::ports::{BootedImage, Clock, FailureStore, HostStatus, Rebooter, Sessions, Updater};
 use crate::{ping, reported, session};
 
-/// The ports shared with the check threads.
 #[derive(Clone)]
 pub(crate) struct Ports {
-    /// logind.
     pub(crate) sessions: Arc<dyn Sessions>,
-    /// `apex-updated`.
     pub(crate) updater: Arc<dyn Updater>,
-    /// `bootc status`.
     pub(crate) host: Arc<dyn HostStatus>,
-    /// Time.
     pub(crate) clock: Arc<dyn Clock>,
 }
 
-/// The checks that need neither logind nor D-Bus: the library's unit and grub.cfg checks,
-/// and the file-based reported checks.
+/// The checks that need neither logind nor D-Bus.
 pub(crate) struct LocalChecks {
-    /// Required: [`CORE_UNITS_ACTIVE`](apex_boot::checks::names::CORE_UNITS_ACTIVE).
     pub(crate) core_units: Box<dyn Check>,
-    /// Required: [`FAILED_UNITS`](apex_boot::checks::names::FAILED_UNITS).
     pub(crate) failed_units: Box<dyn Check>,
-    /// Required: [`GRUB_CFG_MARKER`](apex_boot::checks::names::GRUB_CFG_MARKER).
     pub(crate) grub_cfg: Box<dyn Check>,
-    /// Reported (see [`reported::file_checks`]).
     pub(crate) reported: Vec<Box<dyn Check>>,
-    /// The qualification hook file ([`force_red::FORCE_RED_PATH`] below `--root`).
-    pub(crate) force_red: PathBuf,
+    pub(crate) force_red_path: PathBuf,
 }
 
-/// Where the booted digest came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BootedSource {
-    /// `bootc status`.
     Bootc,
-    /// The daemon's `Booted` property, because `bootc status` gave none.
     Daemon,
-    /// Neither: the decision treats the digest as unknown.
     Unknown,
 }
 
 impl BootedSource {
-    /// A short name for logs and `--dry-run`.
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             BootedSource::Bootc => "bootc",
@@ -68,36 +46,26 @@ impl BootedSource {
     }
 }
 
-/// Everything known before the decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Gathered {
-    /// The decision's input (its `checks` are the required checks, in [`REQUIRED`](apex_boot::checks::names::REQUIRED)
-    /// order).
     pub(crate) input: AssessInput,
-    /// The reported checks, in [`REPORTED`](apex_boot::checks::names::REPORTED) order.
     pub(crate) reported: Vec<CheckResult>,
-    /// Where `input.booted_digest` came from.
     pub(crate) booted_source: BootedSource,
 }
 
-/// Why the assessment cannot decide. Nothing has been changed when this is returned.
+/// Nothing has been changed when this is returned.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AssessError {
-    /// grubenv cannot be read or is not an environment block.
     #[error(transparent)]
     Grubenv(#[from] ReadError),
-    /// grubenv holds Apex variables that cannot be interpreted.
     #[error("{path}: {source}")]
     Vars {
-        /// The grubenv file.
         path: String,
-        /// What is wrong.
         #[source]
         source: BootVarsError,
     },
 }
 
-/// Reads the Apex variables from `path`.
 pub(crate) fn read_vars(path: &Path) -> Result<BootVars, AssessError> {
     let env = grubenv::read_file(path)?;
     BootVars::from_env(&env).map_err(|source| AssessError::Vars {
@@ -106,29 +74,15 @@ pub(crate) fn read_vars(path: &Path) -> Result<BootVars, AssessError> {
     })
 }
 
-/// Runs the checks and collects the decision's input.
-///
-/// 1. Reads grubenv once up front, so a block that cannot be acted on fails at once instead
-///    of after minutes of checks.
-/// 2. Waits, bounded by [`SESSION_WAIT`] from the start, for a session that proves the
-///    desktop.
-/// 3. Runs the required checks and the file-based reported checks in one concurrent batch,
-///    with `bootc status` alongside, then resolves the booted digest (falling back to the
-///    daemon) and the boot order ([`default_deployment`]).
-/// 4. Adds the failed required check `forced-red` if the qualification hook names the
-///    booted digest ([`force_red`]).
-/// 5. Asks logind whether a user may be logged in; if logind cannot answer, assumes one
-///    may be (never reboot on a guess).
-/// 6. Reads grubenv again: this read is the one the decision uses, as late as possible.
-///
-/// Every bounded wait here and in [`perform`] is counted in
-/// [`apex_boot::ASSESS_TIME_BUDGET`]; a new one must be added there.
+/// Every bounded wait here and in [`perform`] must be counted in
+/// [`apex_boot::ASSESS_TIME_BUDGET`].
 pub(crate) fn gather(
     ports: &Ports,
     local: LocalChecks,
     grubenv_path: &Path,
 ) -> Result<Gathered, AssessError> {
     let start = ports.clock.now();
+    // Fail now, not after minutes of checks, when grubenv cannot be acted on.
     read_vars(grubenv_path)?;
 
     match session::poll_for_desktop(&*ports.sessions, &*ports.clock, start + SESSION_WAIT) {
@@ -146,7 +100,7 @@ pub(crate) fn gather(
         failed_units,
         grub_cfg,
         reported: reported_checks,
-        force_red: force_red_path,
+        force_red_path,
     } = local;
     // The order of names::REQUIRED, then the reported checks.
     let mut batch: Vec<Box<dyn Check>> = vec![
@@ -186,27 +140,16 @@ pub(crate) fn gather(
         required.push(forced);
     }
 
-    let user_session_active = match ports.sessions.list() {
-        Ok(sessions) => session::user_logged_in(&sessions),
-        Err(err) => {
-            // Fail safe: rebooting a user's session is what ADR 0009 forbids. If logind is
-            // really broken nobody can log in through GDM; the user power-cycles, and GRUB
-            // counts that boot anyway.
-            tracing::warn!(
-                "cannot list logind sessions ({err}); assuming a user may be logged in, so \
-                 this boot is not rebooted automatically"
-            );
-            true
-        }
-    };
+    let user_session_active = user_may_be_logged_in(&*ports.sessions);
 
+    // As late as possible: this is the read the decision acts on.
     let vars = read_vars(grubenv_path)?;
     Ok(Gathered {
         input: AssessInput {
             vars,
             booted_digest,
             default_deployment,
-            checks: required,
+            required_checks: required,
             user_session_active,
         },
         reported,
@@ -214,9 +157,21 @@ pub(crate) fn gather(
     })
 }
 
-/// The failed check the qualification hook adds for this boot, if its file names the
-/// booted digest. An absent file is the normal case and says nothing; an ignored one is
-/// logged and changes nothing either.
+/// Fails safe: a reboot must never end a user's session. If logind is really broken nobody
+/// can log in through GDM, and GRUB counts the boot the user then power-cycles.
+fn user_may_be_logged_in(sessions: &dyn Sessions) -> bool {
+    match sessions.list() {
+        Ok(sessions) => session::user_logged_in(&sessions),
+        Err(err) => {
+            tracing::warn!(
+                "cannot list logind sessions ({err}); assuming a user may be logged in, so \
+                 this boot is not rebooted automatically"
+            );
+            true
+        }
+    }
+}
+
 pub(crate) fn forced_red(path: &Path, booted: Option<&Digest>) -> Option<CheckResult> {
     let hook = force_red::read(path);
     match &hook {
@@ -236,11 +191,8 @@ pub(crate) fn forced_red(path: &Path, booted: Option<&Digest>) -> Option<CheckRe
     force_red::check(&hook, booted)
 }
 
-/// The booted digest: `bootc status` first; if it gives none, the daemon's `Booted`.
-///
-/// The fallback matters for armed boots: with the digest unknown the decision cannot confirm
-/// the target and judges the boot red, so a `bootc status` that fails in this process (for
-/// example because of the unit's sandbox) would otherwise fail every update.
+/// Falls back to the daemon's `Booted`: with the digest unknown an armed boot is judged
+/// red, so a `bootc status` that fails in this process would otherwise fail every update.
 pub(crate) fn resolve_booted(
     booted: &Result<BootedImage, String>,
     updater: &dyn Updater,
@@ -274,8 +226,6 @@ pub(crate) fn resolve_booted(
     }
 }
 
-/// Which deployment is entry 0 at the next boot, from `bootc status`: unknown when the
-/// status could not be read, or when it names a rollback digest that is not a valid one.
 pub(crate) fn default_deployment(booted: &Result<BootedImage, String>) -> DefaultDeployment {
     let Ok(image) = booted else {
         return DefaultDeployment::Unknown;
@@ -291,45 +241,27 @@ pub(crate) fn default_deployment(booted: &Result<BootedImage, String>) -> Defaul
     DefaultDeployment::from_status(image.rollback_queued, rollback)
 }
 
-/// How one step ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StepOutcome {
-    /// Performed.
     Done,
-    /// Performed and failed.
     Failed(String),
-    /// Not performed.
     Skipped(Skip),
 }
 
-/// Why a step was not performed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Skip {
-    /// The step with this index failed, and [`Step::skipped_after_failure_of`] says so.
-    AfterFailure(usize),
-    /// The step runs only after a failure ([`Step::only_after_failure_of`]) that did not
-    /// happen.
+    AfterFailure { failed_step: usize },
     NotNeeded,
-    /// A user logged in before the reboot.
     UserLoggedIn,
-    /// logind could not say whether a user logged in before the reboot.
     SessionUnknown,
 }
 
-/// What the steps act on besides the shared ports.
 pub(crate) struct Effects<'a, W: GrubEnvWriter + ?Sized> {
-    /// grubenv.
     pub(crate) writer: &'a mut W,
-    /// `health-failure.json`.
     pub(crate) store: &'a dyn FailureStore,
-    /// `systemctl reboot`.
     pub(crate) rebooter: &'a dyn Rebooter,
 }
 
-/// Performs `steps` in order with the library's failure policy: a failed step cancels the
-/// later steps [`Step::skipped_after_failure_of`] names; the others still run; a step that
-/// runs only after a failure ([`Step::only_after_failure_of`]) runs only if that failure
-/// happened. Returns one outcome per step.
 pub(crate) fn perform<W: GrubEnvWriter + ?Sized>(
     steps: &[Step],
     ports: &Ports,
@@ -348,7 +280,7 @@ pub(crate) fn perform<W: GrubEnvWriter + ?Sized>(
             .peekable();
         let needed = conditions.peek().is_none() || conditions.any(|(_, outcome)| failed(outcome));
         let outcome = match cancelled_by {
-            Some(failed) => StepOutcome::Skipped(Skip::AfterFailure(failed)),
+            Some(failed_step) => StepOutcome::Skipped(Skip::AfterFailure { failed_step }),
             None if !needed => StepOutcome::Skipped(Skip::NotNeeded),
             None => perform_one(step, ports, effects),
         };
@@ -378,8 +310,7 @@ fn perform_one<W: GrubEnvWriter + ?Sized>(
         } => ports.updater.report_boot(*verdict, digest.as_ref()),
         Step::ReconcileFallback { target, booted } => reconcile(target, booted, ports, effects),
         Step::Reboot => {
-            // Never reboot into a session that appeared since the decision, nor when logind
-            // cannot say (the same fail-safe rule as the decision's input).
+            // A session may have appeared since the decision.
             match ports.sessions.list() {
                 Ok(sessions) if session::user_logged_in(&sessions) => {
                     return StepOutcome::Skipped(Skip::UserLoggedIn);
@@ -399,9 +330,6 @@ fn perform_one<W: GrubEnvWriter + ?Sized>(
     }
 }
 
-/// [`Step::ReconcileFallback`]: the fallback report failed, but the daemon may have run
-/// `bootc rollback` anyway. Read the boot order again and disarm if the target is no longer
-/// the default; otherwise the hedge (`apex_counter=3`) stays.
 fn reconcile<W: GrubEnvWriter + ?Sized>(
     target: &Digest,
     booted: &Digest,
@@ -437,8 +365,8 @@ fn log_step(index: usize, step: &Step, outcome: &StepOutcome) {
     match outcome {
         StepOutcome::Done => tracing::info!("step {index} ({what}): done"),
         StepOutcome::Failed(err) => tracing::error!("step {index} ({what}) failed: {err}"),
-        StepOutcome::Skipped(Skip::AfterFailure(failed)) => {
-            tracing::warn!("step {index} ({what}) skipped because step {failed} failed");
+        StepOutcome::Skipped(Skip::AfterFailure { failed_step }) => {
+            tracing::warn!("step {index} ({what}) skipped because step {failed_step} failed");
         }
         StepOutcome::Skipped(Skip::NotNeeded) => {
             tracing::debug!("step {index} ({what}) not needed");
@@ -453,7 +381,6 @@ fn log_step(index: usize, step: &Step, outcome: &StepOutcome) {
     }
 }
 
-/// One line for a step.
 pub(crate) fn describe_step(step: &Step) -> String {
     match step {
         Step::ApplyEnv(ops) => {
@@ -474,7 +401,6 @@ pub(crate) fn describe_step(step: &Step) -> String {
     }
 }
 
-/// Whether any step failed (the process then exits with failure).
 pub(crate) fn any_failed(outcomes: &[StepOutcome]) -> bool {
     outcomes.iter().any(|o| matches!(o, StepOutcome::Failed(_)))
 }

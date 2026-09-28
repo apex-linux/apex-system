@@ -1,6 +1,3 @@
-//! Required checks on systemd units: an explicit list that must not have failed, and the
-//! services that must be running.
-
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,55 +6,36 @@ use std::time::Duration;
 use crate::checks::{Check, names};
 use crate::process;
 
-/// The `systemctl` executable.
 pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
 
-/// How long one `systemctl` call may take. Shorter than
-/// [`CHECK_TIMEOUT`](crate::checks::CHECK_TIMEOUT), so the check
-/// kills its own `systemctl` and reports why before the runner gives up on it.
+/// Shorter than [`CHECK_TIMEOUT`](crate::checks::CHECK_TIMEOUT), so the check reports why
+/// before the runner gives up on it.
 pub const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(25);
 
-/// Units that must not be in the `failed` state after boot (ADR 0009: "none of an
-/// explicit list of units has failed").
-///
-/// A unit is on this list only if its failure means the new deployment itself is broken,
-/// in a way that makes the desktop, logging in, or updating and rolling back unusable.
-/// Deliberately not on it:
-/// - `ostree-boot-complete.service`: it fails when staging failed at the previous shutdown.
-///   That is its own state (`FinalizeFailed`), not a sign that this deployment is bad.
-/// - `NetworkManager-wait-online.service` and anything else that depends on the network
-///   being reachable: network conditions must never cause a rollback.
-/// - `systemd-tmpfiles-setup.service`: it fails for any bad line in any package; the
-///   image checks catch those at build time.
-/// - `apex-updated.service`: it is D-Bus activated and exits when idle; the `Ping` check
-///   is the real test.
-/// - `upower.service`, `fprintd.service` and other hardware services: hardware is covered
-///   by the reported checks, which never cause a rollback.
+/// Only units whose failure makes the desktop, logging in, or updating and rolling back
+/// unusable. Deliberately absent: `ostree-boot-complete` (fails for a failed stage, not for
+/// this deployment), anything that needs the network to be reachable,
+/// `systemd-tmpfiles-setup` (fails for any bad package line), the D-Bus-activated
+/// `apex-updated` (the `Ping` check covers it) and hardware services (reported checks).
 pub const REQUIRED_UNITS: &[&str] = &[
-    // Storage and plumbing.
-    "boot.mount",             // /boot holds grubenv and the kernels (ext4, ADR 0010)
-    "ostree-remount.service", // finishes the deployment's mounts (/sysroot, /var)
+    "boot.mount",
+    "ostree-remount.service",
     "systemd-journald.service",
     "systemd-udevd.service",
-    "dbus-broker.service", // the system bus that logind, polkit and apex-updated use
-    // Logging in and the desktop.
+    "dbus-broker.service",
     "systemd-logind.service",
-    "systemd-user-sessions.service", // while it is failed, nobody can log in
-    "accounts-daemon.service",       // GDM's user list
+    "systemd-user-sessions.service",
+    "accounts-daemon.service",
     "gdm.service",
-    "polkit.service", // authorises every update action, "Roll back" included
-    // Network software (a crash, not the network being unreachable).
+    "polkit.service",
     "NetworkManager.service",
     "systemd-resolved.service",
 ];
 
-/// Units that must be active (ADR 0009: "`NetworkManager` and `systemd-logind` are active").
 pub const REQUIRED_ACTIVE_UNITS: &[&str] = &["NetworkManager.service", "systemd-logind.service"];
 
-/// `ActiveState` values that count as running.
 const RUNNING_STATES: &[&str] = &["active", "reloading", "refreshing"];
 
-/// Suffixes of systemd unit names, used to tell unit names from other text.
 const UNIT_SUFFIXES: &[&str] = &[
     ".service",
     ".socket",
@@ -72,22 +50,12 @@ const UNIT_SUFFIXES: &[&str] = &[
     ".scope",
 ];
 
-/// Why `systemctl` output could not be read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum UnitStateError {
-    /// `systemctl is-active` printed a different number of states than units were asked for.
     #[error("expected {expected} unit states from systemctl, got {found}")]
-    CountMismatch {
-        /// Units asked for.
-        expected: usize,
-        /// Non-empty lines printed.
-        found: usize,
-    },
+    CountMismatch { expected: usize, found: usize },
 }
 
-/// Parses `systemctl list-units --state=failed --plain --no-legend --full` into the set of
-/// failed unit names. Also accepts the output without `--plain` (a `●`, `×` or `*` marker
-/// before the name) and ignores lines that do not start with a unit name.
 pub fn parse_failed_units(output: &str) -> BTreeSet<String> {
     output
         .lines()
@@ -100,7 +68,6 @@ pub fn parse_failed_units(output: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// The units of `required` that are in `failed`, in the order of `required`.
 pub fn failed_required_units(failed: &BTreeSet<String>, required: &[&str]) -> Vec<String> {
     required
         .iter()
@@ -109,8 +76,7 @@ pub fn failed_required_units(failed: &BTreeSet<String>, required: &[&str]) -> Ve
         .collect()
 }
 
-/// Pairs the output of `systemctl is-active <units>…` (or `is-failed`), one state per
-/// line in argument order, with the units.
+/// `systemctl is-active` prints one state per line, in argument order.
 pub fn parse_unit_states(
     units: &[&str],
     output: &str,
@@ -133,7 +99,6 @@ pub fn parse_unit_states(
         .collect())
 }
 
-/// The units whose state is not a running state, as `unit (state)`.
 pub fn not_running(states: &[(String, String)]) -> Vec<String> {
     states
         .iter()
@@ -148,8 +113,7 @@ fn is_unit_name(token: &str) -> bool {
         .any(|suffix| token.len() > suffix.len() && token.ends_with(suffix))
 }
 
-/// Runs `systemctl` with a clean environment and returns its stdout, whatever its exit
-/// status (`is-active` exits non-zero when a unit is not active).
+/// Returns stdout whatever the exit status: `is-active` exits non-zero for an inactive unit.
 fn systemctl(program: &Path, args: &[&str]) -> Result<(bool, String), String> {
     let mut command = Command::new(program);
     command
@@ -172,7 +136,6 @@ fn systemctl(program: &Path, args: &[&str]) -> Result<(bool, String), String> {
     Ok((done.status.success(), stdout))
 }
 
-/// Required check: none of the listed units has failed.
 #[derive(Debug, Clone)]
 pub struct FailedUnitsCheck {
     systemctl: PathBuf,
@@ -180,12 +143,10 @@ pub struct FailedUnitsCheck {
 }
 
 impl FailedUnitsCheck {
-    /// The check on [`REQUIRED_UNITS`] with `/usr/bin/systemctl`.
     pub fn system() -> Self {
         Self::new(SYSTEMCTL, REQUIRED_UNITS)
     }
 
-    /// The check on other units or with another `systemctl`.
     pub fn new(systemctl: impl Into<PathBuf>, units: &[&str]) -> Self {
         Self {
             systemctl: systemctl.into(),
@@ -225,7 +186,6 @@ impl Check for FailedUnitsCheck {
     }
 }
 
-/// Required check: the listed units are active.
 #[derive(Debug, Clone)]
 pub struct ActiveUnitsCheck {
     systemctl: PathBuf,
@@ -233,12 +193,10 @@ pub struct ActiveUnitsCheck {
 }
 
 impl ActiveUnitsCheck {
-    /// The check on [`REQUIRED_ACTIVE_UNITS`] with `/usr/bin/systemctl`.
     pub fn system() -> Self {
         Self::new(SYSTEMCTL, REQUIRED_ACTIVE_UNITS)
     }
 
-    /// The check on other units or with another `systemctl`.
     pub fn new(systemctl: impl Into<PathBuf>, units: &[&str]) -> Self {
         Self {
             systemctl: systemctl.into(),
@@ -279,7 +237,6 @@ mod tests {
             assert_eq!(unique.len(), list.len(), "duplicates in {list:?}");
             assert!(list.iter().all(|u| is_unit_name(u)), "{list:?}");
         }
-        // Every unit that must be active must also not be failed.
         assert!(
             REQUIRED_ACTIVE_UNITS
                 .iter()

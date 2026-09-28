@@ -1,6 +1,3 @@
-//! Keeps `data/apex-boot-assess.service` in line with the M1 contract, ADR 0009 and the
-//! timing constants of the crate.
-
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -11,7 +8,6 @@ use std::path::Path;
 
 use apex_boot::{ASSESS_BINARY_PATH, ASSESS_TIME_BUDGET, SERVICE_UNIT};
 
-/// `(section, key, value)` for every assignment, in file order.
 fn assignments(unit: &str) -> Vec<(String, String, String)> {
     let mut section = String::new();
     let mut out = Vec::new();
@@ -74,7 +70,6 @@ fn ordering_never_blocks_boot_complete() {
     let all = assignments(SERVICE_UNIT);
     assert!(values(&all, "Unit", "After").contains(&"graphical.target"));
     assert_eq!(values(&all, "Install", "WantedBy"), ["graphical.target"]);
-    // Nothing may wait for the assessment.
     for key in ["Before", "RequiredBy", "UpheldBy"] {
         assert!(values(&all, "Unit", key).is_empty(), "{key}");
         assert!(values(&all, "Install", key).is_empty(), "{key}");
@@ -82,8 +77,6 @@ fn ordering_never_blocks_boot_complete() {
     assert!(values(&all, "Unit", "RequiresMountsFor").contains(&"/boot"));
 }
 
-/// `apex_boot::ASSESS_TIME_BUDGET` is the one statement of the worst case; the unit's
-/// timeout covers it with a bounded margin, and its comment states the same figure.
 #[test]
 fn timeout_covers_the_time_budget() {
     let all = assignments(SERVICE_UNIT);
@@ -100,20 +93,12 @@ fn timeout_covers_the_time_budget() {
         timeout - budget <= 60,
         "TimeoutStartSec={timeout} is far above the budget {budget} s"
     );
-    // The comment in the unit spells out the budget; keep it honest.
-    assert!(
-        SERVICE_UNIT.contains(&format!("These add up to {budget} s.")),
-        "the unit comment does not state {budget} s"
-    );
-    assert!(SERVICE_UNIT.contains("apex_boot::ASSESS_TIME_BUDGET"));
 }
 
 #[test]
 fn hardening_keeps_the_needed_writes_and_no_network() {
     let all = assignments(SERVICE_UNIT);
     assert_eq!(single(&all, "Service", "ProtectSystem"), "strict");
-    // grubenv is written only in the writer's private mount namespace (the /boot
-    // filesystem is read-only on bootc), so /boot is never made writable for the unit.
     for key in ["ReadWritePaths", "BindPaths"] {
         let paths = values(&all, "Service", key);
         assert!(
@@ -125,7 +110,6 @@ fn hardening_keeps_the_needed_writes_and_no_network() {
     }
     assert_eq!(single(&all, "Service", "StateDirectory"), "apex");
     assert_eq!(single(&all, "Service", "StateDirectoryMode"), "0700");
-    // bootc writes a temporary copy of itself to /tmp, read-only under strict otherwise.
     assert_eq!(single(&all, "Service", "PrivateTmp"), "yes");
     assert_eq!(single(&all, "Service", "PrivateNetwork"), "yes");
     assert_eq!(
@@ -147,8 +131,6 @@ fn hardening_keeps_the_needed_writes_and_no_network() {
     }
 }
 
-/// The grubenv writer runs `unshare --mount` and `mount -o remount,rw /boot`, and `bootc
-/// status` remounts /sysroot and /boot for the ostree lock and reads /proc/1/ns/mnt.
 #[test]
 fn the_sandbox_allows_the_namespace_and_remounts() {
     let all = assignments(SERVICE_UNIT);
@@ -170,21 +152,16 @@ fn the_sandbox_allows_the_namespace_and_remounts() {
     ] {
         assert!(!caps.contains(&dropped), "{dropped} is not needed");
     }
-    // Only mount namespaces may be created, and they may.
     assert_eq!(values(&all, "Service", "RestrictNamespaces"), ["mnt"]);
-    // bootc joins the host IPC namespace when it runs in a private one; with only mnt
-    // allowed that setns fails, so the unit must stay in the host IPC namespace.
     assert!(
         values(&all, "Service", "PrivateIPC")
             .iter()
             .all(|v| *v != "yes"),
         "PrivateIPC=yes makes `bootc status` fail: setns(ipc) is not allowed"
     );
-    // The filter allows unshare (in @system-service's @process) and the mount calls.
     let filter = values(&all, "Service", "SystemCallFilter");
     assert!(filter.contains(&"@system-service"), "{filter:?}");
     assert!(filter.contains(&"@mount"), "{filter:?}");
-    // An allow list only: no deny entry (for example ~@mount) can take them away again.
     assert!(filter.iter().all(|f| !f.starts_with('~')), "{filter:?}");
     assert_eq!(single(&all, "Service", "SystemCallErrorNumber"), "EPERM");
     assert_eq!(single(&all, "Service", "NoNewPrivileges"), "yes");

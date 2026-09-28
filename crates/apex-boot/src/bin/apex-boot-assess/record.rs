@@ -1,7 +1,5 @@
-//! `health-failure.json` on disk (M1 contract §4): written atomically, so a crash or power
-//! loss leaves either the old record or the new one, never a torn file. The write (with its
-//! two fsyncs) is bounded by [`RECORD_TIMEOUT`]: on a stalled `/var` it is abandoned on its
-//! thread, so the report and the reboot after it still happen.
+//! `health-failure.json` on disk. The write is bounded by [`RECORD_TIMEOUT`]: on a stalled
+//! `/var` it is abandoned on its thread, so the report and the reboot after it still happen.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write as _};
@@ -15,14 +13,12 @@ use apex_boot::{HealthFailure, RECORD_TIMEOUT};
 
 use crate::ports::FailureStore;
 
-/// The production [`FailureStore`]: one JSON file.
 #[derive(Debug, Clone)]
 pub(crate) struct FileStore {
     path: PathBuf,
 }
 
 impl FileStore {
-    /// A store writing `path` (normally `/var/lib/apex/health-failure.json`).
     pub(crate) fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -40,8 +36,7 @@ impl FailureStore for FileStore {
     }
 }
 
-/// Runs `work` on its own thread and waits at most `timeout` for it. When it does not
-/// finish in time the thread is left to finish (or hang) on its own.
+/// A thread that does not finish in time is left to finish, or hang, on its own.
 pub(crate) fn run_bounded<T: Send + 'static>(
     timeout: Duration,
     work: impl FnOnce() -> T + Send + 'static,
@@ -50,7 +45,6 @@ pub(crate) fn run_bounded<T: Send + 'static>(
     thread::Builder::new()
         .name("apex-record".to_owned())
         .spawn(move || {
-            // The receiver is gone only after a timeout; nothing is waiting any more.
             let _ = done.send(work());
         })
         .map_err(|err| format!("cannot start a thread: {err}"))?;
@@ -59,8 +53,7 @@ pub(crate) fn run_bounded<T: Send + 'static>(
         .map_err(|_| format!("did not finish within {} s", timeout.as_secs()))
 }
 
-/// Replaces `path` with `bytes`: a new 0600 file next to it, fsync, rename over `path`,
-/// fsync of the directory. Creates the directory (0700, contract §1) if it is missing.
+/// A crash or power loss leaves the old record or the new one, never a torn file.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let (Some(dir), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(io::Error::new(
@@ -68,7 +61,6 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
             "the path has no file name",
         ));
     };
-    // `Path::parent` of a bare file name is "", which means the working directory.
     let dir = if dir.as_os_str().is_empty() {
         Path::new(".")
     } else {
@@ -173,7 +165,6 @@ mod tests {
     #[test]
     fn a_failed_write_is_reported_and_cleaned_up() {
         let dir = tempfile::tempdir().unwrap();
-        // The target is a directory: the rename fails after the temporary file was written.
         let path = dir.path().join("health-failure.json");
         fs::create_dir(&path).unwrap();
         fs::write(path.join("keep"), "x").unwrap();

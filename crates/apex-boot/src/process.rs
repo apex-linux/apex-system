@@ -1,14 +1,12 @@
-//! Running a helper program (`grub2-editenv`, `systemctl`) with a deadline.
+//! Running a helper program with a deadline.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// How often the child's status is polled while waiting.
 const POLL: Duration = Duration::from_millis(10);
 
-/// What a finished helper produced.
 #[derive(Debug)]
 pub(crate) struct Finished {
     pub(crate) status: ExitStatus,
@@ -16,7 +14,6 @@ pub(crate) struct Finished {
     pub(crate) stderr: Vec<u8>,
 }
 
-/// Why a helper did not finish.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RunError {
     #[error("cannot start {program}")]
@@ -35,16 +32,8 @@ pub(crate) enum RunError {
     TimedOut { program: String, timeout: Duration },
 }
 
-/// Runs `command` with stdin closed, collects its output, and kills it if it has not
-/// exited after `timeout`.
-///
-/// The whole call takes at most `timeout` plus [`crate::KILL_REAP_GRACE`]: a killed child
-/// that does not exit within the grace (uninterruptible sleep on a stalled disk) is
-/// abandoned, not waited for.
-///
-/// The caller builds the command (program, argv, environment); nothing goes through a
-/// shell. stdout and stderr are drained on their own threads so a chatty child can never
-/// block on a full pipe.
+/// Takes at most `timeout` plus [`crate::KILL_REAP_GRACE`]. Output is drained on its own
+/// threads so a chatty child can never block on a full pipe.
 pub(crate) fn run(command: &mut Command, timeout: Duration) -> Result<Finished, RunError> {
     let program = command.get_program().to_string_lossy().into_owned();
     let mut child = command
@@ -81,7 +70,6 @@ pub(crate) fn run(command: &mut Command, timeout: Duration) -> Result<Finished, 
 }
 
 impl RunError {
-    /// The message with its cause, for reports that carry a single string.
     pub(crate) fn describe(&self) -> String {
         match std::error::Error::source(self) {
             Some(source) => format!("{self}: {source}"),
@@ -94,11 +82,9 @@ fn kill(child: &mut Child) {
     kill_within(child, crate::KILL_REAP_GRACE);
 }
 
-/// `SIGKILL`, then reaps the child if it exits within `grace`. Returns whether it was
-/// reaped. A child that is not reaped stays a zombie until this short-lived process exits,
-/// which is better than blocking the assessment on it.
+/// Returns whether the child was reaped. One that is not stays a zombie until this
+/// short-lived process exits, which is better than blocking the assessment on it.
 fn kill_within(child: &mut Child, grace: Duration) -> bool {
-    // The child may have exited in the meantime; either way it must be reaped.
     let _ = child.kill();
     let deadline = Instant::now() + grace;
     loop {
@@ -114,7 +100,6 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8
     thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(mut pipe) = pipe {
-            // A read error only truncates diagnostics; the exit status still decides.
             let _ = pipe.read_to_end(&mut buf);
         }
         buf
@@ -156,13 +141,10 @@ mod tests {
             .spawn()
             .unwrap();
         assert!(kill_within(&mut child, Duration::from_secs(10)));
-        // An already reaped child: kill fails, try_wait errors or reports the exit, and the
-        // call still returns at once instead of blocking.
         let start = Instant::now();
         let _ = kill_within(&mut child, Duration::from_millis(50));
         assert!(start.elapsed() < Duration::from_secs(5));
-        // A zero grace stands in for a child stuck in uninterruptible sleep: the call
-        // returns at once, reaped or not, instead of waiting for it.
+        // A zero grace stands in for a child stuck in uninterruptible sleep.
         let mut child = Command::new("/bin/sh")
             .args(["-c", "exec sleep 30"])
             .spawn()
@@ -171,7 +153,6 @@ mod tests {
         let reaped = kill_within(&mut child, Duration::ZERO);
         assert!(start.elapsed() < Duration::from_secs(1));
         if !reaped {
-            // Clean up the test's own child.
             let _ = child.wait();
         }
     }

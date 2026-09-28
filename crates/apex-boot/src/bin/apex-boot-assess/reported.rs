@@ -1,9 +1,5 @@
-//! The reported checks of ADR 0009: hardware state and the image source. They are logged
-//! and shown by `--dry-run`, and never influence the decision (only the required checks go
-//! into [`apex_boot::AssessInput`]).
-//!
-//! The hardware facts are those of `hardware/m7400qc/profile.toml`; a test keeps the
-//! constants in [`m7400qc`] equal to the profile. Every path is read below `--root`.
+//! The reported checks: logged and shown by `--dry-run`, never part of the decision. Every
+//! path is read below `--root`.
 
 use std::fmt;
 use std::fs;
@@ -18,29 +14,20 @@ use apex_bootc::{APEX_STABLE, APEX_TESTING, ImageSignature};
 use crate::cli::under;
 use crate::ports::BootedImage;
 
-/// Machine facts from `hardware/m7400qc/profile.toml`.
+/// A test keeps these equal to `hardware/m7400qc/profile.toml`.
 pub(crate) mod m7400qc {
-    /// `[battery] name`.
     pub(crate) const BATTERY: &str = "BAT0";
-    /// `[battery] charge_end_threshold`.
     pub(crate) const CHARGE_END_THRESHOLD: u32 = 80;
-    /// `[gpu.discrete] pci`.
     pub(crate) const DGPU_PCI: &str = "0000:01:00.0";
-    /// `[fingerprint] usb_vendor`.
     pub(crate) const FINGERPRINT_VENDOR: u32 = 0x04f3;
-    /// `[fingerprint] usb_product`.
     pub(crate) const FINGERPRINT_PRODUCT: u32 = 0x0c6e;
-    /// `[audio.codec] vendor_id`.
     pub(crate) const CODEC_VENDOR_ID: u32 = 0x10ec_0294;
-    /// `[audio.codec] subsystem_id`.
     pub(crate) const CODEC_SUBSYSTEM_ID: u32 = 0x1043_1ab2;
-    /// Where the image installs the rendered HDA patch firmware (`image/Containerfile`);
-    /// absent while the image is labelled `degraded=audio`.
+    /// Absent while the image is labelled `degraded=audio`.
     pub(crate) const PATCH_FIRMWARE: &str = "/usr/lib/firmware/apex/alc294-m7400qc.fw";
 }
 
-/// The reported checks that read files, in the order of [`names::REPORTED`] (the image
-/// source check comes from `bootc status`, see [`image_source`]).
+/// In the order of [`names::REPORTED`]; the image source comes from `bootc status`.
 pub(crate) fn file_checks(root: &Path) -> Vec<Box<dyn Check>> {
     let check = |name: &'static str, run: fn(&Path) -> Result<(), String>| -> Box<dyn Check> {
         let root = root.to_path_buf();
@@ -55,9 +42,6 @@ pub(crate) fn file_checks(root: &Path) -> Vec<Box<dyn Check>> {
     ]
 }
 
-/// [`names::IMAGE_SOURCE`]: the booted image is the Apex stable or testing image, pulled
-/// from a registry and verified by `containers-policy.json`. Pure: evaluates what
-/// `bootc status` returned.
 pub(crate) fn image_source(booted: &Result<BootedImage, String>) -> CheckResult {
     let outcome = match booted {
         Err(err) => Err(format!("bootc status failed: {err}")),
@@ -106,14 +90,10 @@ fn evaluate_image_source(booted: &BootedImage) -> Result<(), String> {
     }
 }
 
-/// One HDA verb: node id, verb and parameter, as `[verb]` lines and `init_verbs` hold them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HdaVerb {
-    /// Node id.
     pub(crate) nid: u32,
-    /// The verb (command) sent to the node.
     pub(crate) verb: u32,
-    /// Parameter.
     pub(crate) param: u32,
 }
 
@@ -128,8 +108,7 @@ impl fmt::Display for HdaVerb {
     }
 }
 
-/// A number as the kernel's `%i` reads it: `0x` hexadecimal, a leading `0` octal, else
-/// decimal.
+/// As the kernel's `%i` reads it.
 pub(crate) fn parse_number(token: &str) -> Option<u32> {
     if let Some(hex) = token
         .strip_prefix("0x")
@@ -145,7 +124,7 @@ pub(crate) fn parse_number(token: &str) -> Option<u32> {
     }
 }
 
-/// The first three numbers of a line (the kernel reads them with `"%i %i %i"`).
+/// The kernel reads a verb line with `"%i %i %i"`.
 pub(crate) fn parse_verb_line(line: &str) -> Option<HdaVerb> {
     let mut tokens = line.split_whitespace().map(parse_number);
     Some(HdaVerb {
@@ -155,8 +134,6 @@ pub(crate) fn parse_verb_line(line: &str) -> Option<HdaVerb> {
     })
 }
 
-/// The verbs of an HDA patch firmware file: the lines of its `[verb]` and `[init_verbs]`
-/// sections, skipping blank lines and `#` comments as the kernel does.
 pub(crate) fn patch_verbs(firmware: &str) -> Result<Vec<HdaVerb>, String> {
     let mut in_verbs = false;
     let mut verbs = Vec::new();
@@ -177,12 +154,10 @@ pub(crate) fn patch_verbs(firmware: &str) -> Result<Vec<HdaVerb>, String> {
     Ok(verbs)
 }
 
-/// The verbs in a codec's sysfs `init_verbs` file (one per line).
 pub(crate) fn sysfs_verbs(text: &str) -> Vec<HdaVerb> {
     text.lines().filter_map(parse_verb_line).collect()
 }
 
-/// The verbs of `expected` that `actual` lacks, in order.
 pub(crate) fn missing_verbs(expected: &[HdaVerb], actual: &[HdaVerb]) -> Vec<HdaVerb> {
     expected
         .iter()
@@ -199,7 +174,7 @@ fn describe_read_error(path: &Path, err: &io::Error) -> String {
     format!("cannot read {}: {err}", path.display())
 }
 
-/// The patch firmware's verbs are in the ALC294's `init_verbs`, so the kernel replays them.
+/// The kernel replays the patch firmware's verbs only if they are in the codec's `init_verbs`.
 fn audio_init_verbs(root: &Path) -> Result<(), String> {
     let firmware_path = under(root, m7400qc::PATCH_FIRMWARE);
     let firmware = match fs::read_to_string(&firmware_path) {
@@ -234,7 +209,6 @@ fn audio_init_verbs(root: &Path) -> Result<(), String> {
     }
 }
 
-/// The `hwC*D*` directory of the ALC294 (vendor and subsystem id from the profile).
 fn find_codec(root: &Path) -> Result<PathBuf, String> {
     let sound = under(root, "/sys/class/sound");
     let entries = fs::read_dir(&sound).map_err(|err| describe_read_error(&sound, &err))?;
@@ -263,7 +237,6 @@ fn find_codec(root: &Path) -> Result<PathBuf, String> {
     })
 }
 
-/// The battery's end threshold is the profile's (`UPower` applies it after boot).
 fn charge_threshold(root: &Path) -> Result<(), String> {
     let path = under(
         root,
@@ -284,7 +257,6 @@ fn charge_threshold(root: &Path) -> Result<(), String> {
     }
 }
 
-/// The unbound dGPU may runtime-suspend (`power/control` is `auto`).
 fn dgpu_runtime_pm(root: &Path) -> Result<(), String> {
     let path = under(
         root,
@@ -303,7 +275,6 @@ fn dgpu_runtime_pm(root: &Path) -> Result<(), String> {
     }
 }
 
-/// The fingerprint reader is on the USB bus.
 fn fingerprint_device(root: &Path) -> Result<(), String> {
     let usb = under(root, "/sys/bus/usb/devices");
     let entries = fs::read_dir(&usb).map_err(|err| describe_read_error(&usb, &err))?;
@@ -350,7 +321,6 @@ headset-mic
 0x20 0x400 0x7774
 ";
 
-    /// A fake root with every reported check passing.
     fn healthy_root() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         let write = |path: &str, text: &str| {
@@ -419,7 +389,6 @@ headset-mic
         )
         .unwrap();
         fs::remove_dir_all(path("/sys/bus/usb/devices/3-4")).unwrap();
-        // An older snippet this image still drives: reported, never required.
         fs::write(path(GRUB_CFG_PATH), "# apex-bootcount v0\nblscfg\n").unwrap();
         let reasons: Vec<String> = outcomes(root.path())
             .into_iter()
@@ -555,7 +524,6 @@ headset-mic
         );
     }
 
-    /// The machine facts in this module are the profile's.
     #[test]
     fn constants_match_the_hardware_profile() {
         let text = fs::read_to_string(concat!(
@@ -595,7 +563,6 @@ headset-mic
         })
     }
 
-    /// One number in any spelling the kernel accepts.
     fn spell(n: u32, style: u8) -> String {
         match style % 3 {
             0 => format!("{n:#x}"),

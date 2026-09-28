@@ -1,9 +1,5 @@
-//! Runs the real `grub2-editenv` (Fedora) or `grub-editenv` (other distributions) when one
-//! is installed: the direct form of the production writer ([`Editenv::new`]) for the Apex
-//! variables, and the bare tool for arbitrary names and values, and checks that the files
-//! it writes are byte for byte what the in-memory model predicts. Without either tool the
-//! tests only print that they were skipped. (The namespaced form, [`Editenv::system`],
-//! needs root and a read-only `/boot`; its command line is unit-tested in `writer.rs`.)
+//! The host's real `grub2-editenv` or `grub-editenv` against the in-memory model; skipped
+//! when neither is installed.
 
 #![allow(
     clippy::unwrap_used,
@@ -80,7 +76,6 @@ fn arming_and_confirming_through_the_real_tool() {
     assert!(!vars.is_armed());
     assert_eq!(vars.apex_counter, None);
 
-    // `list` shows exactly what the model reads.
     let listed = Command::new(&tool).arg(&file).arg("list").output().unwrap();
     assert_eq!(String::from_utf8(listed.stdout).unwrap(), "apex_ok=0\n");
 }
@@ -106,7 +101,6 @@ fn a_full_block_is_reported_by_the_tool() {
     assert_eq!(std::fs::read(&file).unwrap(), before);
 }
 
-/// The production writer refuses what the tool would happily write.
 #[test]
 fn the_writer_refuses_foreign_variables_before_running_the_tool() {
     let Some(tool) = editenv_tool() else {

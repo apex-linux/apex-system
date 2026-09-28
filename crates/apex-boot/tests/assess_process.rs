@@ -1,16 +1,6 @@
-//! Runs the built `apex-boot-assess` binary as a process.
-//!
-//! - A grubenv the assessment cannot act on stops it with exit status 1 before it makes any
-//!   D-Bus call: the system bus address points at a socket this test listens on, and no
-//!   connection may arrive.
-//! - `--dry-run` end to end: a private `dbus-daemon` carries a fake logind (one greeter
-//!   session) and a fake `apex-updated` (`Ping`, `Booted`); `bootc` is pointed at a
-//!   missing program (apex-bootc's debug-only `APEX_BOOTC` override), so the booted digest
-//!   comes from the daemon. The required unit checks ask this host's real systemd
-//!   read-only, so their outcome is not asserted; the qualification hook
-//!   (`/var/lib/apex/force-red` below `--root`) makes the decision deterministic anyway.
-//!   One run has the fake daemon hold `Ping` for 21 s, as `apex-updated` does while its
-//!   first refresh runs. Skipped when `dbus-daemon` is not installed.
+//! Runs the built binary. `bootc` points at a missing program, so the booted digest comes
+//! from the fake daemon; the unit checks ask this host's real systemd, so the qualification
+//! hook makes the decision deterministic.
 
 #![allow(
     clippy::unwrap_used,
@@ -43,10 +33,9 @@ const BINARY: &str = env!("CARGO_BIN_EXE_apex-boot-assess");
 const BOOTED: &str = "sha256:9999999999999999999999999999999999999999999999999999999999999999";
 const OTHER: &str = "sha256:1212121212121212121212121212121212121212121212121212121212121212";
 
-/// Longest a run may take here; the fakes answer at once, so a slow run is a hang.
+/// The fakes answer at once, so a slow run is a hang.
 const RUN_LIMIT: Duration = Duration::from_secs(90);
 
-/// A name no other test or process uses, for abstract sockets.
 fn unique_name(what: &str) -> String {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     format!(
@@ -56,7 +45,6 @@ fn unique_name(what: &str) -> String {
     )
 }
 
-/// Runs the binary with a clean environment plus `env`, killing it after [`RUN_LIMIT`].
 fn run(args: &[&std::ffi::OsStr], env: &[(&str, &str)]) -> (Output, Duration) {
     let started = Instant::now();
     let mut child = Command::new(BINARY)
@@ -142,7 +130,6 @@ fn an_unusable_grubenv_fails_before_any_dbus_call() {
         assert!(output.stdout.is_empty(), "dry-run printed a decision");
         assert!(took < Duration::from_secs(20), "took {took:?}");
         assert_eq!(fs::read(grubenv).ok(), before, "{grubenv:?} changed");
-        // Nobody connected to the system bus.
         match listener.accept() {
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
             other => panic!("the binary connected to the bus: {other:?}"),
@@ -150,9 +137,7 @@ fn an_unusable_grubenv_fails_before_any_dbus_call() {
     }
 }
 
-// ---- the dry run against fakes on a private bus ----
-
-/// A private `dbus-daemon`, killed on drop.
+/// Killed on drop.
 struct PrivateBus {
     daemon: Child,
     address: String,
@@ -256,7 +241,6 @@ impl FakeGreeter {
     }
 }
 
-/// `apex-updated`, answering `Ping` after `ping_delay`.
 struct FakeUpdated {
     ping_delay: Duration,
 }
@@ -276,7 +260,6 @@ impl FakeUpdated {
     }
 }
 
-/// A `--root` with a bootupd-style grub.cfg carrying the snippet, and `/var/lib/apex`.
 fn fake_root(force_red: Option<&str>) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     let grub = root.path().join("boot/grub2");
@@ -299,12 +282,10 @@ fn fake_root(force_red: Option<&str>) -> tempfile::TempDir {
     root
 }
 
-/// Serves the fakes on `bus` and runs a dry run with `grubenv` below `root`.
 fn dry_run(bus: &PrivateBus, root: &Path, grubenv: &[u8]) -> (Output, Value, PathBuf) {
     dry_run_with(bus, root, grubenv, Duration::ZERO)
 }
 
-/// [`dry_run`] with a daemon that holds `Ping` for `ping_delay`.
 fn dry_run_with(
     bus: &PrivateBus,
     root: &Path,
@@ -389,8 +370,7 @@ fn dry_run_against_fakes_decides_and_changes_nothing() {
         return;
     };
 
-    // An ordinary boot. The unit checks come from this host's systemd, so the verdict may
-    // be either; everything the fakes provide is asserted.
+    // The unit checks come from this host's systemd, so the verdict may be either.
     let root = fake_root(None);
     let grubenv = grubenv_with(&[("apex_ok", "0")]);
     let (_, json, path) = dry_run(&bus, root.path(), &grubenv);
@@ -415,7 +395,6 @@ fn dry_run_against_fakes_decides_and_changes_nothing() {
     }
     assert_eq!(check_outcome(&json, "required", names::FORCED_RED), None);
     assert_eq!(json["reboot"], false);
-    // A dry run changes nothing.
     assert_eq!(fs::read(&path).unwrap(), grubenv);
     assert!(
         !root
@@ -424,13 +403,10 @@ fn dry_run_against_fakes_decides_and_changes_nothing() {
             .exists()
     );
 
-    // The hook names another digest: still no forced-red.
     let root = fake_root(Some(OTHER));
     let (_, json, _) = dry_run(&bus, root.path(), &grubenv);
     assert_eq!(check_outcome(&json, "required", names::FORCED_RED), None);
 
-    // The hook names the booted digest on an armed boot that GRUB counted: red, and the
-    // counter is used up by rebooting (in a real run).
     let root = fake_root(Some(&format!("{BOOTED}\n")));
     let armed = grubenv_with(&[
         ("apex_target", BOOTED),
@@ -473,9 +449,6 @@ fn dry_run_against_fakes_decides_and_changes_nothing() {
     );
 }
 
-/// Finding: `apex-updated` holds the first `Ping` for up to 20 s while its first `bootc
-/// status` runs. A 5 s per-call timeout abandoned every call before that answer; the check
-/// must pass.
 #[test]
 fn a_daemon_that_holds_ping_during_its_first_refresh_passes() {
     let Some(bus) = PrivateBus::start() else {

@@ -1,8 +1,5 @@
 //! Health checks: the [`Check`] trait, a runner with per-check timeouts, and the checks
 //! that need nothing but local files and `systemctl`.
-//!
-//! The binary adds the checks that need D-Bus or logind (the session check and the
-//! `apex-updated` ping) by implementing [`Check`], for example with [`FnCheck`].
 
 pub mod force_red;
 pub mod grub_cfg;
@@ -15,45 +12,27 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Time each check gets (ADR 0009).
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Check names, shared by the binary, the reports and `health-failure.json`.
+/// Shared by the binary, the reports and `health-failure.json`.
 pub mod names {
-    /// Required: a greeter or user session has been active for at least 20 s.
     pub const SESSION: &str = "session";
-    /// Required: `NetworkManager` and `systemd-logind` are active.
     pub const CORE_UNITS_ACTIVE: &str = "core-units-active";
-    /// Required: `apex-updated` answers `Ping`.
     pub const UPDATER_PING: &str = "apex-updated-ping";
-    /// Required: none of [`super::units::REQUIRED_UNITS`] has failed.
     pub const FAILED_UNITS: &str = "failed-units";
-    /// Required: `/boot/grub2/grub.cfg` contains the snippet marker, in a version this
-    /// image can drive.
     pub const GRUB_CFG_MARKER: &str = "grub-cfg-marker";
-    /// Added by [`crate::decide::decide`] when the counter is armed but the booted digest
-    /// is unknown.
+    /// Added by [`crate::decide::decide`] when armed but the booted digest is unknown.
     pub const BOOTED_DIGEST: &str = "booted-digest";
-    /// Added as a failed required check by the qualification hook
-    /// ([`super::force_red`]) when `/var/lib/apex/force-red` names the booted digest. Never
-    /// part of [`REQUIRED`]: it exists only on the boots the hook targets.
+    /// Added by the qualification hook [`super::force_red`], only on the boots it targets.
     pub const FORCED_RED: &str = "forced-red";
 
-    /// Reported only: the HDA `init_verbs` contain the generated verbs.
     pub const AUDIO_INIT_VERBS: &str = "audio-init-verbs";
-    /// Reported only: the battery charge threshold is applied.
     pub const CHARGE_THRESHOLD: &str = "charge-threshold";
-    /// Reported only: the dGPU runtime PM is `auto`.
     pub const DGPU_RUNTIME_PM: &str = "dgpu-runtime-pm";
-    /// Reported only: the fingerprint reader is present.
     pub const FINGERPRINT_DEVICE: &str = "fingerprint-device";
-    /// Reported only: the snippet in `grub.cfg` is the version this image ships.
     pub const GRUB_CFG_CURRENT: &str = "grub-cfg-current";
-    /// Reported only: the booted image is a registry image from the expected repository,
-    /// verified by policy.
     pub const IMAGE_SOURCE: &str = "image-source";
 
-    /// The required checks, whose failure makes a boot red.
     pub const REQUIRED: [&str; 5] = [
         SESSION,
         CORE_UNITS_ACTIVE,
@@ -62,7 +41,7 @@ pub mod names {
         GRUB_CFG_MARKER,
     ];
 
-    /// The checks that are only reported and never cause a rollback.
+    /// Never influence the decision.
     pub const REPORTED: [&str; 6] = [
         AUDIO_INIT_VERBS,
         CHARGE_THRESHOLD,
@@ -73,37 +52,26 @@ pub mod names {
     ];
 }
 
-/// A health check.
-///
-/// `run` is the I/O boundary: it may block, and it runs on its own thread (hence `Send`).
-/// Checks must not share locks with each other or with the caller, because a check that
-/// times out keeps running in the background (see [`run_checks`]).
+/// Checks must not share locks with each other or with the caller: a check that times out
+/// keeps running in the background.
 pub trait Check: Send {
-    /// A stable identifier (see [`names`]).
     fn name(&self) -> &str;
 
-    /// Performs the check. `Err` carries a human-readable reason.
     fn run(&self) -> Result<(), String>;
 
-    /// How long the runner waits for this check.
     fn timeout(&self) -> Duration {
         CHECK_TIMEOUT
     }
 }
 
-/// How a check ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckOutcome {
-    /// The check passed.
     Pass,
-    /// The check failed, with its reason.
     Fail(String),
-    /// The check did not finish within its timeout.
     Timeout,
 }
 
 impl CheckOutcome {
-    /// Whether the check passed.
     pub fn is_pass(&self) -> bool {
         *self == Self::Pass
     }
@@ -119,17 +87,13 @@ impl fmt::Display for CheckOutcome {
     }
 }
 
-/// The result of one check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckResult {
-    /// The check's name.
     pub name: String,
-    /// How it ended.
     pub outcome: CheckOutcome,
 }
 
 impl CheckResult {
-    /// A passed check.
     pub fn pass(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -137,7 +101,6 @@ impl CheckResult {
         }
     }
 
-    /// A failed check.
     pub fn fail(name: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -145,7 +108,6 @@ impl CheckResult {
         }
     }
 
-    /// A check that timed out.
     pub fn timeout(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -154,7 +116,6 @@ impl CheckResult {
     }
 }
 
-/// A check made from a closure, for checks the binary implements itself.
 pub struct FnCheck<F> {
     name: String,
     timeout: Duration,
@@ -165,7 +126,6 @@ impl<F> FnCheck<F>
 where
     F: Fn() -> Result<(), String> + Send,
 {
-    /// A check named `name` that runs `run`, with the default timeout.
     pub fn new(name: impl Into<String>, run: F) -> Self {
         Self {
             name: name.into(),
@@ -174,7 +134,6 @@ where
         }
     }
 
-    /// Replaces the timeout.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
@@ -208,35 +167,23 @@ where
     }
 }
 
-/// Runs every check concurrently, each on its own thread, and returns one result per
-/// check in the order given.
+/// Runs every check concurrently and returns one result per check, in the order given.
 ///
-/// Each check's deadline is its [`Check::timeout`] counted from the start of the run; the
-/// runner waits on a channel with `recv_timeout` until every check has reported or passed
-/// its deadline, so the whole run takes at most the longest timeout. A check that panics is
-/// a failure with the panic message; a check whose thread cannot be started is a failure.
-///
-/// A check that times out is abandoned, not stopped: std threads cannot be cancelled, so
-/// its thread is detached and keeps running until it returns or the process exits, and its
-/// late result is discarded. Checks that start subprocesses should bound them themselves
-/// (the ones in this module kill their `systemctl` at the deadline). `apex-boot-assess`
-/// exits right after its decision, which ends any abandoned thread.
+/// std threads cannot be cancelled, so a check that times out is abandoned and its late
+/// result discarded; checks that start subprocesses must bound them themselves.
 pub fn run_checks(checks: Vec<Box<dyn Check>>) -> Vec<CheckResult> {
     let start = Instant::now();
     let (sender, receiver) = mpsc::channel::<(usize, Result<(), String>)>();
     let mut slots: Vec<Slot> = Vec::with_capacity(checks.len());
     for (index, check) in checks.into_iter().enumerate() {
         let name = check.name().to_owned();
-        // A timeout too large to add means "wait as long as it takes".
         let deadline = start.checked_add(check.timeout());
         let sender = sender.clone();
         let spawned = thread::Builder::new()
-            // Thread names cannot contain NUL; the name is only a debugging aid.
             .name(format!("check {}", name.replace('\0', "")))
             .spawn(move || {
                 let result = panic::catch_unwind(AssertUnwindSafe(|| check.run()))
                     .unwrap_or_else(|payload| Err(panic_message(payload.as_ref())));
-                // The runner has stopped listening once this check timed out.
                 let _ = sender.send((index, result));
             });
         let outcome = spawned
@@ -258,7 +205,6 @@ pub fn run_checks(checks: Vec<Box<dyn Check>>) -> Vec<CheckResult> {
             }
         }
         let pending = slots.iter().filter(|s| s.outcome.is_none());
-        // `None` (no deadline) sorts after every real deadline.
         let Some(next_deadline) = pending
             .map(|s| s.deadline)
             .min_by_key(|d| (d.is_none(), *d))
@@ -280,7 +226,6 @@ pub fn run_checks(checks: Vec<Box<dyn Check>>) -> Vec<CheckResult> {
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                // Every thread has ended; a check still pending never reported.
                 for slot in slots.iter_mut().filter(|s| s.outcome.is_none()) {
                     slot.outcome = Some(CheckOutcome::Fail(
                         "the check ended without a result".to_owned(),
@@ -300,7 +245,6 @@ pub fn run_checks(checks: Vec<Box<dyn Check>>) -> Vec<CheckResult> {
         .collect()
 }
 
-/// One check's bookkeeping in [`run_checks`].
 struct Slot {
     name: String,
     /// `None` when the timeout does not fit in an `Instant`.
@@ -352,7 +296,6 @@ mod tests {
 
     #[test]
     fn checks_run_concurrently() {
-        // Each check waits for all three: this only finishes if they run at the same time.
         let barrier = Arc::new(Barrier::new(3));
         let checks = (0..3)
             .map(|i| {
@@ -372,7 +315,6 @@ mod tests {
         let start = Instant::now();
         let results = run_checks(vec![
             check("hangs", Duration::from_millis(200), || {
-                // Detached after the timeout; parks until the test process exits.
                 loop {
                     thread::park();
                 }
