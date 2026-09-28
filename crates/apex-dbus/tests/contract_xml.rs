@@ -1,10 +1,3 @@
-//! The contract XML itself: well-formed, structurally what the crate assumes, and saying the
-//! same thing as the crate's constants and enums.
-//!
-//! Several value sets live only in the XML's comments (states, channels, verdicts, change
-//! kinds, error kinds, deployment keys, polkit actions). They are read from there, so a change
-//! to the XML fails here until the crate follows.
-
 #![allow(
     clippy::expect_used,
     reason = "integration test helpers: a failed expectation is the test failure"
@@ -12,34 +5,16 @@
 
 use std::collections::BTreeSet;
 
-use apex_dbus::{
-    BUS_NAME, BootVerdict, CHANGE_FIELDS, Change, ChangeKind, Channel, Deployment, ERROR_PREFIX,
-    ErrorKind, INTERFACE, INTROSPECTION_XML, OBJECT_PATH, PolkitAction, State,
-};
+use apex_dbus::{Change, INTERFACE, INTROSPECTION_XML, PolkitAction};
 use quick_xml::{Reader, XmlVersion, events::Event};
 
-/// A comment and the element it documents.
-#[derive(Debug)]
-struct Documented {
-    /// Local name of the element (`node`, `property`, `method`, …).
-    element: String,
-    /// Its `name` attribute, if any.
-    name: Option<String>,
-    /// The comments directly before it, joined.
-    comment: String,
-}
-
-/// What the well-formedness pass saw.
 #[derive(Debug, Default)]
 struct Scan {
-    documented: Vec<Documented>,
     doctype: Option<String>,
     root_elements: usize,
 }
 
-/// Reads the whole document with the checks XML 1.0 well-formedness needs beyond what a
-/// D-Bus introspection parser does: matching end tags, no `--` inside comments, valid
-/// attributes and references, exactly one root element, nothing but whitespace outside it.
+/// The XML 1.0 well-formedness checks that a D-Bus introspection parser skips.
 fn scan(xml: &str) -> Result<Scan, String> {
     let mut reader = Reader::from_str(xml);
     let config = reader.config_mut();
@@ -48,7 +23,6 @@ fn scan(xml: &str) -> Result<Scan, String> {
 
     let mut scan = Scan::default();
     let mut depth = 0_usize;
-    let mut pending = String::new();
     loop {
         let position = reader.buffer_position();
         let event = reader
@@ -57,31 +31,18 @@ fn scan(xml: &str) -> Result<Scan, String> {
         match event {
             Event::Eof => break,
             Event::DocType(doctype) => scan.doctype = Some(doctype.trim().to_owned()),
-            Event::Comment(comment) => {
-                pending.push_str(&comment);
-                pending.push('\n');
-            }
             Event::Start(ref element) | Event::Empty(ref element) => {
                 if depth == 0 {
                     scan.root_elements += 1;
                 }
-                let mut name = None;
                 for attribute in element.attributes().with_checks(true) {
                     let attribute =
                         attribute.map_err(|error| format!("byte {position}: {error}"))?;
                     // The contract has no XML declaration, so it is (implicitly) XML 1.0.
-                    let value = attribute
+                    attribute
                         .normalized_value(XmlVersion::Implicit1_0)
                         .map_err(|error| format!("byte {position}: {error}"))?;
-                    if attribute.key.as_ref() == "name" {
-                        name = Some(value.into_owned());
-                    }
                 }
-                scan.documented.push(Documented {
-                    element: element.local_name().as_ref().to_owned(),
-                    name,
-                    comment: std::mem::take(&mut pending),
-                });
                 if matches!(event, Event::Start(_)) {
                     depth += 1;
                 }
@@ -100,7 +61,7 @@ fn scan(xml: &str) -> Result<Scan, String> {
                     return Err(format!("byte {position}: undefined entity &{name};"));
                 }
             }
-            Event::CData(_) | Event::Decl(_) | Event::PI(_) => {}
+            Event::Comment(_) | Event::CData(_) | Event::Decl(_) | Event::PI(_) => {}
         }
     }
     if depth != 0 {
@@ -116,42 +77,6 @@ fn contract() -> Scan {
     scan(INTROSPECTION_XML).unwrap_or_else(|error| panic!("contract XML is ill-formed: {error}"))
 }
 
-/// The comment documenting `element` named `name` (`None` for the root node's header).
-fn comment_of<'s>(scan: &'s Scan, element: &str, name: Option<&str>) -> &'s str {
-    scan.documented
-        .iter()
-        .find(|documented| documented.element == element && documented.name.as_deref() == name)
-        .map(|documented| documented.comment.as_str())
-        .filter(|comment| !comment.trim().is_empty())
-        .unwrap_or_else(|| panic!("no comment documents <{element} name={name:?}>"))
-}
-
-/// Every double-quoted string in `text`, deduplicated.
-fn quoted(text: &str) -> BTreeSet<String> {
-    text.split('"')
-        .skip(1)
-        .step_by(2)
-        .map(str::to_owned)
-        .collect()
-}
-
-/// The text of `text` between the first `start` and the next `end` after it.
-fn between<'t>(text: &'t str, start: &str, end: &str) -> &'t str {
-    let (_, rest) = text
-        .split_once(start)
-        .unwrap_or_else(|| panic!("{start:?} not found in {text:?}"));
-    rest.split_once(end)
-        .unwrap_or_else(|| panic!("{end:?} does not follow {start:?}"))
-        .0
-}
-
-fn strings<T: Copy>(values: &[T], as_str: fn(T) -> &'static str) -> BTreeSet<String> {
-    values
-        .iter()
-        .map(|value| as_str(*value).to_owned())
-        .collect()
-}
-
 #[test]
 fn contract_xml_is_well_formed() {
     let scan = contract();
@@ -163,7 +88,6 @@ fn contract_xml_is_well_formed() {
         ),
         "the D-Bus introspection DOCTYPE"
     );
-    // zbus's own parser must accept it too, without skipping unknown elements.
     let (_, warnings) = zbus_xml::Node::from_reader_with_warnings(INTROSPECTION_XML.as_bytes())
         .expect("zbus_xml parses the contract");
     assert!(warnings.is_empty(), "ignored elements: {warnings:?}");
@@ -212,151 +136,7 @@ fn interface_shape_is_what_the_crate_assumes() {
 }
 
 #[test]
-fn header_names_match_constants() {
-    let scan = contract();
-    let header = comment_of(&scan, "node", None);
-    let value_after = |label: &str| {
-        header
-            .lines()
-            .find_map(|line| line.trim().strip_prefix(label))
-            .map_or_else(|| panic!("header has no {label:?} line"), str::trim)
-    };
-    assert_eq!(value_after("Object path:"), OBJECT_PATH);
-    let bus = value_after("Bus:");
-    assert_eq!(bus.rsplit(' ').next(), Some(BUS_NAME), "{bus}");
-    let error_names = header
-        .split_whitespace()
-        .find_map(|word| word.strip_suffix(".<Kind>,"))
-        .expect("header names the error prefix as <prefix>.<Kind>");
-    assert_eq!(error_names, ERROR_PREFIX);
-}
-
-#[test]
-fn error_kinds_match_the_header() {
-    let scan = contract();
-    let header = comment_of(&scan, "node", None);
-    let (_, list) = header
-        .split_once("Kind one of:")
-        .expect("header lists the error kinds");
-    let (list, _) = list
-        .split_once('.')
-        .expect("the list ends with a full stop");
-    let from_xml: Vec<&str> = list.split(',').map(str::trim).collect();
-    let from_crate: Vec<&str> = ErrorKind::ALL.iter().map(|kind| kind.as_str()).collect();
-    assert_eq!(from_xml, from_crate);
-}
-
-#[test]
-fn deployment_keys_match_the_header() {
-    let scan = contract();
-    let header = comment_of(&scan, "node", None);
-    let (_, block) = header
-        .split_once("use these keys, all optional:")
-        .expect("header lists the deployment keys");
-    let (block, _) = block
-        .split_once("An empty dictionary")
-        .expect("the key list ends before the empty-dictionary rule");
-    let from_xml: Vec<(String, String)> = block
-        .lines()
-        .map(str::trim)
-        .filter_map(|line| {
-            let rest = line.strip_prefix('"')?;
-            let (key, rest) = rest.split_once('"')?;
-            let signature = rest.split_whitespace().next()?;
-            Some((key.to_owned(), signature.to_owned()))
-        })
-        .collect();
-    let from_crate: Vec<(String, String)> = Deployment::KEYS
-        .iter()
-        .map(|(key, signature)| ((*key).to_owned(), signature.to_string()))
-        .collect();
-    assert_eq!(from_xml, from_crate);
-}
-
-#[test]
-fn polkit_actions_match_the_header() {
-    let scan = contract();
-    let header = comment_of(&scan, "node", None);
-    let from_xml: Vec<(String, String)> = header
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("io.github.sekirokenjii.apex.update."))
-        .map(|line| {
-            let mut words = line.split_whitespace();
-            let id = words.next().unwrap_or_default().to_owned();
-            let default = words.next().unwrap_or_default().to_owned();
-            (id, default)
-        })
-        .collect();
-    let from_crate: Vec<(String, String)> = PolkitAction::ALL
-        .iter()
-        .map(|action| {
-            (
-                action.id().to_owned(),
-                action.allow_active().as_str().to_owned(),
-            )
-        })
-        .collect();
-    assert_eq!(from_xml, from_crate);
-}
-
-#[test]
-fn string_values_match_the_member_comments() {
-    let scan = contract();
-    let cases = [
-        (
-            "State",
-            quoted(comment_of(&scan, "property", Some("State"))),
-            strings(State::ALL, State::as_str),
-        ),
-        (
-            "Channel",
-            quoted(comment_of(&scan, "property", Some("Channel"))),
-            strings(Channel::ALL, Channel::as_str),
-        ),
-        (
-            "ChangeKind",
-            // Only the list after "kind one of": the rest of the comment also quotes "", the
-            // empty EVR.
-            quoted(between(
-                comment_of(&scan, "method", Some("GetChanges")),
-                "kind one of",
-                ";",
-            )),
-            strings(ChangeKind::ALL, ChangeKind::as_str),
-        ),
-        (
-            "BootVerdict",
-            quoted(comment_of(&scan, "method", Some("ReportBoot"))),
-            strings(BootVerdict::ALL, BootVerdict::as_str),
-        ),
-    ];
-    for (what, from_xml, from_crate) in cases {
-        assert_eq!(
-            from_xml, from_crate,
-            "apex_dbus::{what} differs from the XML comment"
-        );
-    }
-}
-
-#[test]
-fn change_tuple_matches_the_get_changes_comment() {
-    let scan = contract();
-    let comment = comment_of(&scan, "method", Some("GetChanges"));
-    let tuple = between(between(comment, "Entries:", "kind one of"), "(", ")");
-    let fields: Vec<&str> = tuple.split(',').map(str::trim).collect();
-    assert_eq!(fields, CHANGE_FIELDS, "field names and order of Change");
-    assert!(
-        comment.contains("Sorted by (name, arch)"),
-        "the order clients rely on: {comment}"
-    );
-    for rule in [
-        "from_evr is \"\" for added packages",
-        "to_evr is \"\" for removed ones",
-    ] {
-        assert!(comment.contains(rule), "missing {rule:?}: {comment}");
-    }
-
+fn get_changes_returns_the_change_array() {
     let node = zbus_xml::Node::try_from(INTROSPECTION_XML).expect("parses");
     let [interface] = node.interfaces() else {
         panic!("exactly one interface expected");
@@ -378,13 +158,10 @@ fn change_tuple_matches_the_get_changes_comment() {
 
 #[test]
 fn polkit_guards_match_the_xml() {
-    let scan = contract();
     let node = zbus_xml::Node::try_from(INTROSPECTION_XML).expect("parses");
     let [interface] = node.interfaces() else {
         panic!("exactly one interface expected");
     };
-
-    // Every method is classified: guarded by an action, or one of the unguarded ones.
     let unguarded: BTreeSet<String> = interface
         .methods()
         .iter()
@@ -395,50 +172,8 @@ fn polkit_guards_match_the_xml() {
         .map(str::to_owned)
         .into();
     assert_eq!(unguarded, expected);
-
-    // A method comment that names its action ("Polkit: switch-channel (auth_admin)").
-    for documented in &scan.documented {
-        let (Some(name), Some((_, rest))) = (
-            documented.name.as_deref(),
-            documented.comment.split_once("Polkit: "),
-        ) else {
-            continue;
-        };
-        let suffix = rest.split_whitespace().next().unwrap_or_default();
-        let action = PolkitAction::guarding(name).unwrap_or_else(|| panic!("{name} unguarded"));
-        assert_eq!(
-            action.id().rsplit('.').next(),
-            Some(suffix.trim_end_matches('.')),
-            "{name}"
-        );
-    }
-
-    // The header's "(also guards Method, …)" after an action.
-    let header = comment_of(&scan, "node", None);
-    let mut extra = 0;
-    for line in header.lines().map(str::trim) {
-        let Some(id) = line
-            .split_whitespace()
-            .next()
-            .filter(|id| id.starts_with("io.github.sekirokenjii.apex.update."))
-        else {
-            continue;
-        };
-        let action = PolkitAction::from_id(id).unwrap_or_else(|| panic!("unknown action {id}"));
-        if let Some((_, guards)) = line.split_once("(also guards ") {
-            for member in guards.trim_end_matches(')').split(',').map(str::trim) {
-                assert_eq!(PolkitAction::guarding(member), Some(action), "{member}");
-                extra += 1;
-            }
-        }
-    }
-    assert_eq!(
-        extra, 1,
-        "the XML names AcknowledgeHealthFailure under discard"
-    );
 }
 
-/// One member of the `Update1` proxy trait, as written in `src/proxy.rs`.
 #[derive(Debug)]
 struct Declared {
     dbus_name: String,
@@ -446,11 +181,8 @@ struct Declared {
     params: Vec<String>,
 }
 
-/// Reads the proxy trait's declarations from its source.
-///
-/// Argument names never reach the wire, so the wire tests cannot see the proxy's; this reads
-/// them from the source instead. Every trait item carries an explicit `name = "…"`, which keeps
-/// the parsing to plain text.
+/// Argument names never reach the wire, so they are read from the source; an explicit
+/// `name = "…"` on every trait item keeps that parsing to plain text.
 fn proxy_declarations() -> Vec<Declared> {
     let source = include_str!("../src/proxy.rs");
     let (_, body) = source

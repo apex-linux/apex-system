@@ -1,32 +1,16 @@
-//! Apex image versions: `<fedora>.<yyyymmdd>.<run>`, e.g. `45.20260924.117`.
-//!
-//! The version is the `org.opencontainers.image.version` label and the `version` field of
-//! `/usr/share/apex/manifest.json` (contract §1 and §3). Versions compare numerically
-//! field by field. Extra numeric fields are tolerated (`45.20260924.117.2`), and a longer
-//! version whose leading fields equal a shorter one is newer, so the order is plain
-//! lexicographic order over the numbers.
-
 use std::fmt;
 
-/// A parsed Apex image version.
-///
-/// The fields are kept as a boxed slice: a version is built once and never grows, and
-/// the derived lexicographic `Ord` on `[u64]` is exactly the required order.
+/// `<fedora>.<yyyymmdd>.<run>[.<more>…]`, ordered by the derived lexicographic `Ord` over
+/// the numbers, so a longer version with the same leading fields is newer.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version {
     fields: Box<[u64]>,
 }
 
-/// The fewest fields a valid version has: Fedora release, build date and run number.
 pub const MIN_VERSION_FIELDS: usize = 3;
 
 impl Version {
-    /// Parses `<fedora>.<yyyymmdd>.<run>[.<more>...]`.
-    ///
-    /// Every field must be a non-empty run of ASCII digits that fits in a `u64`, and there
-    /// must be at least [`MIN_VERSION_FIELDS`] of them. Anything else (signs, spaces,
-    /// letters, empty fields, a leading `v`) returns `None`. The date is not checked
-    /// against the calendar: ordering only needs the numbers.
+    /// The date is not checked against the calendar: ordering only needs the numbers.
     pub fn parse(s: &str) -> Option<Self> {
         let fields = s
             .split('.')
@@ -41,12 +25,11 @@ impl Version {
         (fields.len() >= MIN_VERSION_FIELDS).then_some(Self { fields })
     }
 
-    /// The Fedora release the image is built on, e.g. 45.
     pub fn fedora(&self) -> u64 {
         self.fields[0]
     }
 
-    /// The build date as the number `yyyymmdd`.
+    /// `yyyymmdd`.
     pub fn date(&self) -> u64 {
         self.fields[1]
     }
@@ -56,14 +39,12 @@ impl Version {
         self.fields[2]
     }
 
-    /// All numeric fields, at least [`MIN_VERSION_FIELDS`] of them.
     pub fn fields(&self) -> &[u64] {
         &self.fields
     }
 }
 
 impl fmt::Display for Version {
-    /// Formats the canonical form: the fields joined by `.`, without leading zeros.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, field) in self.fields.iter().enumerate() {
             if i > 0 {
@@ -76,14 +57,12 @@ impl fmt::Display for Version {
 }
 
 impl serde::Serialize for Version {
-    /// Serializes as the canonical string, e.g. `"45.20260924.117"`.
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
 }
 
 impl<'de> serde::Deserialize<'de> for Version {
-    /// Deserializes from a version string; an invalid string is an error.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
         Self::parse(&text).ok_or_else(|| {

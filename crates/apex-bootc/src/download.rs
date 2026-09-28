@@ -1,64 +1,25 @@
-//! Result of `bootc upgrade --download-only`.
-//!
-//! bootc exits 0 in every case below and reports on stdout what it did (bootc
-//! `crates/lib/src/cli.rs`, `upgrade`, and `crates/lib/src/deploy.rs`, `stage`, on `main`
-//! at commit `41049ccada2bf4468b9087d45832f9168d458ef2`). It always pulls the channel tag
-//! first, which fetches the manifest from the registry, and then compares the pulled
-//! manifest digest with the staged image and then with the booted image:
-//!
-//! | Pulled image | stdout | Effect | Outcome |
-//! |---|---|---|---|
-//! | the staged image, stage unlocked | `Image downloaded, but will not be applied on reboot` | stage locked again | [`DownloadOutcome::Relocked`] |
-//! | the staged image, stage locked | `Staged update present, not changed` | none | [`DownloadOutcome::StageUnchanged`] |
-//! | the booted image | `No update available.` | none: an existing stage is left as it was, **locked or unlocked** | [`DownloadOutcome::NoUpdate`] |
-//! | another image | `Staged but not queued for next boot: <ref>`, then `  Version:` and `  Digest:` | that image is staged locked and replaces any stage | [`DownloadOutcome::Staged`] |
-//!
-//! So re-locking an applied (unlocked) stage with this command is not guaranteed. It
-//! works only while the tag still points at the staged digest. It needs the registry, so
-//! it fails offline. If the tag has moved to a third image, it downloads and stages that
-//! whole image instead. If the tag has moved back to the booted image, it changes nothing
-//! and still exits 0.
-
 use crate::check::version_and_digest;
 use crate::digest::Digest;
 
-/// What `bootc upgrade --download-only` did, from its stdout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadOutcome {
-    /// A new staged deployment was created from the tag's image and replaced any earlier
-    /// stage (`Staged but not queued for next boot:`, or `Queued for next boot:` if a
-    /// future bootc stopped honouring `--download-only`).
+    /// The tag's image replaced any earlier stage.
     Staged {
-        /// The new stage is locked (download-only) and will not be finalized at shutdown.
+        /// `false` only if a future bootc stops honouring `--download-only`.
         locked: bool,
-        /// Its version, if the image carries one.
         version: Option<String>,
-        /// Its manifest digest, if it was printed in the canonical form.
         digest: Option<Digest>,
     },
-    /// The tag still points at the staged image, which was unlocked: bootc locked it
-    /// again (`Image downloaded, but will not be applied on reboot`).
     Relocked,
-    /// The tag still points at the staged image, which was already locked
-    /// (`Staged update present, not changed`).
     StageUnchanged,
-    /// The tag points at the booted image (`No update available.`). Nothing was staged
-    /// or changed; an existing stage keeps its lock state, so an applied stage **stays
-    /// applied**.
+    /// The tag points at the booted image: nothing changed, so an applied stage stays applied.
     NoUpdate,
-    /// None of the lines above was found (a future bootc changed the wording).
     Unknown,
 }
 
 impl DownloadOutcome {
-    /// Whether bootc reports that a staged deployment exists and is locked after the
-    /// command: [`Self::Relocked`], [`Self::StageUnchanged`] and a locked
-    /// [`Self::Staged`].
-    ///
-    /// `false` for [`Self::NoUpdate`] (an existing stage was not touched and may still be
-    /// unlocked) and [`Self::Unknown`]. A caller that needs the stage locked, such as
-    /// cancelling an applied update, must treat `false` as failure, and should still
-    /// confirm the lock with `bootc status` before relying on it.
+    /// A caller that needs the stage locked must treat `false` as failure, and still confirm
+    /// the lock with `bootc status` before relying on `true`.
     pub fn stage_locked(&self) -> bool {
         matches!(
             self,
@@ -67,10 +28,8 @@ impl DownloadOutcome {
     }
 }
 
-/// Parses the stdout of `bootc upgrade --download-only`.
-///
-/// Lines before the result (layer status, `No changes in … => …` from the pull, fetch
-/// statistics) and the manifest diff after it are ignored.
+/// bootc exits 0 in every case and reports on stdout (bootc `crates/lib/src/cli.rs`
+/// `upgrade` and `crates/lib/src/deploy.rs` `stage`, commit 41049ccada2b).
 pub fn parse_download_output(stdout: &str) -> DownloadOutcome {
     let mut lines = stdout.lines().map(str::trim);
     while let Some(line) = lines.next() {
@@ -105,8 +64,6 @@ mod tests {
 
     const D: &str = "sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0";
 
-    /// stdout of a pull that fetched layers and staged a new image, as bootc prints it
-    /// (`print_layer_status`, `Fetched layers`, `deploy::stage`, then the manifest diff).
     fn new_stage(prefix: &str) -> String {
         format!(
             "layers already present: 2; layers needed: 3 (300.0 MB)\n\
@@ -157,8 +114,6 @@ mod tests {
         assert!(unchanged.stage_locked());
     }
 
-    /// The tag points at the booted image again: bootc leaves an applied stage applied
-    /// and still exits 0, so this must never count as locked.
     #[test]
     fn the_booted_image_leaves_the_stage_alone() {
         let outcome = parse_download_output(

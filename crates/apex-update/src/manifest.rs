@@ -1,11 +1,3 @@
-//! `/usr/share/apex/manifest.json` (contract §3), the package diff between two images and
-//! the one-line summary of that diff shown in the UI.
-//!
-//! Parsing is lenient: unknown fields are ignored and missing fields take their default,
-//! because the manifest is read from images built by other versions of `apexctl`. Only a
-//! `schema` newer than [`MANIFEST_SCHEMA`] is refused, since the contract bumps it only on
-//! breaking change.
-
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -14,40 +6,32 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::rpmvercmp::{Evr, EvrRef};
 use crate::version::Version;
 
-/// The manifest schema this crate reads and writes.
 pub const MANIFEST_SCHEMA: u32 = 1;
 
-/// Where every Apex image carries its manifest.
 pub const MANIFEST_PATH: &str = "/usr/share/apex/manifest.json";
 
-/// The manifest of one image.
+/// Read leniently, since other `apexctl` versions build the images; only a newer `schema`,
+/// which is bumped on breaking change, is refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Schema number; increases only on breaking change.
     #[serde(default = "default_schema")]
     pub schema: u32,
-    /// Image name, `apex`.
     #[serde(default)]
     pub name: String,
-    /// Image version string, e.g. `45.20260924.117`; see [`Manifest::parsed_version`].
     #[serde(default)]
     pub version: String,
-    /// Fedora release the image is built on.
     #[serde(default)]
     pub fedora: u32,
-    /// Git revision of the Apex repository the image was built from.
     #[serde(default)]
     pub revision: String,
-    /// Digest-pinned base image reference.
     #[serde(default)]
     pub base_image: String,
-    /// Components shipped in degraded form (`audio`, `fingerprint`, ...), sorted.
     #[serde(default)]
     pub degraded: Vec<String>,
-    /// Rebuild-lane families held at their last good build (`gnome-shell`, ...), sorted.
+    /// Rebuild-lane families held at their last good build.
     #[serde(default)]
     pub held: Vec<String>,
-    /// Installed packages, sorted by `(name, arch)` in byte order and unique on that key.
+    /// Sorted by `(name, arch)` in byte order, unique on that key.
     #[serde(default)]
     pub packages: Vec<Package>,
 }
@@ -56,22 +40,16 @@ const fn default_schema() -> u32 {
     MANIFEST_SCHEMA
 }
 
-/// One installed package.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Package {
-    /// Package name.
     #[serde(default)]
     pub name: String,
-    /// Epoch; `0` when the package has none (`null` is read as `0`).
     #[serde(default, deserialize_with = "epoch_or_zero")]
     pub epoch: u32,
-    /// Upstream version.
     #[serde(default)]
     pub version: String,
-    /// Distribution release.
     #[serde(default)]
     pub release: String,
-    /// Architecture, e.g. `x86_64` or `noarch`.
     #[serde(default)]
     pub arch: String,
 }
@@ -81,7 +59,6 @@ fn epoch_or_zero<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::E
 }
 
 impl Package {
-    /// The package's epoch, version and release, borrowed.
     pub fn evr(&self) -> EvrRef<'_> {
         EvrRef {
             epoch: self.epoch,
@@ -90,30 +67,21 @@ impl Package {
         }
     }
 
-    /// The key the manifest is sorted and diffed by.
+    /// What the manifest is sorted and diffed by.
     pub fn key(&self) -> (&str, &str) {
         (&self.name, &self.arch)
     }
 }
 
-/// Why a manifest could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestError {
-    /// The bytes are not a JSON manifest.
     #[error("manifest is not valid JSON: {0}")]
     Json(#[from] serde_json::Error),
-    /// The manifest uses a newer, incompatible schema.
     #[error("manifest schema {found} is newer than the supported schema {supported}")]
-    UnsupportedSchema {
-        /// Schema found in the manifest.
-        found: u32,
-        /// Newest schema this crate understands.
-        supported: u32,
-    },
+    UnsupportedSchema { found: u32, supported: u32 },
 }
 
 impl Manifest {
-    /// Parses a manifest, ignoring unknown fields and refusing a newer schema.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ManifestError> {
         let manifest: Self = serde_json::from_slice(bytes)?;
         if manifest.schema > MANIFEST_SCHEMA {
@@ -125,23 +93,19 @@ impl Manifest {
         Ok(manifest)
     }
 
-    /// Serializes the manifest in its canonical form (pretty JSON, trailing newline).
     pub fn to_json(&self) -> Result<Vec<u8>, ManifestError> {
         let mut bytes = serde_json::to_vec_pretty(self)?;
         bytes.push(b'\n');
         Ok(bytes)
     }
 
-    /// The version, if it is a valid Apex version.
     pub fn parsed_version(&self) -> Option<Version> {
         Version::parse(&self.version)
     }
 
-    /// Sorts `packages`, `degraded` and `held` the way the contract requires, and drops
-    /// duplicate `(name, arch)` keys, keeping the newest EVR. Writers call this before
-    /// serializing.
+    /// Writers call this before serializing.
     pub fn normalize(&mut self) {
-        sort_packages(&mut self.packages);
+        self.packages.sort_by(by_key_then_newest_evr);
         self.packages
             .dedup_by(|later, kept| later.key() == kept.key());
         self.degraded.sort();
@@ -151,31 +115,23 @@ impl Manifest {
     }
 }
 
-/// Sorts by `(name, arch)` and, within one key, newest EVR first.
-fn sort_packages(packages: &mut [Package]) {
-    packages.sort_by(|a, b| {
-        a.key()
-            .cmp(&b.key())
-            .then_with(|| b.evr().rpm_cmp(&a.evr()))
-    });
+fn by_key_then_newest_evr(a: &Package, b: &Package) -> Ordering {
+    a.key()
+        .cmp(&b.key())
+        .then_with(|| b.evr().rpm_cmp(&a.evr()))
 }
 
-/// What happened to one `(name, arch)` between two images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ChangeKind {
-    /// Only in the new image.
     Added,
-    /// Only in the old image.
     Removed,
-    /// In both; the new EVR is newer to rpm.
     Upgraded,
-    /// In both; the new EVR is older to rpm.
     Downgraded,
 }
 
 impl ChangeKind {
-    /// The name used on D-Bus (`GetChanges`) and in JSON output.
+    /// The `GetChanges` and JSON wire value.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Added => "added",
@@ -192,47 +148,27 @@ impl fmt::Display for ChangeKind {
     }
 }
 
-/// One package change between the booted and the staged image.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Change {
-    /// Package name.
     pub name: String,
-    /// Architecture.
     pub arch: String,
-    /// What happened.
     pub kind: ChangeKind,
-    /// EVR in the old image; `None` for [`ChangeKind::Added`].
     pub from_evr: Option<Evr>,
-    /// EVR in the new image; `None` for [`ChangeKind::Removed`].
     pub to_evr: Option<Evr>,
 }
 
-/// The packages of one side of the diff, as references sorted by `(name, arch)` and
-/// unique on that key.
-///
-/// Manifests are sorted by contract, so the common case is one O(n) check and a vector
-/// of pointers. An unsorted or duplicated input is sorted (O(n log n)) and duplicates are
-/// reduced to their newest EVR, so a malformed manifest still gives a well-defined diff.
+/// A malformed manifest is sorted and deduplicated too, so its diff stays well-defined.
 fn sorted_unique(packages: &[Package]) -> Vec<&Package> {
     let mut refs: Vec<&Package> = packages.iter().collect();
     let strictly_sorted = refs.windows(2).all(|w| w[0].key() < w[1].key());
     if !strictly_sorted {
-        refs.sort_by(|a, b| {
-            a.key()
-                .cmp(&b.key())
-                .then_with(|| b.evr().rpm_cmp(&a.evr()))
-        });
+        refs.sort_by(|a, b| by_key_then_newest_evr(a, b));
         refs.dedup_by(|later, kept| later.key() == kept.key());
     }
     refs
 }
 
-/// Computes the package changes from `booted` to `staged`.
-///
-/// This is a linear merge over both lists sorted by `(name, arch)`, O(n + m) for sorted
-/// input. The result is sorted by `(name, arch)`. Packages whose EVRs rpm considers equal
-/// are not reported, even when the strings differ (`1.0` and `1_0`), because rpm would
-/// not update them either.
+/// EVRs rpm considers equal (`1.0` and `1_0`) are no change: rpm would not update them either.
 pub fn diff(booted: &[Package], staged: &[Package]) -> Vec<Change> {
     let old = sorted_unique(booted);
     let new = sorted_unique(staged);
@@ -295,9 +231,7 @@ fn added(p: &Package) -> Change {
     }
 }
 
-/// Packages named in the summary line, with the label shown for them, in display order.
-///
-/// Firefox is a Flatpak on Apex, so it is not part of the image and not listed.
+/// Firefox is a Flatpak on Apex, so not part of the image.
 pub const HIGHLIGHTED_PACKAGES: &[(&str, &str)] = &[
     ("gnome-shell", "GNOME"),
     ("kernel", "Linux"),
@@ -305,36 +239,23 @@ pub const HIGHLIGHTED_PACKAGES: &[(&str, &str)] = &[
     ("systemd", "systemd"),
 ];
 
-/// A highlighted package in the summary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Highlight {
-    /// The label shown, e.g. `GNOME` for `gnome-shell`.
     pub label: &'static str,
-    /// The package the label stands for.
     pub package: &'static str,
-    /// What happened to it.
     pub kind: ChangeKind,
-    /// Old version as shown; `None` when added.
     pub from: Option<String>,
-    /// New version as shown; `None` when removed.
     pub to: Option<String>,
 }
 
-/// A short description of a package diff for the UI.
-///
-/// The `Display` form is English text such as
-/// `GNOME 51.0 → 51.1, Linux 7.2.7 → 7.2.9, 212 other packages`. A translated UI builds
-/// its own string from the fields.
+/// `Display` is English; a translated UI builds its own text from the fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Summary {
-    /// Highlighted packages that changed, in [`HIGHLIGHTED_PACKAGES`] order.
     pub highlights: Vec<Highlight>,
-    /// Number of changes not covered by a highlight.
     pub other_changes: usize,
 }
 
-/// Architectures preferred when a highlighted package changed on several architectures:
-/// the native one is shown and the others count as other changes.
+/// A highlight shows the native architecture; the others count as other changes.
 fn arch_rank(arch: &str) -> u8 {
     match arch {
         "x86_64" | "aarch64" | "noarch" => 0,
@@ -342,8 +263,6 @@ fn arch_rank(arch: &str) -> u8 {
     }
 }
 
-/// The versions as shown: only the version when it changed, else version-release, else
-/// the full EVR (only the epoch changed).
 fn shown_versions(from: &Evr, to: &Evr) -> (String, String) {
     if from.version != to.version {
         (from.version.clone(), to.version.clone())
@@ -357,7 +276,6 @@ fn shown_versions(from: &Evr, to: &Evr) -> (String, String) {
     }
 }
 
-/// Summarizes `changes` for the UI; see [`Summary`].
 pub fn summarize(changes: &[Change]) -> Summary {
     let mut highlights = Vec::new();
     let mut covered = 0;
@@ -642,7 +560,6 @@ mod tests {
         let two = [one[0].clone(), one[0].clone()];
         assert_eq!(summarize(&two).to_string(), "2 packages changed");
 
-        // Release-only change shows version-release; epoch-only shows the full EVR.
         let rel = [change(
             "kernel",
             "x86_64",
@@ -663,7 +580,6 @@ mod tests {
         )];
         assert_eq!(summarize(&epoch).to_string(), "systemd 259-1 → 1:259-1");
 
-        // Added and removed highlights, plus a single other package.
         let mixed = [
             change(
                 "mesa-dri-drivers",

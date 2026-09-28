@@ -1,17 +1,3 @@
-//! Non-invasive check of the ostree sysroot lock.
-//!
-//! bootc takes the sysroot lock for every command, `status` included (bootc
-//! `crates/lib/src/store/mod.rs`, `BootedStorage::new` → `SysrootLock::new_from_sysroot`),
-//! and **waits** for it without printing anything when stderr is not a terminal. A
-//! bootc run blocked behind another process therefore looks like a hang until its
-//! timeout. After a timeout the runner asks this module whether someone else holds the
-//! lock, to report [`crate::BootcError::Busy`] instead of a plain timeout.
-//!
-//! ostree locks `ostree/lock` below the sysroot with an exclusive open-file-description
-//! lock (ostree `src/libostree/ostree-sysroot.c`, `ostree_sysroot_lock` →
-//! libglnx `glnx_make_lock_file`, which uses `F_OFD_SETLKW`). `F_OFD_GETLK` reports a
-//! conflicting lock without taking one, so probing never delays bootc.
-
 use std::fs::File;
 use std::io;
 use std::path::Path;
@@ -19,11 +5,10 @@ use std::path::Path;
 use nix::fcntl::{FcntlArg, fcntl};
 use nix::libc;
 
-/// The ostree sysroot lock file.
 pub const SYSROOT_LOCK_PATH: &str = "/sysroot/ostree/lock";
 
-/// Whether another open file description holds a lock on `path` that would conflict
-/// with an exclusive lock. A missing file means nobody holds it.
+/// ostree holds an exclusive OFD lock on this file (libglnx `glnx_make_lock_file`), and
+/// `F_OFD_GETLK` reports a conflicting lock without taking one, so probing never delays bootc.
 pub fn sysroot_lock_held(path: &Path) -> io::Result<bool> {
     let file = match File::open(path) {
         Ok(file) => file,

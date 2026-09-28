@@ -1,20 +1,15 @@
-//! Polkit actions guarding the Update1 methods (contract §1 and §8).
-
 use std::fmt;
 
-/// A polkit authorization default (`<allow_any>`, `<allow_inactive>`, `<allow_active>`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PolkitDefault {
-    /// `no`: never authorized.
     No,
-    /// `yes`: authorized without a prompt.
     Yes,
-    /// `auth_admin`: an administrator must authenticate, every time.
+    /// Every time, unlike `auth_admin_keep`.
     AuthAdmin,
 }
 
 impl PolkitDefault {
-    /// The value as written in a `.policy` file.
+    /// As written in a `.policy` file.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::No => "no",
@@ -30,36 +25,22 @@ impl fmt::Display for PolkitDefault {
     }
 }
 
-/// A polkit action of the update service.
-///
-/// The contract spells action ids in lowercase (`io.github.sekirokenjii.apex.update.*`), unlike
-/// the bus name; polkit itself accepts `[A-Za-z0-9.-]`. Inactive and remote sessions get
-/// [`PolkitDefault::No`] for every action ([`PolkitAction::ALLOW_ANY`],
-/// [`PolkitAction::ALLOW_INACTIVE`]); uid 0 is always allowed. `Automatic` and `ReportBoot` are
-/// not polkit actions: the daemon accepts them from uid 0 only, checked with the bus credentials.
+/// Action ids are lowercase, unlike the bus name. `Automatic` and `ReportBoot` have no action:
+/// the daemon accepts them from uid 0 only, by the bus credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PolkitAction {
-    /// `Check`.
     Check,
-    /// `Download`.
     Download,
-    /// `Apply` (applies an already verified, reviewed digest).
     Apply,
-    /// `DiscardStaged`, and `AcknowledgeHealthFailure` (contract §8): dismissing the
-    /// warning about a failed update is a routine decision of the same weight as cancelling
-    /// one.
+    /// Also guards `AcknowledgeHealthFailure`: dismissing a failure warning weighs the same.
     Discard,
-    /// `Rollback`.
     Rollback,
-    /// `SwitchChannel`.
     SwitchChannel,
-    /// Moving to an older version. The contract defines the action, but no Update1 method is
-    /// documented as requiring it yet.
+    /// Reserved: no method checks it yet.
     Downgrade,
 }
 
 impl PolkitAction {
-    /// Every action, in contract order.
     pub const ALL: [Self; 7] = [
         Self::Check,
         Self::Download,
@@ -70,7 +51,6 @@ impl PolkitAction {
         Self::Downgrade,
     ];
 
-    /// The polkit action id.
     pub const fn id(self) -> &'static str {
         match self {
             Self::Check => POLKIT_CHECK,
@@ -83,17 +63,11 @@ impl PolkitAction {
         }
     }
 
-    /// The action whose id is `id`, if any.
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|action| action.id() == id)
     }
 
-    /// The action that guards the Update1 method `member` (its D-Bus name), contract §8.
-    ///
-    /// `None` for the methods polkit does not guard: `Ping` and `GetChanges` are read-only,
-    /// and `Automatic` and `ReportBoot` are accepted from uid 0 only (bus credentials). Also
-    /// `None` for a name that is not an Update1 method. [`PolkitAction::Downgrade`] guards no
-    /// method yet.
+    /// `member` is the D-Bus method name.
     pub fn guarding(member: &str) -> Option<Self> {
         match member {
             "Check" => Some(Self::Check),
@@ -106,13 +80,10 @@ impl PolkitAction {
         }
     }
 
-    /// `<allow_any>` of every action.
     pub const ALLOW_ANY: PolkitDefault = PolkitDefault::No;
 
-    /// `<allow_inactive>` of every action.
     pub const ALLOW_INACTIVE: PolkitDefault = PolkitDefault::No;
 
-    /// `<allow_active>`: the default for an active local session.
     pub const fn allow_active(self) -> PolkitDefault {
         match self {
             Self::Check | Self::Download | Self::Apply | Self::Discard => PolkitDefault::Yes,
@@ -127,19 +98,12 @@ impl fmt::Display for PolkitAction {
     }
 }
 
-/// Polkit action id for `Check`.
 pub const POLKIT_CHECK: &str = "io.github.sekirokenjii.apex.update.check";
-/// Polkit action id for `Download`.
 pub const POLKIT_DOWNLOAD: &str = "io.github.sekirokenjii.apex.update.download";
-/// Polkit action id for `Apply`.
 pub const POLKIT_APPLY: &str = "io.github.sekirokenjii.apex.update.apply";
-/// Polkit action id for `DiscardStaged` and `AcknowledgeHealthFailure`.
 pub const POLKIT_DISCARD: &str = "io.github.sekirokenjii.apex.update.discard";
-/// Polkit action id for `Rollback`.
 pub const POLKIT_ROLLBACK: &str = "io.github.sekirokenjii.apex.update.rollback";
-/// Polkit action id for `SwitchChannel`.
 pub const POLKIT_SWITCH_CHANNEL: &str = "io.github.sekirokenjii.apex.update.switch-channel";
-/// Polkit action id for moving to an older version.
 pub const POLKIT_DOWNGRADE: &str = "io.github.sekirokenjii.apex.update.downgrade";
 
 #[cfg(test)]
@@ -191,7 +155,7 @@ mod tests {
     }
 
     #[test]
-    fn guarded_methods_match_contract_section_8() {
+    fn guarded_methods_match_the_contract() {
         let table = [
             ("Ping", None),
             ("Check", Some(PolkitAction::Check)),
@@ -201,7 +165,6 @@ mod tests {
             ("Rollback", Some(PolkitAction::Rollback)),
             ("GetChanges", None),
             ("SwitchChannel", Some(PolkitAction::SwitchChannel)),
-            // Contract §8: guarded by the discard action, not apply.
             ("AcknowledgeHealthFailure", Some(PolkitAction::Discard)),
             ("Automatic", None),
             ("ReportBoot", None),

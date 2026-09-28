@@ -1,6 +1,3 @@
-//! A whole `--progress-fd` stream as bootc writes it during
-//! `bootc upgrade --download-only` (see `tests/fixtures/progress/README.md`).
-
 #![allow(
     clippy::unwrap_used,
     reason = "test helpers outside #[test] fns; clippy's allow-unwrap-in-tests does not cover them"
@@ -51,9 +48,6 @@ fn full_stream_snapshot() {
     insta::assert_snapshot!(render(&updates));
 }
 
-/// After the retry, bootc counts the bytes of the remaining layers from 0 again, and the
-/// failed attempt first sends the importing events. The decoder's overall value must
-/// still never decrease, and it must reach 1 at the end.
 #[test]
 fn overall_progress_never_goes_backwards_across_a_retry() {
     let mut decoder = ProgressDecoder::new();
@@ -69,7 +63,6 @@ fn overall_progress_never_goes_backwards_across_a_retry() {
                 assert!(o >= last, "{o} < {last} at {p:?}");
                 last = o;
             }
-            // The retry, and the importing tail of the failed attempt just before it.
             None => assert!(
                 p.stage == Stage::Retrying || (p.stage == Stage::Importing && i < retry),
                 "{p:?}"
@@ -78,8 +71,6 @@ fn overall_progress_never_goes_backwards_across_a_retry() {
     }
     assert!((last - 1.0).abs() < f64::EPSILON);
 
-    // The raw events do go backwards: the new attempt's byte count restarts at 0 of a
-    // smaller total.
     let pulled: Vec<_> = updates
         .iter()
         .filter(|p| p.stage == Stage::Pulling)

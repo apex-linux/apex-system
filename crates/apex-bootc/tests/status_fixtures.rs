@@ -1,7 +1,3 @@
-//! Parses bootc's own status fixtures (converted to JSON, see
-//! `tests/fixtures/status/bootc-upstream/README.md`) and Apex's synthetic ones, and
-//! snapshots a compact projection of what the update engine reads from each.
-
 #![allow(
     clippy::unwrap_used,
     reason = "test helpers outside #[test] fns; clippy's allow-unwrap-in-tests does not cover them"
@@ -21,7 +17,6 @@ fn fixture_dir(sub: &str) -> PathBuf {
         .join(sub)
 }
 
-/// `(file stem, path)` of every JSON file in a fixture directory, sorted.
 fn fixtures(sub: &str) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = std::fs::read_dir(fixture_dir(sub))
         .unwrap()
@@ -60,7 +55,6 @@ fn entry(e: Option<&BootEntry>) -> Value {
     })
 }
 
-/// What the engine derives its state from, in a stable, compact shape.
 fn project(h: &Host) -> Value {
     json!({
         "api_version": h.api_version,
@@ -113,7 +107,6 @@ fn staged_download_only() {
         Some("sha256:736b359467c9437c1ac915acaae952aad854e07eb4a16a94999a48af08c83c34")
     );
     assert!(h.is_bootc_host());
-    // A staged entry that is not download-only will be finalized at shutdown.
     let h = load("bootc-upstream", "spec-staged-booted");
     assert_eq!(h.staged_download_only(), Some(false));
 }

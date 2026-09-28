@@ -1,6 +1,3 @@
-//! The exact bootc command lines, environment and timeouts
-//! (`docs/specs/M1-IMPLEMENTATION.md` §6), pinned by snapshots.
-
 #![allow(
     clippy::unwrap_used,
     reason = "test helpers outside #[test] fns; clippy's allow-unwrap-in-tests does not cover them"
@@ -16,7 +13,6 @@ use apex_bootc::{
 
 const PINNED: &str = "sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0";
 
-/// A reference built at compile time, as the daemon does for its channels.
 const LOCAL_TEST_REF: ImageRef = ImageRef::from_static("localhost:5000/apex:45");
 
 fn all_commands() -> Vec<BootcCommand> {

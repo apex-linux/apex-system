@@ -1,12 +1,4 @@
-//! RFC 3339 timestamps as bootc prints them (chrono's `DateTime<Utc>` serialisation,
-//! e.g. `2023-10-14T19:22:15.42Z`), converted to Unix seconds for the D-Bus
-//! `timestamp` (`t`) key.
-
-/// Parses an RFC 3339 date-time and returns whole seconds since the Unix epoch.
-///
-/// Accepts `T`/`t`/space as the separator, an optional fraction (truncated), and `Z`/`z`
-/// or a `±HH:MM` offset. A leap second (`:60`) counts as `:59`. Returns `None` for
-/// anything else, including impossible dates such as February 30.
+/// The fraction is truncated, and a leap second (`:60`) counts as `:59`.
 pub fn parse_rfc3339_unix(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 20 {
@@ -60,7 +52,6 @@ pub fn parse_rfc3339_unix(s: &str) -> Option<i64> {
     Some(local - offset_seconds)
 }
 
-/// Reads `len` ASCII digits at `at` as a number.
 fn digits(b: &[u8], at: usize, len: usize) -> Option<u32> {
     let slice = b.get(at..at + len)?;
     slice.iter().try_fold(0u32, |acc, &c| {
@@ -81,7 +72,7 @@ fn days_in_month(year: u32, month: u32) -> u32 {
     }
 }
 
-/// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant's `days_from_civil`).
+/// H. Hinnant's `days_from_civil`, proleptic Gregorian.
 fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
@@ -97,7 +88,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// Inverse of `days_from_civil`, only needed to generate test input.
     fn civil_from_days(z: i64) -> (i64, u32, u32) {
         let z = z + 719_468;
         let era = z.div_euclid(146_097);

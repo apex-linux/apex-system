@@ -1,102 +1,64 @@
-//! Questions the update engine asks of a parsed [`Host`].
-
 use std::path::{Path, PathBuf};
 
 use crate::error::BootcError;
 use crate::status::{BootEntry, FilesystemOverlay, Host, HostType, ImageStatus};
 use crate::time::parse_rfc3339_unix;
 
-/// Mount point of the physical root on an ostree system.
 pub const SYSROOT: &str = "/sysroot";
 
 impl Host {
-    /// The booted deployment, if bootc manages this host.
     pub fn booted(&self) -> Option<&BootEntry> {
         self.status.booted.as_ref()
     }
 
-    /// The staged deployment, if any.
     pub fn staged(&self) -> Option<&BootEntry> {
         self.status.staged.as_ref()
     }
 
-    /// The rollback deployment, if any.
     pub fn rollback(&self) -> Option<&BootEntry> {
         self.status.rollback.as_ref()
     }
 
-    /// Manifest digest of the booted image.
     pub fn booted_digest(&self) -> Option<&str> {
         self.booted().and_then(BootEntry::digest)
     }
 
-    /// Manifest digest of the staged image.
     pub fn staged_digest(&self) -> Option<&str> {
         self.staged().and_then(BootEntry::digest)
     }
 
-    /// Manifest digest of the rollback image.
     pub fn rollback_digest(&self) -> Option<&str> {
         self.rollback().and_then(BootEntry::digest)
     }
 
-    /// `Some(true)` when a staged deployment exists and is locked (`--download-only`),
-    /// `Some(false)` when it will be finalized at shutdown, `None` when nothing is staged.
+    /// `Some(false)` when the stage will be finalized at shutdown; `None` when nothing is staged.
     pub fn staged_download_only(&self) -> Option<bool> {
         self.staged().map(BootEntry::is_download_only)
     }
 
-    /// The rollback deployment is queued for the next boot.
     pub fn rollback_queued(&self) -> bool {
         self.status.rollback_queued
     }
 
-    /// The booted or staged deployment has origin changes bootc does not understand.
-    ///
-    /// Same condition bootc checks before refusing `bootc upgrade`
-    /// (bootc `crates/lib/src/cli.rs`, `upgrade`: booted || staged `incompatible`).
+    /// The condition on which bootc refuses `bootc upgrade` (bootc `crates/lib/src/cli.rs`).
     pub fn incompatible(&self) -> bool {
         self.booted().is_some_and(|b| b.incompatible)
             || self.staged().is_some_and(|s| s.incompatible)
     }
 
-    /// The overlay mounted on `/usr`, if any.
     pub fn usr_overlay(&self) -> Option<&FilesystemOverlay> {
         self.status.usr_overlay.as_ref()
     }
 
-    /// The `cachedUpdate` of the staged entry, else of the booted entry.
-    ///
-    /// **Not the remote image.** `bootc upgrade --check` stores what it found on the
-    /// commit that the image reference's ostree ref points at, which is the image last
-    /// pulled for that reference, and only when it finds an update; bootc's check,
-    /// download and status paths never clear it (ostree-ext
-    /// `ImageImporter::prepare_internal` and `cache_pending`). `bootc
-    /// status` then reports it on whichever deployment has that commit (bootc
-    /// `status.rs`, `imagestatus`). So:
-    ///
-    /// - after a download, later checks write onto the staged commit, which is why the
-    ///   staged entry is preferred;
-    /// - once a download-only stage has been dropped by a reboot, checks write onto a
-    ///   commit no deployment uses, and the booted entry keeps the value from before the
-    ///   first download for good;
-    /// - an update found and then withdrawn from the channel stays here.
-    ///
-    /// The digest printed by `bootc upgrade --check` ([`crate::CheckOutcome`]) is the
-    /// primary source. Use [`Self::cached_update_for`] to get the version and build time
-    /// of a digest learned there.
+    /// Often stale, never the remote image: bootc writes it on the commit last pulled, only when
+    /// a check finds an update, and never clears it (ostree-ext `cache_pending`).
     pub fn cached_update(&self) -> Option<&ImageStatus> {
         self.staged()
             .and_then(|s| s.cached_update.as_ref())
             .or_else(|| self.booted().and_then(|b| b.cached_update.as_ref()))
     }
 
-    /// The `cachedUpdate` of any deployment (staged, booted, rollback, then the others)
-    /// that describes the image with manifest digest `digest`.
-    ///
-    /// This is the reliable use of `cachedUpdate`: the digest is known from elsewhere
-    /// (the output of `bootc upgrade --check`), and bootc's cached copy of that image's
-    /// config adds its version and build time.
+    /// The reliable use of `cachedUpdate`: metadata of a digest `bootc upgrade --check` printed.
     pub fn cached_update_for(&self, digest: &str) -> Option<&ImageStatus> {
         self.staged()
             .into_iter()
@@ -107,17 +69,11 @@ impl Host {
             .find(|cached| cached.image_digest == digest)
     }
 
-    /// The host is booted from a container image that bootc manages.
     pub fn is_bootc_host(&self) -> bool {
         self.booted().is_some_and(|b| b.image.is_some())
             && !matches!(self.status.host_type, Some(HostType::Unknown))
     }
 
-    /// The booted entry and its image, or [`BootcError::NotBootcHost`].
-    ///
-    /// bootc reports a host it does not manage with exit status 0 and an empty status
-    /// (bootc fixture `spec-v1-null.json`), or with a booted ostree commit that has no
-    /// image (`spec-rfe-ostree-deployment.yaml`).
     pub fn require_bootc_host(&self) -> Result<(&BootEntry, &ImageStatus), BootcError> {
         let booted = self.booted().ok_or_else(|| BootcError::NotBootcHost {
             detail: "bootc status reports no booted deployment".to_owned(),
@@ -133,51 +89,40 @@ impl Host {
 }
 
 impl BootEntry {
-    /// Manifest digest of this deployment's image.
     pub fn digest(&self) -> Option<&str> {
         self.image.as_ref().map(|i| i.image_digest.as_str())
     }
 
-    /// `org.opencontainers.image.version` of this deployment's image.
     pub fn version(&self) -> Option<&str> {
         self.image.as_ref().and_then(|i| i.version.as_deref())
     }
 
-    /// The image reference this deployment follows, e.g. `ghcr.io/sekirokenjii/apex:45`.
     pub fn image_reference(&self) -> Option<&str> {
         self.image.as_ref().map(|i| i.image.image.as_str())
     }
 
-    /// The deployment is staged but locked (`bootc upgrade --download-only`).
     pub fn is_download_only(&self) -> bool {
         self.download_only
     }
 
-    /// Where the deployment lives on disk.
     pub fn location(&self) -> Result<DeploymentLocation, LocationError> {
         let ostree = self.ostree.as_ref().ok_or(LocationError::NotOstree)?;
         DeploymentLocation::new(&ostree.stateroot, &ostree.checksum, ostree.deploy_serial)
     }
 
-    /// The deployment's root directory under [`SYSROOT`],
-    /// `/sysroot/ostree/deploy/<stateroot>/deploy/<checksum>.<serial>`.
     pub fn deployment_root(&self) -> Result<PathBuf, LocationError> {
         Ok(self.location()?.root())
     }
 }
 
 impl ImageStatus {
-    /// The build timestamp in seconds since the Unix epoch, if present and valid.
     pub fn timestamp_unix(&self) -> Option<i64> {
         self.timestamp.as_deref().and_then(parse_rfc3339_unix)
     }
 }
 
-/// Validated on-disk identity of an ostree deployment.
-///
-/// Both parts become path components of a directory a root daemon reads from, so they
-/// are validated even though bootc produced them: the stateroot must be a single
-/// ordinary path component and the checksum a 64-digit lowercase hex sha256.
+/// Validated although bootc produced it: its parts become path components of a directory
+/// that a root daemon reads from.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeploymentLocation {
     stateroot: String,
@@ -185,22 +130,17 @@ pub struct DeploymentLocation {
     serial: u32,
 }
 
-/// Why a [`BootEntry`] has no usable [`DeploymentLocation`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LocationError {
-    /// The entry has no `ostree` section (not the ostree backend).
     #[error("deployment has no ostree location")]
     NotOstree,
-    /// The stateroot is empty, `.`/`..`, or contains `/` or NUL.
     #[error("invalid ostree stateroot {0:?}")]
     InvalidStateroot(String),
-    /// The checksum is not 64 lowercase hex digits.
     #[error("invalid ostree commit checksum {0:?}")]
     InvalidChecksum(String),
 }
 
 impl DeploymentLocation {
-    /// Validates the parts of a deployment location.
     pub fn new(stateroot: &str, checksum: &str, serial: u32) -> Result<Self, LocationError> {
         let stateroot_ok = !stateroot.is_empty()
             && stateroot != "."
@@ -223,28 +163,22 @@ impl DeploymentLocation {
         })
     }
 
-    /// The stateroot (usually `default`).
     pub fn stateroot(&self) -> &str {
         &self.stateroot
     }
 
-    /// The ostree commit checksum.
     pub fn checksum(&self) -> &str {
         &self.checksum
     }
 
-    /// The deployment serial.
     pub fn serial(&self) -> u32 {
         self.serial
     }
 
-    /// The deployment root under the real [`SYSROOT`].
     pub fn root(&self) -> PathBuf {
         self.root_under(Path::new(SYSROOT))
     }
 
-    /// The deployment root under another physical root, e.g. a test directory:
-    /// `<sysroot>/ostree/deploy/<stateroot>/deploy/<checksum>.<serial>`.
     pub fn root_under(&self, sysroot: &Path) -> PathBuf {
         sysroot
             .join("ostree/deploy")
@@ -336,8 +270,7 @@ mod tests {
     const V2: &str = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
     const V3: &str = "sha256:3333333333333333333333333333333333333333333333333333333333333333";
 
-    /// V1 booted; a check found V2 (cached on V1's commit), V2 was downloaded, and a
-    /// later check found V3, which ostree-ext cached on V2's commit, the staged one.
+    /// Checks after a download write onto the staged commit.
     #[test]
     fn cached_update_prefers_the_staged_entry() {
         let mut h = Host::default();
@@ -354,9 +287,7 @@ mod tests {
         );
     }
 
-    /// The same host after the locked V2 stage was dropped by a reboot: the booted entry
-    /// still says V2, although the channel has moved on. Only a digest-exact lookup is
-    /// safe.
+    /// A reboot dropped the locked V2 stage; the booted entry still says V2 for good.
     #[test]
     fn booted_cached_update_goes_stale_after_a_dropped_stage() {
         let mut h = Host::default();

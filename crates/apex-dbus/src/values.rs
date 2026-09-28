@@ -1,25 +1,14 @@
-//! String-valued enums of the contract, the `GetChanges` entry type and conversion errors.
-
 use std::{fmt, marker::PhantomData, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use zbus::zvariant::{OwnedValue, Signature, Str, Type, Value};
 
-/// One entry of `GetChanges` (D-Bus `(sssss)`): `(name, arch, kind, from_evr, to_evr)`, the
-/// fields [`CHANGE_FIELDS`] names.
-///
-/// - `arch` is the RPM architecture (`x86_64`, `i686`, `noarch`), so a multilib package
-///   appears once per architecture.
-/// - `kind` is one of the [`ChangeKind`] strings.
-/// - D-Bus has no null string: `from_evr` is `""` for an added package and `to_evr` is `""`
-///   for a removed one.
-/// - The daemon sorts the list by `(name, arch)` in byte order.
+/// One entry per RPM architecture. D-Bus has no null string, so an added package has an
+/// empty `from_evr` and a removed one an empty `to_evr`.
 pub type Change = (String, String, String, String, String);
 
-/// The names of the [`Change`] fields in tuple order, as the contract XML spells them.
 pub const CHANGE_FIELDS: [&str; 5] = ["name", "arch", "kind", "from_evr", "to_evr"];
 
-/// A string that is not one of the values the contract allows.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{value:?} is not a valid {what}")]
 pub struct UnknownValueError {
@@ -35,31 +24,23 @@ impl UnknownValueError {
         }
     }
 
-    /// What was being parsed, e.g. `"State"`.
     pub fn what(&self) -> &'static str {
         self.what
     }
 
-    /// The rejected string.
     pub fn value(&self) -> &str {
         &self.value
     }
 }
 
-/// A D-Bus value that does not fit the contract type it was converted to.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValueError {
-    /// The value has a different D-Bus type than the contract gives `field`.
     #[error("{field}: expected D-Bus type {expected}, found {found}")]
     WrongType {
-        /// The property, dictionary key or type being converted.
         field: String,
-        /// The contract signature.
         expected: &'static Signature,
-        /// The signature of the value received.
         found: Signature,
     },
-    /// A string outside the set the contract allows.
     #[error(transparent)]
     Unknown(#[from] UnknownValueError),
 }
@@ -85,7 +66,6 @@ impl From<ValueError> for zbus::Error {
     }
 }
 
-/// Deserializes a string enum from its contract string (works for D-Bus and JSON alike).
 struct StrVisitor<T>(PhantomData<T>);
 
 impl<T> de::Visitor<'_> for StrVisitor<T>
@@ -103,10 +83,8 @@ where
     }
 }
 
-/// Defines an enum whose D-Bus form (signature `s`) is one of a fixed set of strings.
-///
-/// Serde and the zvariant conversions are written by hand through `as_str`/`FromStr` so the
-/// wire form is exactly the contract string, whatever serde or zvariant do with enum variants.
+/// Serde and zvariant conversions go through `as_str` and `FromStr`, so the wire form is the
+/// contract string whatever serde or zvariant do with enum variants.
 macro_rules! string_enum {
     (
         $(#[$meta:meta])*
@@ -121,10 +99,8 @@ macro_rules! string_enum {
         }
 
         impl $name {
-            /// Every value, in contract order.
             pub const ALL: &'static [Self] = &[$(Self::$variant),+];
 
-            /// The contract string.
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $value,)+
@@ -135,7 +111,6 @@ macro_rules! string_enum {
         impl FromStr for $name {
             type Err = UnknownValueError;
 
-            /// Parses exactly the contract strings (case-sensitive, no trimming).
             fn from_str(value: &str) -> Result<Self, UnknownValueError> {
                 match value {
                     $($value => Ok(Self::$variant),)+
@@ -205,71 +180,52 @@ macro_rules! string_enum {
 }
 
 string_enum! {
-    /// The daemon's derived state (`State` property).
     pub enum State {
-        /// The remote digest equals the booted or staged digest.
         UpToDate = "up-to-date",
-        /// A newer, not denylisted image was found and is not staged yet.
         Available = "available",
-        /// An operation is running; see the `Progress` property.
+        /// Any operation is running; see the `Progress` property.
         Downloading = "downloading",
-        /// A download-only (locked) stage exists; `Apply` makes it the next boot.
+        /// Locked: `Apply` makes it the next boot.
         Staged = "staged",
-        /// The user applied the stage; it boots next.
         ReadyForReboot = "ready-for-reboot",
-        /// bootc has a rollback queued; automatic operations stop.
         RollbackQueued = "rollback-queued",
-        /// bootc reports the system as incompatible; automatic operations stop.
         Incompatible = "incompatible",
-        /// A transient `/usr` overlay is active; automatic operations stop.
         UsrOverlay = "usr-overlay",
-        /// Finalizing the last staged deployment failed.
         FinalizeFailed = "finalize-failed",
-        /// The last boot of a newly applied digest failed its health checks.
         HealthFailure = "health-failure",
-        /// The last operation failed; see the `LastError` property.
+        /// See the `LastError` property.
         Error = "error",
-        /// The state could not be derived.
         Unknown = "unknown",
     }
 }
 
 string_enum! {
-    /// The channel the booted deployment follows (`Channel` property, `SwitchChannel` argument).
     pub enum Channel {
-        /// `ghcr.io/sekirokenjii/apex`, signed with the release key.
+        /// Signed with the release key.
         Stable = "stable",
-        /// `ghcr.io/sekirokenjii/apex-testing`, signed with the CI key.
+        /// Signed with the CI key.
         Testing = "testing",
     }
 }
 
 string_enum! {
-    /// The outcome of a boot assessment (`ReportBoot` argument, sent by `apex-boot-assess`).
     pub enum BootVerdict {
-        /// All required checks passed; the digest is the booted digest.
         Green = "green",
-        /// An armed boot failed while a user session was active: the daemon publishes
-        /// `HealthFailure` and waits for the user (no reboot).
+        /// An armed boot failed during a user session: the daemon publishes `HealthFailure`
+        /// and never reboots.
         Red = "red",
-        /// An ordinary (unarmed) boot failed a required check; report only.
+        /// Report only.
         RedUnarmed = "red-unarmed",
-        /// GRUB fell back to the previous deployment; the digest is the failed target, which
-        /// the daemon denylists after making the running deployment the default.
+        /// GRUB fell back; the daemon denylists the failed target.
         Fallback = "fallback",
     }
 }
 
 string_enum! {
-    /// The `kind` field of a [`Change`].
     pub enum ChangeKind {
-        /// The package exists only in the staged image.
         Added = "added",
-        /// The package exists only in the booted image.
         Removed = "removed",
-        /// The staged image has a newer EVR.
         Upgraded = "upgraded",
-        /// The staged image has an older EVR.
         Downgraded = "downgraded",
     }
 }
@@ -279,7 +235,6 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// Every (type name, contract string) pair of the four string enums.
     fn all_strings() -> Vec<(&'static str, &'static str)> {
         let mut all = Vec::new();
         all.extend(State::ALL.iter().map(|v| ("State", v.as_str())));
@@ -378,7 +333,6 @@ mod tests {
 
     #[test]
     fn serde_uses_contract_strings() {
-        // D-Bus encoding: the body is a plain string.
         let ctxt = zbus::zvariant::serialized::Context::new_dbus(zbus::zvariant::LE, 0);
         let encoded = zbus::zvariant::to_bytes(ctxt, &State::ReadyForReboot).unwrap();
         let (text, _): (String, _) = encoded.deserialize().unwrap();
@@ -389,7 +343,6 @@ mod tests {
         assert!(bad.deserialize::<State>().is_err());
     }
 
-    /// Contract strings, look-alikes and arbitrary text.
     fn candidate() -> impl Strategy<Value = String> {
         prop_oneof![
             proptest::sample::select(all_strings()).prop_map(|(_, text)| text.to_owned()),
@@ -399,7 +352,6 @@ mod tests {
     }
 
     proptest! {
-        /// `FromStr` accepts a string if and only if it is one of the contract strings.
         #[test]
         fn from_str_accepts_only_contract_strings(text in candidate()) {
             for what in ["State", "Channel", "BootVerdict", "ChangeKind"] {
@@ -408,7 +360,6 @@ mod tests {
             }
         }
 
-        /// Near misses of real values (one character changed) never parse.
         #[test]
         fn near_misses_are_rejected(
             index in 0_usize..64,

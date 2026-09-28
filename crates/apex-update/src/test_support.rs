@@ -1,5 +1,3 @@
-//! Snapshot builders shared by the unit tests.
-
 use crate::gates::GIB;
 use crate::records::{DenyEntry, Intent};
 use crate::snapshot::{DeploymentView, HostView, Power, RemoteView, SystemSnapshot};
@@ -22,8 +20,7 @@ pub(crate) fn deployment(digest: &str, version: &str, download_only: bool) -> De
     }
 }
 
-/// Booted 45.20260920.1, remote 45.20260924.1 found, on AC, unmetered, plenty of space,
-/// nothing staged: every gate passes.
+/// Every gate passes.
 pub(crate) fn healthy() -> SystemSnapshot {
     SystemSnapshot {
         power: Power {
@@ -49,7 +46,6 @@ pub(crate) fn healthy() -> SystemSnapshot {
     }
 }
 
-/// [`healthy`] with the remote downloaded and locked.
 pub(crate) fn with_locked_stage() -> SystemSnapshot {
     let mut s = healthy();
     s.host.staged = Some(deployment(REMOTE, "45.20260924.1", true));

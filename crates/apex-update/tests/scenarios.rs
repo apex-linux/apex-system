@@ -1,6 +1,3 @@
-//! End-to-end decision flows through the public API, and a snapshot of every text the
-//! engine can show a user.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use apex_update::gates::{
@@ -38,7 +35,6 @@ fn remote(digest: &str, version: &str) -> RemoteView {
     }
 }
 
-/// A laptop on AC with room to spare, booted on `v1`, never checked.
 fn laptop() -> SystemSnapshot {
     SystemSnapshot {
         power: Power {
@@ -62,18 +58,15 @@ fn update_from_check_to_green_boot() {
     let mut s = laptop();
     assert_eq!(derive_state(&s), State::UpToDate);
 
-    // The timer fires: check, then download.
     assert_eq!(plan_automatic(&s), AutomaticPlan::CheckThenDownload);
     s.remote = Some(remote("sha256:v2", V2));
     assert_eq!(derive_state(&s), State::Available);
     assert_eq!(plan_after_check(&s), AfterCheck::Download);
 
-    // Downloaded and locked.
     s.host.staged = Some(deployment("sha256:v2", V2, true));
     assert_eq!(derive_state(&s), State::Staged);
     assert_eq!(plan_after_check(&s), AfterCheck::NothingToDo);
 
-    // The user reviews and applies on battery.
     s.power = Power {
         on_ac: false,
         battery_percent: Some(40),
@@ -87,8 +80,6 @@ fn update_from_check_to_green_boot() {
     assert_eq!(derive_state(&s), State::ReadyForReboot);
     assert!(!intent_is_orphaned(&s));
 
-    // A newer build appears: nothing automatic touches the applied stage, and the user
-    // must cancel before downloading it.
     s.remote = Some(remote("sha256:v3", V3));
     assert!(matches!(
         plan_automatic(&s),
@@ -106,9 +97,7 @@ fn update_from_check_to_green_boot() {
     ));
     assert_eq!(derive_state(&s), State::ReadyForReboot);
 
-    // The user changes their mind. The channel has moved on to v3, and bootc re-locks by
-    // pulling the tag, so cancelling would download v3 in place of v2: on 40 % battery
-    // that waits for the charger, like any download.
+    // bootc re-locks by pulling the tag, now at v3, so cancelling would download v3.
     assert!(matches!(
         validate_discard(&s),
         Err(DiscardError::Gate(Deferral {
@@ -116,21 +105,16 @@ fn update_from_check_to_green_boot() {
             ..
         }))
     ));
-    // While the tag still points at v2, cancelling only re-locks it.
     s.remote = Some(remote("sha256:v2", V2));
     assert_eq!(validate_discard(&s), Ok(()));
     s.remote = Some(remote("sha256:v3", V3));
 
-    // The user applies again after all.
-
-    // Reboot into v2; the assessment is green and clears the intent.
     s.host.rollback = s.host.booted.take();
     s.host.booted = s.host.staged.take();
     assert!(!intent_is_orphaned(&s), "booted digest awaits assessment");
     s.intent = None;
     assert_eq!(derive_state(&s), State::Available);
 
-    // Still on 40 % battery: v3 waits for the charger.
     assert!(matches!(
         plan_after_check(&s),
         AfterCheck::Defer(Deferral {
@@ -144,7 +128,6 @@ fn update_from_check_to_green_boot() {
 
 #[test]
 fn failed_update_is_not_offered_again() {
-    // GRUB fell back from v2 to v1; apex-boot-assess denylisted v2.
     let mut s = laptop();
     s.remote = Some(remote("sha256:v2", V2));
     s.denylist = [DenyEntry {
@@ -177,7 +160,6 @@ fn failed_update_is_not_offered_again() {
         }))
     ));
 
-    // A newer build is offered normally.
     s.remote = Some(remote("sha256:v3", V3));
     assert_eq!(derive_state(&s), State::Available);
     assert_eq!(plan_after_check(&s), AfterCheck::Download);
@@ -203,7 +185,6 @@ fn tag_moved_backwards_is_refused_everywhere() {
             ..
         }))
     ));
-    // Even if an older image got staged some other way, it cannot be applied.
     s.host.staged = Some(deployment("sha256:v1", V1, true));
     assert!(matches!(
         validate_apply(&s, "sha256:v1", Some(&v(V1))),
@@ -234,7 +215,7 @@ fn metered_network_defers_automatic_but_not_forced_download() {
     assert_eq!(validate_download(&s, true), Ok(()));
 }
 
-/// Every text the engine can show, one per line, so wording changes are reviewed.
+/// One snapshot line per text, so every wording change is reviewed.
 #[test]
 fn every_user_visible_text() {
     let on_battery = |percent| Power {

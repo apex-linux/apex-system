@@ -1,8 +1,4 @@
-//! Human-readable sizes for reason texts.
-
-/// Formats a byte count the way `GLib`'s `g_format_size` does by default: SI units with one
-/// decimal (`4.3 GB`), and whole bytes below 1 kB. GNOME shows sizes this way, so the
-/// numbers in reasons match what Disk Usage Analyzer and Settings show.
+/// As `GLib`'s `g_format_size` does by default, so the sizes match what GNOME shows.
 pub fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["kB", "MB", "GB", "TB", "PB", "EB"];
     if bytes < 1000 {

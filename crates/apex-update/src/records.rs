@@ -1,49 +1,32 @@
-//! The records persisted under `/var/lib/apex` (contract §4), as pure data types.
-//!
-//! Reading and writing the files is in [`crate::store`]. Deserialization is lenient:
-//! unknown fields are ignored (for example the `mode` field an older design gave the
-//! intent), and optional fields default.
-
 use serde::{Deserialize, Serialize};
 
-/// `intent.json`: the digest the user applied, present from `Apply` until the boot
-/// assessment of that digest.
+/// Present from `Apply` until the boot assessment of its digest.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Intent {
-    /// Manifest digest the user applied, `sha256:…`.
     pub digest: String,
-    /// When `Apply` ran, Unix seconds.
+    /// Unix seconds.
     #[serde(default)]
     pub created: u64,
 }
 
-/// One entry of `denylist.json`: a digest that failed its health checks.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct DenyEntry {
-    /// Manifest digest, `sha256:…`.
     pub digest: String,
-    /// Why it was denied, for the log and the UI.
     #[serde(default)]
     pub reason: String,
-    /// When it was denied, Unix seconds.
+    /// Unix seconds.
     #[serde(default)]
     pub at: u64,
 }
 
-/// `denylist.json`: digests that must never be downloaded or applied again.
-///
-/// The entries live in a `Vec` kept sorted by digest and unique, searched with binary
-/// search. The list is tiny (one entry per build that failed on this laptop), so a sorted
-/// vector gives O(log n) lookups with no hashing and no per-node allocation, and it
-/// serializes in a stable order, so the file only changes when an entry does. Inserting
-/// is O(n), which does not matter at this size.
+/// A sorted vector: the list is tiny, and it serializes in a stable order, so the file
+/// changes only when an entry does.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "DenylistFile", into = "DenylistFile")]
 pub struct Denylist {
     entries: Vec<DenyEntry>,
 }
 
-/// The on-disk shape: `{ "digests": [ … ] }`.
 #[derive(Serialize, Deserialize)]
 struct DenylistFile {
     #[serde(default)]
@@ -51,8 +34,8 @@ struct DenylistFile {
 }
 
 impl From<DenylistFile> for Denylist {
-    /// Sorts and deduplicates, so a hand-edited file still satisfies the invariant. For a
-    /// duplicated digest the earliest entry wins: it records the first failure.
+    /// A hand-edited file may be unsorted; the earliest duplicate wins, as it records the
+    /// first failure.
     fn from(file: DenylistFile) -> Self {
         let mut entries = file.digests;
         entries.sort_by(|a, b| a.digest.cmp(&b.digest).then(a.at.cmp(&b.at)));
@@ -70,7 +53,6 @@ impl From<Denylist> for DenylistFile {
 }
 
 impl Denylist {
-    /// An empty denylist.
     pub fn new() -> Self {
         Self::default()
     }
@@ -80,18 +62,15 @@ impl Denylist {
             .binary_search_by(|entry| entry.digest.as_str().cmp(digest))
     }
 
-    /// Whether `digest` is denied.
     pub fn contains(&self, digest: &str) -> bool {
         self.position(digest).is_ok()
     }
 
-    /// The entry for `digest`, if denied.
     pub fn get(&self, digest: &str) -> Option<&DenyEntry> {
         self.position(digest).ok().map(|i| &self.entries[i])
     }
 
-    /// Denies a digest. Returns `false` and keeps the existing entry (the first failure)
-    /// when the digest was already denied.
+    /// Keeps an existing entry, which records the first failure.
     pub fn insert(&mut self, entry: DenyEntry) -> bool {
         match self.position(&entry.digest) {
             Ok(_) => false,
@@ -102,23 +81,18 @@ impl Denylist {
         }
     }
 
-    /// Lifts the denial of `digest` (an explicit user override). Returns the removed
-    /// entry.
     pub fn remove(&mut self, digest: &str) -> Option<DenyEntry> {
         self.position(digest).ok().map(|i| self.entries.remove(i))
     }
 
-    /// All entries, sorted by digest.
     pub fn entries(&self) -> &[DenyEntry] {
         &self.entries
     }
 
-    /// Number of denied digests.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
-    /// Whether nothing is denied.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -133,30 +107,26 @@ impl FromIterator<DenyEntry> for Denylist {
     }
 }
 
-/// `last-check.json`: the result of the last successful remote check.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LastCheck {
-    /// When the check ran, Unix seconds; 0 when never.
+    /// Unix seconds; 0 when never.
     #[serde(default)]
     pub at: u64,
-    /// Digest the channel pointed at, if the check found one.
     #[serde(default)]
     pub remote_digest: Option<String>,
-    /// Version label of that image, as found (it may not be a valid version).
+    /// As found: it may not be a valid version.
     #[serde(default)]
     pub remote_version: Option<String>,
 }
 
-/// `health-failure.json`, written by `apex-boot-assess` when an applied deployment failed
-/// its required checks while a user session was active.
+/// Written by `apex-boot-assess` when an applied deployment failed its required checks
+/// during a user session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HealthFailureRecord {
-    /// Digest of the deployment that failed.
     pub digest: String,
-    /// Names of the required checks that failed.
     #[serde(default)]
     pub failed_checks: Vec<String>,
-    /// When the assessment ran, Unix seconds.
+    /// Unix seconds.
     #[serde(default)]
     pub at: u64,
 }
@@ -246,8 +216,6 @@ mod tests {
     }
 
     proptest! {
-        /// The sorted vector behaves like an ordered map keyed by digest that keeps the
-        /// first insertion.
         #[test]
         fn denylist_matches_a_map_model(ops in proptest::collection::vec((any::<bool>(), 0u8..16, 0u64..100), 0..64)) {
             let mut list = Denylist::new();

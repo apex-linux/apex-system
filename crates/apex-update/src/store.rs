@@ -1,23 +1,3 @@
-//! The persisted daemon state in `/var/lib/apex` (contract §4): atomic JSON files.
-//!
-//! This is the only module in the crate that does I/O, and it uses only `std::fs`.
-//!
-//! - A missing file reads as its default (no intent, an empty denylist, never checked,
-//!   no health failure).
-//! - A file that exists but is not valid JSON of the right shape is
-//!   [`StoreError::Corrupt`], so the daemon can report it instead of silently forgetting
-//!   a denied digest.
-//! - Writes are atomic: a temporary file in the same directory is written, flushed with
-//!   `fsync`, renamed over the target, and the directory is flushed with `fsync`, so a
-//!   power cut leaves either the old or the new file, never a torn one.
-//! - A failure after the rename (flushing the directory) is [`StoreError::NotFlushed`],
-//!   not a failed write: the new content is already what readers see
-//!   ([`StoreError::is_applied`]).
-//! - Temporary files left by a writer that died before its rename are removed before the
-//!   next write of the same file ([`remove_stale_temp_files`]).
-//!
-//! The directory itself (0700, root) is created by systemd-tmpfiles, not here.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -30,79 +10,53 @@ use serde::de::DeserializeOwned;
 
 use crate::records::{Denylist, HealthFailureRecord, Intent, LastCheck};
 
-/// The state directory on an installed system.
+/// Created 0700 by systemd-tmpfiles, not here.
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/apex";
-/// The user's pending apply.
 pub const INTENT_FILE: &str = "intent.json";
-/// Digests that failed their health checks.
 pub const DENYLIST_FILE: &str = "denylist.json";
-/// The last remote check.
 pub const LAST_CHECK_FILE: &str = "last-check.json";
-/// Written by `apex-boot-assess` after a red, armed boot during a user session.
 pub const HEALTH_FAILURE_FILE: &str = "health-failure.json";
-/// Files larger than this are refused rather than read into memory. The largest file,
-/// the denylist, holds roughly 150 bytes per failed build.
+/// The largest file, the denylist, holds about 150 bytes per failed build.
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
-/// Why a state file could not be read or written.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    /// A filesystem operation failed.
     #[error("cannot {action} {}", .path.display())]
     Io {
-        /// What was being done, e.g. `open` or `rename`.
         action: &'static str,
-        /// The file or directory involved.
         path: PathBuf,
-        /// The underlying error.
         #[source]
         source: io::Error,
     },
-    /// The file exists but is not valid JSON of the expected shape.
+    /// Never read as a default, which would silently forget a denied digest.
     #[error("{} is corrupt", .path.display())]
     Corrupt {
-        /// The corrupt file.
         path: PathBuf,
-        /// The parse error.
         #[source]
         source: serde_json::Error,
     },
-    /// The file is larger than [`MAX_FILE_SIZE`].
     #[error("{} is larger than {limit} bytes", .path.display())]
-    TooLarge {
-        /// The oversized file.
-        path: PathBuf,
-        /// The limit.
-        limit: u64,
-    },
-    /// The value could not be encoded as JSON.
+    TooLarge { path: PathBuf, limit: u64 },
     #[error("cannot encode {}", .path.display())]
     Encode {
-        /// The file that was to be written.
         path: PathBuf,
-        /// The encoding error.
         #[source]
         source: serde_json::Error,
     },
-    /// The file was written (or removed), but flushing its directory failed afterwards,
-    /// so the change may not survive a power cut. Readers already see it: this is not a
-    /// failed write ([`StoreError::is_applied`]).
+    /// Not a failed write: readers already see the change.
     #[error(
         "{} was changed, but its directory could not be flushed, so the change may not survive a power cut",
         .path.display()
     )]
     NotFlushed {
-        /// The file that was written or removed.
         path: PathBuf,
-        /// The error from flushing the directory.
         #[source]
         source: io::Error,
     },
 }
 
 impl StoreError {
-    /// Whether the change was made despite the error, so the caller must not act as if
-    /// the file still held its old content. Only [`StoreError::NotFlushed`].
+    /// The caller must not act as if the file still held its old content.
     pub fn is_applied(&self) -> bool {
         matches!(self, Self::NotFlushed { .. })
     }
@@ -117,7 +71,6 @@ fn io_error(action: &'static str, path: &Path) -> impl FnOnce(io::Error) -> Stor
     }
 }
 
-/// Reads and parses a JSON file. A missing file is `Ok(None)`.
 pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, StoreError> {
     let file = match File::open(path) {
         Ok(file) => file,
@@ -142,19 +95,16 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, StoreErr
         })
 }
 
-/// Distinguishes temporary files of one process; with the pid it makes names unique.
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// How many temporary names to try before giving up (a name can collide only with a
-/// file left by a crashed process that had the same pid).
+/// A name can collide only with a file left by a crashed process that had the same pid.
 const TEMP_ATTEMPTS: u32 = 16;
 
-/// Removes the temporary file unless the rename consumed it.
-struct TempFile {
+struct RemoveOnDrop {
     path: Option<PathBuf>,
 }
 
-impl Drop for TempFile {
+impl Drop for RemoveOnDrop {
     fn drop(&mut self) {
         if let Some(path) = self.path.take() {
             // Best effort: the write already failed and that error is what matters.
@@ -163,7 +113,6 @@ impl Drop for TempFile {
     }
 }
 
-/// The directory holding `path`, `.` for a bare file name.
 fn parent_dir(path: &Path) -> &Path {
     match path.parent() {
         Some(dir) if !dir.as_os_str().is_empty() => dir,
@@ -171,7 +120,6 @@ fn parent_dir(path: &Path) -> &Path {
     }
 }
 
-/// Flushes the directory holding `path` after `path` was renamed into it or removed.
 fn sync_dir_of(path: &Path) -> Result<(), StoreError> {
     File::open(parent_dir(path))
         .and_then(|d| d.sync_all())
@@ -181,22 +129,14 @@ fn sync_dir_of(path: &Path) -> Result<(), StoreError> {
         })
 }
 
-/// The prefix of the temporary files of `name`: `.<name>.tmp-`, followed by
-/// `<pid>-<counter>`.
 fn temp_prefix(name: &str) -> String {
     format!(".{name}.tmp-")
 }
 
-/// Where the kernel lists running processes.
 const PROC: &str = "/proc";
 
-/// Removes the temporary files that interrupted [`write_json_atomic`] calls for `path`
-/// left next to it, `.<name>.tmp-<pid>-<n>`, and returns how many were removed.
-///
-/// Only files whose writer is gone are removed: files with this process's pid are kept
-/// (another thread may be writing), and so are files whose pid still appears in `/proc`.
-/// A reused pid only delays the cleanup. Without a usable `/proc`, nothing is removed.
-/// Best effort: entries that cannot be read or removed are skipped.
+/// Removes only a dead writer's files: this process's own may be in use by another thread,
+/// and a reused pid only delays the cleanup.
 pub fn remove_stale_temp_files(path: &Path) -> usize {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return 0;
@@ -230,7 +170,6 @@ pub fn remove_stale_temp_files(path: &Path) -> usize {
     removed
 }
 
-/// The pid in the `<pid>-<counter>` suffix of a temporary file name.
 fn temp_pid(suffix: &str) -> Option<u32> {
     let (pid, counter) = suffix.split_once('-')?;
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
@@ -240,7 +179,6 @@ fn temp_pid(suffix: &str) -> Option<u32> {
     pid.parse().ok()
 }
 
-/// Creates a new, empty temporary file (mode 0600) next to the target.
 fn create_temp(dir: &Path, name: &str) -> Result<(File, PathBuf), StoreError> {
     let pid = std::process::id();
     let mut last_error = None;
@@ -267,12 +205,7 @@ fn create_temp(dir: &Path, name: &str) -> Result<(File, PathBuf), StoreError> {
     Err(io_error("create", &tmp)(e))
 }
 
-/// Writes `value` as pretty JSON to `path` atomically: temporary file in the same
-/// directory (mode 0600), write, `fsync`, rename, `fsync` of the directory.
-///
-/// Temporary files of `path` left by dead writers are removed first
-/// ([`remove_stale_temp_files`]). If only the final directory `fsync` fails, the error
-/// is [`StoreError::NotFlushed`]: `path` already holds `value`.
+/// A power cut leaves either the old or the new file, never a torn one.
 pub fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), StoreError> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|source| StoreError::Encode {
         path: path.to_path_buf(),
@@ -289,7 +222,7 @@ pub fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Resul
     })?;
     remove_stale_temp_files(path);
     let (mut file, tmp) = create_temp(dir, name)?;
-    let mut guard = TempFile {
+    let mut guard = RemoveOnDrop {
         path: Some(tmp.clone()),
     };
     file.write_all(&bytes).map_err(io_error("write", &tmp))?;
@@ -300,9 +233,6 @@ pub fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Resul
     sync_dir_of(path)
 }
 
-/// Removes `path` durably (the directory is flushed). A missing file is not an error.
-/// If only the directory `fsync` fails, the error is [`StoreError::NotFlushed`]: the file
-/// is already gone.
 pub fn remove_durable(path: &Path) -> Result<(), StoreError> {
     match fs::remove_file(path) {
         Ok(()) => sync_dir_of(path),
@@ -311,31 +241,18 @@ pub fn remove_durable(path: &Path) -> Result<(), StoreError> {
     }
 }
 
-/// Access to the persisted state; the daemon's I/O boundary for it.
-///
-/// [`StateDir`] is the real implementation and [`MemoryStore`] a fake for tests.
 pub trait StateStore {
-    /// The pending apply, if any.
     fn read_intent(&self) -> Result<Option<Intent>, StoreError>;
-    /// Records the user's apply.
     fn write_intent(&self, intent: &Intent) -> Result<(), StoreError>;
-    /// Forgets the pending apply.
     fn clear_intent(&self) -> Result<(), StoreError>;
-    /// The denylist; empty when there is none.
     fn read_denylist(&self) -> Result<Denylist, StoreError>;
-    /// Replaces the denylist.
     fn write_denylist(&self, denylist: &Denylist) -> Result<(), StoreError>;
-    /// The last check; [`LastCheck::default`] when none ran.
     fn read_last_check(&self) -> Result<LastCheck, StoreError>;
-    /// Records a check.
     fn write_last_check(&self, check: &LastCheck) -> Result<(), StoreError>;
-    /// The unacknowledged health failure, if any.
     fn read_health_failure(&self) -> Result<Option<HealthFailureRecord>, StoreError>;
-    /// Forgets the health failure (`AcknowledgeHealthFailure`, or a green boot).
     fn clear_health_failure(&self) -> Result<(), StoreError>;
 }
 
-/// The state files in one directory, normally [`DEFAULT_STATE_DIR`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateDir {
     root: PathBuf,
@@ -348,17 +265,14 @@ impl Default for StateDir {
 }
 
 impl StateDir {
-    /// The state files in `root`.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
-    /// The directory.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// The path of one state file in the directory.
     pub fn file(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
@@ -402,34 +316,26 @@ impl StateStore for StateDir {
     }
 }
 
-/// Everything a [`MemoryStore`] holds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemoryState {
-    /// `intent.json`.
     pub intent: Option<Intent>,
-    /// `denylist.json`.
     pub denylist: Denylist,
-    /// `last-check.json`.
     pub last_check: LastCheck,
-    /// `health-failure.json`.
     pub health_failure: Option<HealthFailureRecord>,
 }
 
-/// An in-memory [`StateStore`] for tests of code that uses the store.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
     state: Mutex<MemoryState>,
 }
 
 impl MemoryStore {
-    /// A store holding `state`.
     pub fn new(state: MemoryState) -> Self {
         Self {
             state: Mutex::new(state),
         }
     }
 
-    /// A copy of the current contents.
     pub fn snapshot(&self) -> MemoryState {
         self.with(|s| s.clone())
     }
@@ -541,7 +447,6 @@ mod tests {
         );
     }
 
-    /// Pre-creates the next `n` temporary names this process would try.
     fn occupy_next_temp_names(dir: &Path, name: &str, n: u64) {
         let pid = std::process::id();
         let next = TEMP_COUNTER.load(Ordering::Relaxed);
@@ -550,7 +455,7 @@ mod tests {
         }
     }
 
-    /// The only unit test that writes files, so nothing else moves `TEMP_COUNTER`.
+    // The only unit test that writes files, so nothing else moves `TEMP_COUNTER`.
     #[test]
     fn temporary_name_collisions_retry_then_give_up() {
         let tmp = tempfile::tempdir().expect("tempdir");

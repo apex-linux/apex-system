@@ -1,63 +1,36 @@
-//! The deployment dictionaries (`a{sv}`) of the `Booted`, `Staged`, `Rollback` and
-//! `Available` properties.
-
 use std::{collections::HashMap, hash::BuildHasher};
 
 use zbus::zvariant::{Optional, OwnedValue, Signature, Str, Type, Value};
 
 use crate::values::ValueError;
 
-/// A deployment as carried by the `Booted`, `Staged`, `Rollback` and `Available` properties.
-///
-/// Every key of the dictionary is optional, so every field is an `Option`: `None` means the key
-/// is absent, which keeps `pinned: Some(false)` distinct from "not reported". An empty
-/// dictionary (the [`Default`] value) means "no such deployment"; see
-/// [`Deployment::is_empty`].
-///
-/// Conversions to and from the `a{sv}` map are lossless for every dictionary the contract
-/// allows (known keys with their contract types). Keys the contract does not define are ignored
-/// when reading, so a newer daemon can add keys without breaking older clients; a known key
-/// with the wrong D-Bus type is an error.
+/// The empty dictionary means "no such deployment". Unknown keys are ignored, so a newer
+/// daemon can add keys; a known key of the wrong D-Bus type is an error.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Deployment {
-    /// `"image"` (`s`): image reference, e.g. `"ghcr.io/sekirokenjii/apex:45"`.
     pub image: Option<String>,
-    /// `"digest"` (`s`): manifest digest, `"sha256:…"`.
     pub digest: Option<String>,
-    /// `"version"` (`s`): `org.opencontainers.image.version`, e.g. `"45.20260924.1"`.
     pub version: Option<String>,
-    /// `"timestamp"` (`t`): build time, seconds since the Unix epoch.
+    /// Build time, Unix seconds.
     pub timestamp: Option<u64>,
-    /// `"pinned"` (`b`): the deployment is pinned.
     pub pinned: Option<bool>,
-    /// `"download-only"` (`b`, staged only): the stage is locked and will not be booted.
+    /// Staged only: the stage is locked and will not boot.
     pub download_only: Option<bool>,
-    /// `"degraded"` (`as`): components shipped in degraded form (`"audio"`, `"fingerprint"`,
-    /// …), read from the deployment's `/usr/share/apex/manifest.json` (the same values as
-    /// the `io.github.sekirokenjii.apex.degraded` label); absent for `Available`.
+    /// From the deployment's own manifest, so absent for `Available`.
     pub degraded: Option<Vec<String>>,
 }
 
-/// The `a{sv}` signature, taken from the map type so it cannot be misspelled.
 const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedValue> as Type>::SIGNATURE;
 
 impl Deployment {
-    /// Key of [`Deployment::image`].
     pub const IMAGE: &'static str = "image";
-    /// Key of [`Deployment::digest`].
     pub const DIGEST: &'static str = "digest";
-    /// Key of [`Deployment::version`].
     pub const VERSION: &'static str = "version";
-    /// Key of [`Deployment::timestamp`].
     pub const TIMESTAMP: &'static str = "timestamp";
-    /// Key of [`Deployment::pinned`].
     pub const PINNED: &'static str = "pinned";
-    /// Key of [`Deployment::download_only`].
     pub const DOWNLOAD_ONLY: &'static str = "download-only";
-    /// Key of [`Deployment::degraded`].
     pub const DEGRADED: &'static str = "degraded";
 
-    /// Every key with the D-Bus signature of its value, in contract order.
     pub const KEYS: [(&'static str, &'static Signature); 7] = [
         (Self::IMAGE, <String as Type>::SIGNATURE),
         (Self::DIGEST, <String as Type>::SIGNATURE),
@@ -68,19 +41,15 @@ impl Deployment {
         (Self::DEGRADED, <Vec<String> as Type>::SIGNATURE),
     ];
 
-    /// `true` for the empty dictionary, which the contract uses for "no such deployment".
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 
-    /// `None` for the empty dictionary ("no such deployment"), `Some(self)` otherwise.
     pub fn into_option(self) -> Option<Self> {
         (!self.is_empty()).then_some(self)
     }
 
-    /// Reads a deployment from dictionary entries, ignoring keys the contract does not define.
-    ///
-    /// `entries` yields each key with its value already unwrapped from the variant.
+    /// Each value arrives already unwrapped from its variant.
     fn from_entries<'v>(
         entries: impl IntoIterator<Item = (&'v str, &'v Value<'v>)>,
     ) -> Result<Self, ValueError> {
@@ -143,8 +112,7 @@ fn string_array(key: &str, value: &Value<'_>) -> Result<Vec<String>, ValueError>
     let Value::Array(array) = value else {
         return Err(ValueError::wrong_type(field(key), expected, value));
     };
-    // An array's elements all have its element signature, so checking the array's signature
-    // up front makes the per-element match below total for well-formed values.
+    // Every element has the array's element signature, so this makes the match below total.
     if array.signature() != expected {
         return Err(ValueError::wrong_type(field(key), expected, value));
     }
@@ -157,11 +125,8 @@ fn string_array(key: &str, value: &Value<'_>) -> Result<Vec<String>, ValueError>
         .collect()
 }
 
-/// An owned `as` value without a fallible conversion.
-///
-/// zvariant only offers `OwnedValue::try_from(Value)` for arrays (it can fail when duplicating
-/// file descriptors, which a string array never holds); its infallible
-/// `From<Optional<V>> for OwnedValue` covers `Vec<String>`, so go through that.
+/// zvariant converts arrays only fallibly (duplicating file descriptors can fail), but its
+/// infallible `From<Optional<V>> for OwnedValue` covers `Vec<String>`.
 fn owned_string_array(items: Vec<String>) -> OwnedValue {
     OwnedValue::from(Optional::from(Some(items)))
 }
@@ -222,7 +187,7 @@ impl TryFrom<&Value<'_>> for Deployment {
             other => return Err(ValueError::wrong_type("Deployment", DICT_SIGNATURE, other)),
         };
         let entries = dict.iter().map(|(key, value)| {
-            // Keys of an a{sv} dict are strings; values are variants wrapping the real value.
+            // In an a{sv} dict each value is a variant wrapping the real value.
             let key = match key {
                 Value::Str(text) => text.as_str(),
                 _ => "",
@@ -281,7 +246,7 @@ mod tests {
         }
     }
 
-    /// Any text D-Bus can carry (D-Bus strings cannot contain NUL).
+    /// D-Bus strings cannot contain NUL.
     const TEXT: &str = "[^\\x00]{0,40}";
 
     fn deployments() -> impl Strategy<Value = Deployment> {
@@ -422,14 +387,12 @@ mod tests {
     }
 
     proptest! {
-        /// Deployment → a{sv} map → Deployment is the identity.
         #[test]
         fn map_round_trip(deployment in deployments()) {
             let map = HashMap::<String, OwnedValue>::from(deployment.clone());
             prop_assert_eq!(Deployment::try_from(map), Ok(deployment));
         }
 
-        /// A contract-conformant map → Deployment → map is the identity.
         #[test]
         fn map_is_preserved(deployment in deployments()) {
             let map = HashMap::<String, OwnedValue>::from(deployment);
@@ -437,7 +400,7 @@ mod tests {
             prop_assert_eq!(again, map);
         }
 
-        /// The property path: Deployment → Value (daemon) → OwnedValue → Deployment (proxy).
+        /// As the daemon's property getter produces it and the proxy's reads it.
         #[test]
         fn property_value_round_trip(deployment in deployments()) {
             let value = Value::from(deployment.clone());
@@ -448,7 +411,6 @@ mod tests {
             prop_assert_eq!(Deployment::try_from(direct), Ok(deployment));
         }
 
-        /// The wire path: D-Bus encoding of the a{sv} property value and back.
         #[test]
         fn dbus_encoding_round_trip(deployment in deployments()) {
             let ctxt = zbus::zvariant::serialized::Context::new_dbus(zbus::zvariant::LE, 0);

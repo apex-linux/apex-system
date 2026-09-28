@@ -1,12 +1,3 @@
-//! Shared support for the integration tests.
-//!
-//! - [`MockDaemon`]: the Update1 interface served with `#[zbus::interface]` and this crate's own
-//!   types. It is the server-side declaration the tests compare with the contract XML (through
-//!   zbus's generated introspection) and the peer the proxy talks to. It doubles as a template
-//!   for `apex-updated`.
-//! - [`interface_description`] and [`diff`]: a normalized view of an introspected interface,
-//!   so two XML documents can be compared member by member.
-
 #![allow(
     dead_code,
     reason = "each test binary uses a different part of this module"
@@ -25,20 +16,16 @@ use zbus::{
     object_server::SignalEmitter,
 };
 
-/// The digest the mock reports as staged; `Apply` succeeds only with it.
 pub(crate) const STAGED_DIGEST: &str =
     "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef";
 
-/// One call the mock received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Call {
-    /// D-Bus member name.
     pub(crate) member: String,
-    /// Whether the caller set `ALLOW_INTERACTIVE_AUTHORIZATION`.
+    /// The caller set `ALLOW_INTERACTIVE_AUTHORIZATION`.
     pub(crate) interactive: bool,
 }
 
-/// What the mock saw, shared with the test.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Log {
     calls: Arc<Mutex<Vec<Call>>>,
@@ -46,7 +33,6 @@ pub(crate) struct Log {
 }
 
 impl Log {
-    /// Method calls, in arrival order.
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.calls
             .lock()
@@ -54,7 +40,6 @@ impl Log {
             .clone()
     }
 
-    /// Property reads, in arrival order.
     pub(crate) fn properties(&self) -> Vec<String> {
         self.properties
             .lock()
@@ -85,7 +70,6 @@ impl Log {
     }
 }
 
-/// A fully populated deployment, as the mock reports for `Booted`.
 pub(crate) fn booted() -> Deployment {
     Deployment {
         image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
@@ -100,7 +84,6 @@ pub(crate) fn booted() -> Deployment {
     }
 }
 
-/// The staged deployment the mock reports.
 pub(crate) fn staged() -> Deployment {
     Deployment {
         image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
@@ -113,8 +96,6 @@ pub(crate) fn staged() -> Deployment {
     }
 }
 
-/// The package changes the mock reports, sorted by `(name, arch)` as the contract requires:
-/// an added and a removed package (empty EVRs) and a multilib upgrade (one entry per arch).
 pub(crate) fn changes() -> Vec<Change> {
     let change = |name: &str, arch: &str, kind: ChangeKind, from: &str, to: &str| {
         (
@@ -145,7 +126,6 @@ pub(crate) fn changes() -> Vec<Change> {
     ]
 }
 
-/// The error the mock returns for `Apply("error:<what>")`.
 fn scripted_error(what: &str) -> ApexError {
     match what {
         // A daemon that forgets `into_contract` leaks a non-contract error name.
@@ -161,7 +141,6 @@ fn scripted_error(what: &str) -> ApexError {
     }
 }
 
-/// An in-memory Update1 service.
 #[derive(Debug)]
 pub(crate) struct MockDaemon {
     log: Log,
@@ -169,7 +148,6 @@ pub(crate) struct MockDaemon {
 }
 
 impl MockDaemon {
-    /// A mock in [`State::Staged`] recording into `log`.
     pub(crate) fn new(log: Log) -> Self {
         Self {
             log,
@@ -178,9 +156,7 @@ impl MockDaemon {
     }
 }
 
-// The method and argument names below are the contract's: zbus derives the D-Bus names from
-// them, and the introspection test compares the result with the XML. Handlers are synchronous
-// except `check`, which awaits its change signal; zbus accepts both.
+// zbus derives the D-Bus member and argument names from these Rust names.
 #[allow(
     clippy::needless_pass_by_value,
     clippy::unnecessary_wraps,
@@ -192,7 +168,6 @@ impl MockDaemon {
         self.log.call(&header);
     }
 
-    /// Moves to `available` and announces it, like a real check that finds an update.
     async fn check(
         &mut self,
         #[zbus(header)] header: Header<'_>,
@@ -261,8 +236,8 @@ impl MockDaemon {
         Ok(changes())
     }
 
-    /// A daemon takes the raw string and answers `InvalidArgument` itself, rather than letting
-    /// zbus reject a typed argument with a generic `org.freedesktop.DBus.Error.InvalidArgs`.
+    /// Takes a raw string: zbus would reject a typed argument with a generic
+    /// `org.freedesktop.DBus.Error.InvalidArgs` instead of the contract's `InvalidArgument`.
     fn switch_channel(
         &self,
         channel: &str,
@@ -387,9 +362,7 @@ impl MockDaemon {
     }
 }
 
-/// A normalized, order-independent description of the `INTERFACE` interface in an
-/// introspection document: one entry per member, e.g.
-/// `"method Download" => "in override_soft_gates b"`.
+/// One entry per member, e.g. `"method Download" => "in override_soft_gates b"`.
 pub(crate) fn interface_description(xml: &str) -> BTreeMap<String, String> {
     let node = zbus_xml::Node::try_from(xml).expect("introspection XML parses");
     let interface = node
@@ -453,7 +426,6 @@ pub(crate) fn interface_description(xml: &str) -> BTreeMap<String, String> {
     description
 }
 
-/// Human-readable differences between two interface descriptions (empty when equal).
 pub(crate) fn diff(
     expected: &BTreeMap<String, String>,
     actual: &BTreeMap<String, String>,

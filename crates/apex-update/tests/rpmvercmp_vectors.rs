@@ -1,10 +1,5 @@
-//! rpm's own version comparison test vectors, and a cross-check of the port against an
-//! independent model of the same rules.
-//!
-//! The vectors are copied from `tests/rpmvercmp.at` of rpm-software-management/rpm at tag
-//! `rpm-6.1.0-release` (GPL-2.0-or-later), in file order. The file's commented-out
-//! "oddities" block documents current behaviour; it is checked here too, so an
-//! accidental "fix" in the port is caught.
+//! The vectors are copied in file order from rpm `tests/rpmvercmp.at` at `rpm-6.1.0-release`
+//! (GPL-2.0-or-later), with its commented-out oddities block.
 
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
@@ -13,7 +8,6 @@ use std::cmp::Ordering;
 use apex_update::rpmvercmp;
 use proptest::prelude::*;
 
-/// `RPMVERCMP(a, b, expected)` lines from `tests/rpmvercmp.at`.
 const RPM_VECTORS: &[(&str, &str, i8)] = &[
     ("1.0", "1.0", 0),
     ("1.0", "2.0", -1),
@@ -77,7 +71,6 @@ const RPM_VECTORS: &[(&str, &str, i8)] = &[
     ("_+", "_+", 0),
     ("+", "_", 0),
     ("_", "+", 0),
-    // Basic testcases for tilde sorting
     ("1.0~rc1", "1.0~rc1", 0),
     ("1.0~rc1", "1.0", -1),
     ("1.0", "1.0~rc1", 1),
@@ -86,7 +79,6 @@ const RPM_VECTORS: &[(&str, &str, i8)] = &[
     ("1.0~rc1~git123", "1.0~rc1~git123", 0),
     ("1.0~rc1~git123", "1.0~rc1", -1),
     ("1.0~rc1", "1.0~rc1~git123", 1),
-    // Basic testcases for caret sorting
     ("1.0^", "1.0^", 0),
     ("1.0^", "1.0", 1),
     ("1.0", "1.0^", -1),
@@ -103,7 +95,6 @@ const RPM_VECTORS: &[(&str, &str, i8)] = &[
     ("1.0^20160101^git1", "1.0^20160101^git1", 0),
     ("1.0^20160102", "1.0^20160101^git1", 1),
     ("1.0^20160101^git1", "1.0^20160102", -1),
-    // Basic testcases for tilde and caret sorting
     ("1.0~rc1^git1", "1.0~rc1^git1", 0),
     ("1.0~rc1^git1", "1.0~rc1", 1),
     ("1.0~rc1", "1.0~rc1^git1", -1),
@@ -112,8 +103,6 @@ const RPM_VECTORS: &[(&str, &str, i8)] = &[
     ("1.0^git1~pre", "1.0^git1", -1),
 ];
 
-/// The "RPM version comparison oddities" block (commented out with `dnl` upstream,
-/// documenting current behaviour).
 const RPM_ODDITIES: &[(&str, &str, i8)] = &[
     // RhBug:811992 case
     ("1b.fc17", "1b.fc17", 0),
@@ -122,7 +111,7 @@ const RPM_ODDITIES: &[(&str, &str, i8)] = &[
     ("1g.fc17", "1g.fc17", 0),
     ("1g.fc17", "1.fc17", 1),
     ("1.fc17", "1g.fc17", -1),
-    // Non-ascii characters are considered equal so these are all the same, eh...
+    // Every non-ASCII character is a separator.
     ("1.1.α", "1.1.α", 0),
     ("1.1.α", "1.1.β", 0),
     ("1.1.β", "1.1.α", 0),
@@ -154,8 +143,6 @@ fn rpm_documented_oddities() {
     }
 }
 
-/// An independent model: split into tokens, then compare lexicographically with the
-/// token order `~` < end < `^` < letters < digits.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Token {
     Tilde,

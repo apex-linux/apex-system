@@ -1,6 +1,3 @@
-//! Real-process tests of the runner: timeouts, cancellation, process-group kills, fd 3,
-//! output caps and the exact environment. They run `/bin/sh` and coreutils.
-
 use std::os::unix::fs::PermissionsExt as _;
 use std::time::Instant as StdInstant;
 
@@ -21,7 +18,6 @@ fn contract_env() -> Vec<(OsString, OsString)> {
         .collect()
 }
 
-/// `/bin/sh -c <script> sh <args…>`.
 fn sh(script: &str, positional: &[&str]) -> ProcessSpec {
     let mut args: Vec<OsString> = vec!["-c".into(), script.into(), "sh".into()];
     args.extend(positional.iter().map(OsString::from));
@@ -36,14 +32,14 @@ fn sh(script: &str, positional: &[&str]) -> ProcessSpec {
     }
 }
 
-/// State letter from `/proc/<pid>/stat` (the field after the parenthesised name).
+/// The state letter follows the parenthesised command name in `/proc/<pid>/stat`.
 fn proc_state(pid: i32) -> Option<char> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let after_name = &stat[stat.rfind(')')? + 1..];
     after_name.trim_start().chars().next()
 }
 
-/// Waits until `pid` is gone or a zombie (dead, not yet reaped by its new parent).
+/// A zombie is dead too: only its new parent has not reaped it yet.
 fn assert_dies(pid: i32) {
     let start = StdInstant::now();
     while start.elapsed() < Duration::from_secs(5) {
@@ -180,7 +176,6 @@ async fn term_ignoring_group_is_killed_after_the_grace_period() {
 async fn stragglers_die_even_when_the_leader_exits_on_sigterm() {
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("pid");
-    // The shell dies on SIGTERM; the subshell's sleep ignores it and must get SIGKILL.
     let spec = ProcessSpec {
         timeout: Duration::from_secs(1),
         ..sh(
@@ -296,8 +291,7 @@ async fn progress_is_read_from_fd_3() {
 
 #[tokio::test]
 async fn a_full_or_closed_sink_never_blocks_bootc() {
-    // 20 000 lines is far more than a pipe buffer holds: bootc would block if we
-    // stopped draining when the channel is full.
+    // Far more than a pipe buffer holds, so bootc would block if draining stopped.
     let script = r#"i=0; while [ $i -lt 20000 ]; do printf '%s\n' "$1" >&3; i=$((i+1)); done"#;
     let spec = ProcessSpec {
         progress_fd: true,
@@ -318,7 +312,6 @@ async fn a_full_or_closed_sink_never_blocks_bootc() {
     assert!(out.exit.success());
 }
 
-/// A stand-in bootc that answers the contract's argv.
 const FAKE_BOOTC: &str = r#"#!/bin/sh
 case "$*" in
   "status --format=json --format-version=1")
@@ -349,8 +342,8 @@ fn install_fake_bootc(dir: &Path) -> PathBuf {
     let path = dir.join("bootc");
     std::fs::write(&path, FAKE_BOOTC).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // Another test forking concurrently can briefly hold our write descriptor (until its
-    // child execs), making exec fail with ETXTBSY. Wait until the script is runnable.
+    // A test forking concurrently can hold our write descriptor until its child execs,
+    // making exec fail with ETXTBSY.
     for _ in 0..200 {
         match std::process::Command::new(&path).output() {
             Err(e) if e.raw_os_error() == Some(Errno::ETXTBSY as i32) => {
@@ -380,7 +373,6 @@ async fn tokio_runner_end_to_end() {
         Some("45.20260924.117")
     );
 
-    // --progress-fd rejected by this "bootc": the download falls back to no progress.
     let (tx, _rx) = mpsc::channel(8);
     bootc.download(Some(tx), &cancel).await.unwrap();
 
@@ -403,7 +395,6 @@ async fn timeout_while_another_process_holds_the_lock_is_busy() {
     let lock_path = dir.path().join("lock");
     let runner = TokioRunner::for_test(&program, &lock_path, Some(Duration::from_millis(200)));
 
-    // `rollback` sleeps in the fake: no lock held → plain timeout.
     let err = runner
         .run(Invocation::new(BootcCommand::Rollback))
         .await

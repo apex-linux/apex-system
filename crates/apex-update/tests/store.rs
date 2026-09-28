@@ -1,5 +1,3 @@
-//! The state files on a real filesystem: defaults, corruption, atomic writes, formats.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use std::fs;
@@ -292,13 +290,9 @@ fn many_writes_leave_exactly_one_file() {
     assert_eq!(entries(tmp.path()), [LAST_CHECK_FILE]);
 }
 
-/// A pid that cannot belong to a running process: above Linux's largest `pid_max`
-/// (2^22).
+/// Above Linux's largest `pid_max` (2^22), so no running process has it.
 const DEAD_PID: u32 = 4_194_305;
 
-/// A power cut between creating and renaming the temporary file leaves it behind. The
-/// next write of the same file removes it, but not the temporary files of a writer that
-/// is still running, of other state files, or anything else.
 #[test]
 fn a_write_removes_temporary_files_left_by_dead_writers() {
     let (tmp, dir) = state_dir();
@@ -339,16 +333,13 @@ fn a_write_removes_temporary_files_left_by_dead_writers() {
     assert_eq!(remove_stale_temp_files(&tmp.path().join(INTENT_FILE)), 0);
 }
 
-/// Makes the directory writable and searchable but not readable: creating and renaming
-/// files works, opening the directory to flush it does not. Returns `false` when the
-/// test runs with privileges that ignore the mode (root).
+/// Files can still be created and renamed, but the directory cannot be opened to flush it.
+/// `false` when the privileges ignore the mode (root).
 fn make_write_only(dir: &Path) -> bool {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o300)).expect("chmod");
     fs::File::open(dir).is_err()
 }
 
-/// The rename succeeded and only the directory flush failed: the caller must be able to
-/// tell that the new content is in place. The same for a removal.
 #[test]
 fn a_failed_directory_flush_after_the_rename_is_not_a_failed_write() {
     let (tmp, dir) = state_dir();

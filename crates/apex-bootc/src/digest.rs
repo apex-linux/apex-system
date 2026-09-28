@@ -1,57 +1,42 @@
-//! Validated OCI manifest digests.
-
 use std::fmt;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// A manifest digest of the form `sha256:` followed by exactly 64 **lowercase** hex digits.
-///
-/// Lowercase only, as the OCI image spec requires for sha256. Accepting uppercase would
-/// give one image two spellings, and digests are compared for equality everywhere
-/// (staged vs. expected, denylist membership).
+/// Lowercase hex only, as the OCI image spec requires: digests are compared for equality
+/// everywhere (staged against expected, denylist), so one image must have one spelling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Digest(String);
 
-/// Why a string is not a [`Digest`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DigestError {
-    /// The string does not start with `sha256:`.
     #[error("digest must start with \"sha256:\"")]
     MissingPrefix,
-    /// The hex part does not have 64 characters.
     #[error("digest must have 64 hex digits after \"sha256:\", found {0} characters")]
     Length(usize),
-    /// The hex part contains something other than `0-9a-f`.
     #[error("digest must contain only lowercase hex digits after \"sha256:\"")]
     NotLowercaseHex,
 }
 
 impl Digest {
-    /// The only algorithm prefix accepted.
     pub const PREFIX: &'static str = "sha256:";
-    /// Number of hex digits after the prefix.
     pub const HEX_LEN: usize = 64;
 
-    /// Validates `s` as a sha256 digest.
     pub fn parse(s: &str) -> Result<Self, DigestError> {
         validate(s)?;
         Ok(Self(s.to_owned()))
     }
 
-    /// The full digest, `sha256:…`.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The 64 hex digits without the algorithm prefix.
     pub fn hex(&self) -> &str {
         &self.0[Self::PREFIX.len()..]
     }
 }
 
-/// Validation shared by [`Digest::parse`] and the `const` image reference checks.
 pub(crate) const fn validate(s: &str) -> Result<(), DigestError> {
     let bytes = s.as_bytes();
     let prefix = Digest::PREFIX.as_bytes();

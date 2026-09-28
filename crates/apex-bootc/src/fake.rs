@@ -1,27 +1,3 @@
-//! [`FakeRunner`]: a scripted [`CommandRunner`] for tests (cargo feature `testing`).
-//!
-//! Queue the commands you expect, each with what "bootc" does: progress lines, delays,
-//! and either an exit (status, stdout, stderr) or a runner error. Delays use
-//! `tokio::time`, so tests can run on paused time; they honour cancellation and the
-//! command's timeout just like [`crate::TokioRunner`]. Progress lines go through the
-//! real decoder, one per run as in [`crate::TokioRunner`], so scripts use bootc's actual
-//! JSON and get the same [`crate::Progress::overall`] values.
-//!
-//! ```
-//! # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-//! use apex_bootc::{Bootc, BootcCommand, CancelToken, FakeRunner, Scripted};
-//!
-//! let fake = FakeRunner::new();
-//! fake.push(Scripted::new(BootcCommand::UpgradeCheck).stdout("No changes in: x\n"));
-//! let bootc = Bootc::new(&fake);
-//! assert_eq!(
-//!     bootc.check(&CancelToken::new()).await.unwrap(),
-//!     apex_bootc::CheckOutcome::UpToDate
-//! );
-//! fake.assert_finished();
-//! # });
-//! ```
-
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -33,12 +9,10 @@ use crate::error::{BootcError, ExitState};
 use crate::progress::ProgressDecoder;
 use crate::runner::{CommandOutput, CommandRunner, Invocation, forward};
 
-/// One expected command and its scripted behaviour.
 #[derive(Debug)]
 pub struct Scripted {
     expect: BootcCommand,
     steps: Vec<Step>,
-    /// The exit returned unless `error` is set.
     output: CommandOutput,
     error: Option<BootcError>,
 }
@@ -50,7 +24,7 @@ enum Step {
 }
 
 impl Scripted {
-    /// Expects `command`; by default it exits 0 with empty output at once.
+    /// By default the command exits 0 at once with empty output.
     pub fn new(expect: BootcCommand) -> Self {
         Self {
             expect,
@@ -60,57 +34,51 @@ impl Scripted {
         }
     }
 
-    /// Sets stdout (and makes the result an exit if it was an error).
+    /// Replaces a scripted error with an exit.
     #[must_use]
     pub fn stdout(mut self, stdout: impl Into<Vec<u8>>) -> Self {
         self.exit_output().stdout = stdout.into();
         self
     }
 
-    /// Sets stderr (and makes the result an exit if it was an error).
+    /// Replaces a scripted error with an exit.
     #[must_use]
     pub fn stderr(mut self, stderr: impl Into<Vec<u8>>) -> Self {
         self.exit_output().stderr = stderr.into();
         self
     }
 
-    /// Sets the exit status code.
     #[must_use]
     pub fn exit_code(mut self, code: i32) -> Self {
         self.exit_output().exit = ExitState::Code(code);
         self
     }
 
-    /// Makes bootc die from `signal`.
     #[must_use]
     pub fn killed_by(mut self, signal: i32) -> Self {
         self.exit_output().exit = ExitState::Signal(signal);
         self
     }
 
-    /// Makes the runner fail with `error` instead of returning an exit.
     #[must_use]
     pub fn error(mut self, error: BootcError) -> Self {
         self.error = Some(error);
         self
     }
 
-    /// Waits `delay` (tokio time) at this point of the script.
     #[must_use]
     pub fn delay(mut self, delay: Duration) -> Self {
         self.steps.push(Step::Sleep(delay));
         self
     }
 
-    /// Writes one raw line to the progress fd at this point of the script. Only
-    /// delivered for commands that use the progress fd, as with real bootc.
+    /// Delivered only to commands that use the progress fd, as with real bootc.
     #[must_use]
     pub fn progress_line(mut self, line: impl Into<String>) -> Self {
         self.steps.push(Step::ProgressLine(line.into()));
         self
     }
 
-    /// Writes a bootc `ProgressBytes` event for a layer download at this point.
     #[must_use]
     pub fn progress_bytes(self, done: u64, total: u64) -> Self {
         self.progress_line(format!(
@@ -131,55 +99,57 @@ struct FakeState {
     unexpected: Vec<String>,
 }
 
-/// A [`CommandRunner`] that replays [`Scripted`] commands in order.
+/// Replays [`Scripted`] commands in order. A run that does not match the head of the queue
+/// consumes nothing, fails, and is reported by [`FakeRunner::assert_finished`].
 ///
-/// A command that does not match the head of the queue is not consumed: the run fails
-/// with [`BootcError::Other`] and the mismatch is recorded for
-/// [`FakeRunner::assert_finished`].
+/// ```
+/// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+/// use apex_bootc::{Bootc, BootcCommand, CancelToken, FakeRunner, Scripted};
+///
+/// let fake = FakeRunner::new();
+/// fake.push(Scripted::new(BootcCommand::UpgradeCheck).stdout("No changes in: x\n"));
+/// let bootc = Bootc::new(&fake);
+/// assert_eq!(
+///     bootc.check(&CancelToken::new()).await.unwrap(),
+///     apex_bootc::CheckOutcome::UpToDate
+/// );
+/// fake.assert_finished();
+/// # });
+/// ```
 #[derive(Debug, Default)]
 pub struct FakeRunner {
     state: Mutex<FakeState>,
 }
 
 impl FakeRunner {
-    /// An empty script.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Appends an expected command.
     pub fn push(&self, scripted: Scripted) -> &Self {
         self.lock().script.push_back(scripted);
         self
     }
 
-    /// Builder form of [`FakeRunner::push`].
     #[must_use]
     pub fn with(self, scripted: Scripted) -> Self {
         self.push(scripted);
         self
     }
 
-    /// Commands run so far that matched the script, in order.
+    /// Only the runs that matched the script.
     pub fn calls(&self) -> Vec<BootcCommand> {
         self.lock().calls.clone()
     }
 
-    /// Expected commands not run yet.
     pub fn remaining(&self) -> usize {
         self.lock().script.len()
     }
 
-    /// Descriptions of runs that did not match the script.
     pub fn unexpected(&self) -> Vec<String> {
         self.lock().unexpected.clone()
     }
 
-    /// Checks that every expected command ran and nothing unexpected did.
-    ///
-    /// # Panics
-    ///
-    /// Panics with a description of the difference; meant for tests.
     #[track_caller]
     pub fn assert_finished(&self) {
         let state = self.lock();
@@ -196,8 +166,7 @@ impl FakeRunner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Takes the head of the script if it matches `command`.
-    fn next(&self, command: &BootcCommand) -> Result<Scripted, String> {
+    fn pop_if_expected(&self, command: &BootcCommand) -> Result<Scripted, String> {
         let mut state = self.lock();
         let Some(head) = state.script.pop_front() else {
             let msg = format!("unexpected {command:?}: script is empty");
@@ -223,11 +192,13 @@ impl CommandRunner for FakeRunner {
             cancel,
         } = invocation;
         let kind = command.kind();
-        let scripted = self.next(&command).map_err(|detail| BootcError::Other {
-            command: kind,
-            exit: ExitState::Code(-1),
-            detail: format!("FakeRunner: {detail}"),
-        })?;
+        let scripted = self
+            .pop_if_expected(&command)
+            .map_err(|detail| BootcError::Other {
+                command: kind,
+                exit: ExitState::Code(-1),
+                detail: format!("FakeRunner: {detail}"),
+            })?;
         if cancel.is_cancelled() {
             return Err(BootcError::Cancelled { command: kind });
         }

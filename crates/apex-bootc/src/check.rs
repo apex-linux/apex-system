@@ -1,67 +1,20 @@
-//! Result of `bootc upgrade --check`.
-//!
-//! bootc exits 0 whether or not an update exists and reports the result on stdout
-//! (bootc `crates/lib/src/cli.rs`, `upgrade`, the `opts.check` branch):
-//!
-//! ```text
-//! No changes in: <image reference>
-//! ```
-//!
-//! or
-//!
-//! ```text
-//! Update available for: <image reference>
-//!   Version: <version>          (only when the image has one)
-//!   Digest: sha256:<hex>
-//! <manifest diff>
-//! ```
-//!
-//! # What bootc compares
-//!
-//! The manifest the channel tag points at now is compared with the image **last pulled**
-//! for that image reference (ostree-ext `ImageImporter::prepare_internal`, which reads the
-//! reference's ostree ref through `try_query_image`), not with the booted or the staged
-//! deployment. The last pulled image is usually the staged one, or the booted one when
-//! nothing was pulled since it was staged. It can also be a download-only stage that a
-//! reboot dropped and that no deployment uses any more.
-//!
-//! # Where the result is
-//!
-//! The digest printed after `Update available for:` is the primary source. bootc also
-//! stores the manifest and config it found as detached metadata on the last pulled
-//! image's commit (ostree-ext `cache_pending`), and `bootc status` shows it as that
-//! deployment's `cachedUpdate`. That copy is written only when an update is found, is
-//! not cleared by later checks or downloads, and lives on whichever commit the ref
-//! pointed at, so it is often stale or missing. Use it only for the metadata of a digest learned here
-//! ([`crate::Host::cached_update_for`]), never as the remote image itself.
-
 use crate::digest::Digest;
 
-/// What `bootc upgrade --check` found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckOutcome {
-    /// `No changes in:` the channel tag's image is already in the local ostree
-    /// repository, because it is the image last pulled for this reference: normally the
-    /// booted or staged image, but possibly a download-only stage that a reboot dropped.
-    ///
-    /// bootc prints no digest here, and nothing in `bootc status` says which image that
-    /// was. The caller has to remember the digest of its last successful check or
-    /// download; without that record the remote image is unknown.
+    /// The tag's image is the one last pulled for this reference (maybe a stage a reboot
+    /// dropped). No digest is printed: the caller must remember its last check or download.
     UpToDate,
-    /// `Update available for:` the tag's image differs from the one last pulled for this
-    /// reference. It is not necessarily new to this host (the tag may have moved back to
-    /// the booted image), so compare the digest with the booted and staged digests.
+    /// The tag's image differs from the one last pulled, not necessarily from the booted or
+    /// staged one: compare the digest with theirs.
     Available {
-        /// Its version, if the image carries one.
         version: Option<String>,
-        /// Its manifest digest, if it was printed in the canonical form.
         digest: Option<Digest>,
     },
-    /// The output matched neither form (a future bootc changed the wording).
     Unknown,
 }
 
-/// Parses the stdout of `bootc upgrade --check`.
+/// bootc exits 0 either way and reports on stdout (bootc `crates/lib/src/cli.rs`, `upgrade`).
 pub fn parse_check_output(stdout: &str) -> CheckOutcome {
     let mut lines = stdout.lines().map(str::trim);
     let Some(first) = lines.by_ref().find(|l| !l.is_empty()) else {
@@ -77,8 +30,6 @@ pub fn parse_check_output(stdout: &str) -> CheckOutcome {
     CheckOutcome::Available { version, digest }
 }
 
-/// The first `Version:` and the first well-formed `Digest:` among trimmed `lines`, as
-/// bootc prints them after announcing an image (`upgrade --check` and `deploy::stage`).
 pub(crate) fn version_and_digest<'a>(
     lines: impl Iterator<Item = &'a str>,
 ) -> (Option<String>, Option<Digest>) {

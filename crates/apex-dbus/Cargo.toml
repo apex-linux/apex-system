@@ -11,16 +11,13 @@ publish.workspace = true
 
 [features]
 default = []
-# Also compile zbus's async-io backend. Clients driven by the GLib main loop (the M2 Updates
-# app) enable this: zbus 5.19 then uses async-io for every connection built outside a tokio
-# runtime, so no tokio runtime is needed. See the "Runtime" section of the crate docs.
+# For GLib main-loop clients: zbus 5.19 then uses async-io for connections built outside tokio.
 async-io = ["zbus/async-io"]
 
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
-# The workspace entry selects zbus's tokio backend (default-features = false): zbus 5.19 does not
-# compile without a backend, and daemons/CLIs run on tokio current_thread.
+# The workspace entry selects the tokio backend; zbus 5.19 does not compile without one.
 zbus.workspace = true
 
 [dev-dependencies]

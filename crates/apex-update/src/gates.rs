@@ -1,14 +1,3 @@
-//! Gates: pure checks that decide whether a download or an apply may run now.
-//!
-//! Every gate returns `Ok(())` or a [`Deferral`] naming the gate and a short, plain
-//! English reason that the UI shows as is (`DeferredReason`, or the message of the
-//! `PolicyDenied` D-Bus error). Reasons are full sentences in sentence case and avoid
-//! jargon.
-//!
-//! **Soft** gates ([`Gate::is_soft`]): power and metered network. A user call may
-//! override them (`Download(override_soft_gates = true)`, `apexctl update download
-//! --force`). **Hard** gates: everything else; nothing overrides them.
-
 use std::fmt;
 
 use crate::format::format_size;
@@ -16,55 +5,39 @@ use crate::records::{Denylist, Intent};
 use crate::snapshot::{HostView, Power, RemoteView, SystemSnapshot};
 use crate::version::Version;
 
-/// One mebibyte.
 pub const MIB: u64 = 1024 * 1024;
-/// One gibibyte.
 pub const GIB: u64 = 1024 * MIB;
 
-/// Battery charge needed to download without the charger.
 pub const DOWNLOAD_MIN_BATTERY_PERCENT: u8 = 50;
-/// Battery charge needed to apply without the charger: finalization copies the kernel
-/// and merges `/etc` at shutdown, which must not be cut short by an empty battery.
+/// Finalization copies the kernel and merges `/etc` at shutdown, which an empty battery
+/// must not cut short.
 pub const APPLY_MIN_BATTERY_PERCENT: u8 = 20;
-/// Image size assumed when the uncompressed size is unknown.
 pub const DEFAULT_IMAGE_SIZE: u64 = 8 * GIB;
-/// Free space that must remain on `/sysroot` after a download, and before an apply.
+/// Must stay free on `/sysroot` after a download, and before an apply.
 pub const SYSROOT_MARGIN: u64 = 2 * GIB;
-/// Kernel plus initramfs size assumed when the staged size is unknown.
 pub const DEFAULT_BOOT_PAYLOAD: u64 = 150 * MIB;
-/// `/boot` must have this many times the payload free, as a ratio (1.2 = 6 / 5), so the
-/// check stays in integer arithmetic.
+/// 1.2 as a ratio, so the check stays in integer arithmetic.
 pub const BOOT_SPACE_FACTOR: (u64, u64) = (6, 5);
 
-/// The gates, in the order the combined checks evaluate them.
+/// In the order the combined checks evaluate them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Gate {
-    /// The system state reported by bootc blocks updates (`incompatible`,
-    /// `usrOverlay`, `rollbackQueued`).
     BootcFlags,
-    /// The user applied an update that is waiting for a restart.
     Intent,
-    /// The digest failed its health checks before.
     Denylist,
-    /// The offered version is not newer, or unknown.
     Version,
-    /// Not enough free space on `/sysroot`.
     DiskSpace,
-    /// Not enough free space on `/boot`.
     BootSpace,
-    /// On battery below the threshold. Soft.
     Power,
-    /// On a metered connection. Soft.
     Metered,
 }
 
 impl Gate {
-    /// Whether a user call may override this gate.
+    /// A user call may override a soft gate.
     pub const fn is_soft(self) -> bool {
         matches!(self, Self::Power | Self::Metered)
     }
 
-    /// A stable identifier for logs and JSON output.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BootcFlags => "bootc-flags",
@@ -85,18 +58,15 @@ impl fmt::Display for Gate {
     }
 }
 
-/// Why an operation cannot run now.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
 #[error("{reason}")]
 pub struct Deferral {
-    /// The gate that failed.
     pub gate: Gate,
-    /// What the user sees: a short sentence, in sentence case, without jargon.
+    /// Shown to the user as is: a short sentence, in sentence case, without jargon.
     pub reason: String,
 }
 
 impl Deferral {
-    /// A deferral by `gate` for `reason`.
     pub fn new(gate: Gate, reason: impl Into<String>) -> Self {
         Self {
             gate,
@@ -105,12 +75,9 @@ impl Deferral {
     }
 }
 
-/// The operation a gate is evaluated for; power and space thresholds differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Operation {
-    /// Downloading and staging, locked.
     Download,
-    /// Unlocking a staged update for the next boot.
     Apply,
 }
 
@@ -123,17 +90,12 @@ impl Operation {
     }
 }
 
-/// Who asked for the operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Trigger {
-    /// The daily timer (`Automatic`).
     Automatic,
-    /// A user action (`Download`, `Apply` or `apexctl`).
     User,
 }
 
-/// Power: on AC, or battery at least [`DOWNLOAD_MIN_BATTERY_PERCENT`] to download and
-/// [`APPLY_MIN_BATTERY_PERCENT`] to apply. Not on AC with an unknown charge defers.
 pub fn gate_power(power: Power, op: Operation) -> Result<(), Deferral> {
     if power.on_ac {
         return Ok(());
@@ -156,8 +118,6 @@ pub fn gate_power(power: Power, op: Operation) -> Result<(), Deferral> {
     }
 }
 
-/// Metered network: only a connection known to be metered defers; unknown is treated as
-/// not metered (see [`SystemSnapshot::metered`]).
 pub fn gate_metered(metered: Option<bool>) -> Result<(), Deferral> {
     if metered == Some(true) {
         Err(Deferral::new(
@@ -170,8 +130,6 @@ pub fn gate_metered(metered: Option<bool>) -> Result<(), Deferral> {
     }
 }
 
-/// `/sysroot` space for a download: free space at least the image size (default
-/// [`DEFAULT_IMAGE_SIZE`]) plus [`SYSROOT_MARGIN`].
 pub fn gate_disk_space(sysroot_free: u64, image_size: Option<u64>) -> Result<(), Deferral> {
     let needed = image_size
         .unwrap_or(DEFAULT_IMAGE_SIZE)
@@ -179,8 +137,7 @@ pub fn gate_disk_space(sysroot_free: u64, image_size: Option<u64>) -> Result<(),
     disk_shortfall(sysroot_free, needed, Operation::Download)
 }
 
-/// `/sysroot` headroom for an apply: the image is already on disk, but finalization
-/// still writes the new `/etc` at shutdown, so [`SYSROOT_MARGIN`] must stay free.
+/// The image is on disk already, but finalization still writes the new `/etc` at shutdown.
 pub fn gate_disk_headroom(sysroot_free: u64) -> Result<(), Deferral> {
     disk_shortfall(sysroot_free, SYSROOT_MARGIN, Operation::Apply)
 }
@@ -199,8 +156,6 @@ fn disk_shortfall(free: u64, needed: u64, op: Operation) -> Result<(), Deferral>
     ))
 }
 
-/// `/boot` space: free space at least 1.2 × the kernel plus initramfs (default
-/// [`DEFAULT_BOOT_PAYLOAD`]), rounded up to the byte.
 pub fn gate_boot_space(boot_free: u64, boot_payload: Option<u64>) -> Result<(), Deferral> {
     let payload = u128::from(boot_payload.unwrap_or(DEFAULT_BOOT_PAYLOAD));
     let (num, den) = BOOT_SPACE_FACTOR;
@@ -219,7 +174,6 @@ pub fn gate_boot_space(boot_free: u64, boot_payload: Option<u64>) -> Result<(), 
     ))
 }
 
-/// Denylist: the digest must not have failed its health checks before.
 pub fn gate_denylist(denylist: &Denylist, digest: &str) -> Result<(), Deferral> {
     if denylist.contains(digest) {
         Err(Deferral::new(
@@ -231,13 +185,12 @@ pub fn gate_denylist(denylist: &Denylist, digest: &str) -> Result<(), Deferral> 
     }
 }
 
-/// bootc flags: `incompatible`, `usrOverlay` and `rollbackQueued` each block updates, in
-/// that order of precedence (the same as [`crate::derive_state`]).
+/// Same precedence as [`crate::derive_state`].
 pub fn gate_bootc_flags(host: &HostView) -> Result<(), Deferral> {
     bootc_flags(host.incompatible, host.usr_overlay, host.rollback_queued)
 }
 
-/// [`gate_bootc_flags`] over explicit flags, so a caller can leave one out.
+/// Lets a caller leave a flag out.
 pub(crate) fn bootc_flags(
     incompatible: bool,
     usr_overlay: bool,
@@ -255,16 +208,8 @@ pub(crate) fn bootc_flags(
     Err(Deferral::new(Gate::BootcFlags, reason))
 }
 
-/// Version: the offered image must be newer than the booted one.
-///
-/// When both versions are known, "not newer" (equal or older) defers for every trigger:
-/// the channel tag moved backwards, and a downgrade is only possible through the
-/// separate, admin-authenticated downgrade path.
-///
-/// When either version is missing or invalid, an automatic download defers, because
-/// the engine cannot prove it is an upgrade. A user download is allowed: the image is
-/// only staged (locked), and [`crate::validate_apply`] checks the version again from the
-/// staged image's own manifest before anything can boot it.
+/// A downgrade needs the separate, admin-authenticated path. A user may download an image of
+/// unknown version: it is only staged, and [`crate::validate_apply`] checks its manifest.
 pub fn gate_version(
     booted: Option<&Version>,
     candidate: Option<&Version>,
@@ -291,12 +236,7 @@ pub fn gate_version(
     }
 }
 
-/// Intent: never replace or re-lock what the user applied.
-///
-/// - Automatic operations stop while an intent exists or a staged deployment is
-///   unlocked (set to boot next), even one unlocked outside Apex.
-/// - A user download stops only while a staged deployment is unlocked: staging again
-///   would silently re-lock or replace it. The user cancels it first.
+/// Never replace or re-lock what was applied, even outside Apex.
 pub fn gate_intent(
     intent: Option<&Intent>,
     host: &HostView,
@@ -319,11 +259,8 @@ pub fn gate_intent(
     Err(Deferral::new(Gate::Intent, reason))
 }
 
-/// Every gate for downloading `candidate`, hard gates first so that a deferral the user
-/// could override is only reported when nothing else blocks. With
-/// `override_soft_gates`, power and metered are skipped.
-///
-/// Order: bootc flags, intent, denylist, version, disk space, boot space, power, metered.
+/// Hard gates first, so a deferral the user could override is reported only when nothing
+/// else blocks.
 pub fn check_download_gates(
     snapshot: &SystemSnapshot,
     candidate: &RemoteView,
@@ -341,8 +278,6 @@ pub fn check_download_gates(
     check_download_resources(snapshot, override_soft_gates)
 }
 
-/// The gates that do not depend on the offered image: space, then (unless overridden)
-/// power and metered.
 pub fn check_download_resources(
     snapshot: &SystemSnapshot,
     override_soft_gates: bool,
@@ -503,17 +438,14 @@ mod tests {
             err.reason,
             "The boot partition is too full for this update. It needs 1 byte more free space."
         );
-        // 1.2 × 1 byte rounds up to 2 bytes.
         assert!(gate_boot_space(1, Some(1)).is_err());
         assert!(gate_boot_space(2, Some(1)).is_ok());
-        // No overflow at the top of the range.
         assert!(gate_boot_space(u64::MAX, Some(u64::MAX)).is_err());
         assert!(gate_boot_space(u64::MAX, Some(u64::MAX / 2)).is_ok());
     }
 
     #[test]
     fn boot_space_shortfall_saturates() {
-        // 1.2 × u64::MAX does not fit in a u64; the reported shortfall saturates.
         let err = gate_boot_space(0, Some(u64::MAX)).expect_err("defer");
         assert!(err.reason.contains("18.4 EB"), "{}", err.reason);
     }
@@ -581,7 +513,6 @@ mod tests {
             "The system has local package changes that block updates."
         );
 
-        // finalize_failed is a state, not a gate.
         let finalize = HostView {
             finalize_failed: true,
             ..HostView::default()
@@ -669,9 +600,8 @@ mod tests {
             err.reason,
             "An update is already set to install at the next restart."
         );
-        // An unlocked stage blocks even without an intent (unlocked outside Apex).
-        assert!(gate_intent(None, &staged(false), Trigger::Automatic).is_err());
-        // A locked stage does not.
+        let unlocked_outside_apex = staged(false);
+        assert!(gate_intent(None, &unlocked_outside_apex, Trigger::Automatic).is_err());
         assert_eq!(gate_intent(None, &staged(true), Trigger::Automatic), Ok(()));
     }
 

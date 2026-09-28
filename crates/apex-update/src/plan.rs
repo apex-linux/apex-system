@@ -1,9 +1,3 @@
-//! Decisions: what the automatic run does, and whether a user's download, apply or
-//! discard may run.
-//!
-//! Each function reads only the snapshot (plus, for apply, the version the daemon read
-//! from the staged deployment's own manifest) and performs no I/O.
-
 use crate::gates::{
     Deferral, Gate, Operation, Trigger, bootc_flags, check_download_gates,
     check_download_resources, gate_boot_space, gate_bootc_flags, gate_denylist, gate_disk_headroom,
@@ -12,40 +6,25 @@ use crate::gates::{
 use crate::snapshot::{RemoteView, SystemSnapshot};
 use crate::version::Version;
 
-/// What the automatic run (the systemd timer) should do before it knows the remote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutomaticPlan {
-    /// Do nothing at all, not even a check: the system state or the user's pending
-    /// apply must not be touched. The deferral says why.
+    /// Not even a check.
     Skip(Deferral),
-    /// Check for a newer image, but do not download: a gate that does not depend on
-    /// the remote image already fails. The deferral is the reason to publish if the
-    /// check finds an update.
+    /// No download; publish the deferral if the check finds an update.
     Check(Deferral),
-    /// Check, then ask [`plan_after_check`] whether to download.
+    /// Then ask [`plan_after_check`].
     CheckThenDownload,
 }
 
-/// What the automatic run should do after a check updated the snapshot's remote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AfterCheck {
-    /// Nothing to download: no remote image is known, or it is already booted or
-    /// staged.
     NothingToDo,
-    /// Download and stage the remote image, locked.
     Download,
-    /// There is an update, but a gate defers it.
     Defer(Deferral),
 }
 
-/// Plans the automatic run.
-///
-/// - [`AutomaticPlan::Skip`] when the bootc flags block updates, or while an intent
-///   exists or a staged deployment is unlocked (the automatic run must never re-lock or
-///   replace what the user applied).
-/// - [`AutomaticPlan::Check`] when space, power or metered already fail: checking only
-///   fetches a manifest, and knowing about the update lets the UI explain the deferral.
-/// - [`AutomaticPlan::CheckThenDownload`] otherwise.
+/// A failing resource gate still allows the check: it fetches only a manifest, and knowing
+/// about the update lets the UI explain the deferral.
 pub fn plan_automatic(snapshot: &SystemSnapshot) -> AutomaticPlan {
     if let Err(deferral) = gate_bootc_flags(&snapshot.host)
         .and_then(|()| gate_intent(snapshot.intent.as_ref(), &snapshot.host, Trigger::Automatic))
@@ -58,19 +37,15 @@ pub fn plan_automatic(snapshot: &SystemSnapshot) -> AutomaticPlan {
     }
 }
 
-/// The remote image if it is neither booted nor staged.
-fn candidate(snapshot: &SystemSnapshot) -> Option<&RemoteView> {
+fn remote_neither_booted_nor_staged(snapshot: &SystemSnapshot) -> Option<&RemoteView> {
     let remote = snapshot.remote.as_ref()?;
     let host = &snapshot.host;
     let digest = Some(remote.digest.as_str());
     (digest != host.booted_digest() && digest != host.staged_digest()).then_some(remote)
 }
 
-/// Decides the automatic download once the check is done. Every gate is evaluated with
-/// [`Trigger::Automatic`] and no override: bootc flags, intent, denylist, version,
-/// space, power, metered, in that order.
 pub fn plan_after_check(snapshot: &SystemSnapshot) -> AfterCheck {
-    let Some(remote) = candidate(snapshot) else {
+    let Some(remote) = remote_neither_booted_nor_staged(snapshot) else {
         return AfterCheck::NothingToDo;
     };
     match check_download_gates(snapshot, remote, Trigger::Automatic, false) {
@@ -79,87 +54,40 @@ pub fn plan_after_check(snapshot: &SystemSnapshot) -> AfterCheck {
     }
 }
 
-/// Why a user's download cannot run.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DownloadError {
-    /// No newer image is known, or it is already booted or staged
-    /// (D-Bus `NothingToDo`).
     #[error("There is no update to download.")]
     NothingToDownload,
-    /// A gate refuses it (D-Bus `PolicyDenied`, with the reason as message).
     #[error(transparent)]
     Gate(#[from] Deferral),
 }
 
-/// Validates a user's `Download(override_soft_gates)`.
-///
-/// Uses [`Trigger::User`]: an unknown version does not block (apply re-checks it from the
-/// staged manifest), and an existing intent blocks only while its stage is unlocked.
-/// `override_soft_gates` skips power and metered, never the hard gates.
 pub fn validate_download(
     snapshot: &SystemSnapshot,
     override_soft_gates: bool,
 ) -> Result<(), DownloadError> {
-    let remote = candidate(snapshot).ok_or(DownloadError::NothingToDownload)?;
+    let remote =
+        remote_neither_booted_nor_staged(snapshot).ok_or(DownloadError::NothingToDownload)?;
     check_download_gates(snapshot, remote, Trigger::User, override_soft_gates)?;
     Ok(())
 }
 
-/// Why `Apply(expected_digest)` cannot run.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ApplyError {
-    /// There is no staged deployment (D-Bus `NothingToDo`).
     #[error("There is no downloaded update to install.")]
     NothingStaged,
-    /// The staged digest is not the one the user reviewed (D-Bus `DigestMismatch`).
     #[error("The downloaded update changed since it was shown. Review it again.")]
-    DigestMismatch {
-        /// The digest the caller reviewed.
-        expected: String,
-        /// The digest actually staged.
-        staged: String,
-    },
-    /// The staged deployment is already unlocked (D-Bus `NothingToDo`).
+    DigestMismatch { expected: String, staged: String },
     #[error("The update is already set to install at the next restart.")]
     AlreadyApplied,
-    /// The staged image is not newer than the booted one, by the versions in the
-    /// images' own manifests (D-Bus `PolicyDenied`). Equal versions count as not newer.
     #[error("The downloaded version {staged} is not newer than the installed version {booted}.")]
-    Downgrade {
-        /// Booted version.
-        booted: Version,
-        /// Staged version, from the staged deployment's manifest.
-        staged: Version,
-    },
-    /// A gate refuses it (D-Bus `PolicyDenied`).
+    Downgrade { booted: Version, staged: Version },
     #[error(transparent)]
     Gate(#[from] Deferral),
 }
 
-/// Validates `Apply(expected_digest)`.
-///
-/// `staged_manifest_version` is the version the daemon read from
-/// `/usr/share/apex/manifest.json` inside the staged deployment: verified content, not a
-/// registry label.
-///
-/// In order:
-/// 1. a staged deployment exists ([`ApplyError::NothingStaged`]);
-/// 2. its digest is `expected_digest` ([`ApplyError::DigestMismatch`]);
-/// 3. it is still download-only ([`ApplyError::AlreadyApplied`]);
-/// 4. the bootc flags do not block;
-/// 5. the digest is not denylisted;
-/// 6. the staged version is newer than the booted version ([`ApplyError::Downgrade`]).
-///    A staged image without a valid manifest version is refused. An unknown booted
-///    version is accepted, since there is nothing to compare with (for example the first
-///    update after installing from an image built before manifests existed);
-/// 7. `/boot` has room for 1.2 × the kernel and initramfs;
-/// 8. `/sysroot` keeps its margin;
-/// 9. power: on AC or battery at least 20 %, because finalization runs at shutdown.
-///    This is a soft gate, but `Apply` has no override, so it is enforced.
-///
-/// Arming the boot counter requires GRUB entry 1 to be a real deployment. After
-/// finalization the booted deployment becomes entry 1, so this does not depend on an
-/// existing rollback deployment and is not checked here.
+/// `staged_manifest_version` comes from the staged deployment's own manifest: verified
+/// content, not a registry label. An unknown booted version leaves nothing to compare.
 pub fn validate_apply(
     snapshot: &SystemSnapshot,
     expected_digest: &str,
@@ -194,59 +122,30 @@ pub fn validate_apply(
     }
     gate_boot_space(snapshot.boot_free, snapshot.boot_payload)?;
     gate_disk_headroom(snapshot.sysroot_free)?;
+    // A soft gate, but `Apply` has no override.
     gate_power(snapshot.power, Operation::Apply)?;
     Ok(())
 }
 
-/// Why `DiscardStaged` cannot run.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DiscardError {
-    /// There is no staged deployment (D-Bus `NothingToDo`).
     #[error("There is no update to cancel.")]
     NothingStaged,
-    /// The staged deployment is still locked, so it will not be installed anyway
-    /// (D-Bus `NothingToDo`).
     #[error("The update is not set to install, so there is nothing to cancel.")]
     NotApplied,
-    /// The bootc flags block staging again, or cancelling would download a newer
-    /// update that a download gate refuses now (D-Bus `PolicyDenied`).
     #[error(transparent)]
     Gate(#[from] Deferral),
 }
 
-/// Validates `DiscardStaged`: re-lock an applied but not yet booted update.
-///
-/// Requires an unlocked staged deployment. The only re-lock the contract allows is
-/// `bootc upgrade --download-only`, which is **not local**: it pulls the channel tag
-/// again, so it needs the registry and fails offline (the stage then stays applied), and
-/// what it does depends on where the tag points now:
-///
-/// - at the staged digest: bootc locks the stage again, fetching only the manifest;
-/// - at the booted digest: bootc changes nothing, exits 0 and the stage **stays
-///   applied**;
-/// - at another image: bootc downloads that whole image and stages it locked in place of
-///   the applied one.
-///
-/// So the daemon must check afterwards that no unlocked stage remains
-/// ([`crate::HostView::has_unlocked_stage`] on a fresh status) before it disarms the boot
-/// counter or forgets the intent, and report a failure otherwise.
-///
-/// This function checks what can be known beforehand:
-///
-/// 1. `incompatible` and `rollbackQueued` block, because bootc refuses on an
-///    incompatible host and a new stage would reorder deployments under a queued
-///    rollback. A `/usr` overlay does not block: restarting to clear it would install the
-///    very update the user is cancelling.
-/// 2. When the last known remote digest is neither the staged nor the booted one, or no
-///    remote is known, bootc may download a whole image, so the download resource gates
-///    apply: space, then power and metered, without override. The reason says that
-///    cancelling downloads the newer update.
+/// The re-lock pulls the channel tag again and may stage another image or change nothing,
+/// so the daemon must confirm afterwards that no unlocked stage remains.
 pub fn validate_discard(snapshot: &SystemSnapshot) -> Result<(), DiscardError> {
     let host = &snapshot.host;
     let staged = host.staged.as_ref().ok_or(DiscardError::NothingStaged)?;
     if staged.download_only {
         return Err(DiscardError::NotApplied);
     }
+    // No `/usr` overlay check: restarting to clear it would install the very update.
     bootc_flags(host.incompatible, false, host.rollback_queued)?;
     let remote = snapshot.remote.as_ref().map(|r| r.digest.as_str());
     let may_download =
@@ -264,13 +163,7 @@ pub fn validate_discard(snapshot: &SystemSnapshot) -> Result<(), DiscardError> {
     Ok(())
 }
 
-/// Whether the intent can no longer come true and should be cleared by the daemon.
-///
-/// An intent is live while its digest is staged and unlocked (waiting for the restart)
-/// or booted (waiting for, or failed, its boot assessment). Anything else is orphaned:
-/// finalization failed, GRUB fell back, or the stage was replaced outside Apex. Because
-/// [`plan_automatic`] skips while any intent exists, an orphaned intent would stop
-/// automatic updates for good, so the daemon clears it when this returns `true`.
+/// The daemon must clear an orphaned intent, or [`plan_automatic`] would skip for good.
 pub fn intent_is_orphaned(snapshot: &SystemSnapshot) -> bool {
     let Some(intent) = &snapshot.intent else {
         return false;
@@ -293,7 +186,6 @@ mod tests {
         BOOTED, REMOTE, STAGED, deny, deployment, healthy, intent, ver, with_locked_stage,
     };
 
-    /// A change to a snapshot and the gate it must trip.
     type Case = (fn(&mut SystemSnapshot), Gate);
 
     fn gate_of_plan(plan: &AutomaticPlan) -> Option<Gate> {
@@ -317,12 +209,9 @@ mod tests {
         }
     }
 
-    // plan_automatic
-
     #[test]
     fn automatic_checks_then_downloads_when_healthy() {
         assert_eq!(plan_automatic(&healthy()), AutomaticPlan::CheckThenDownload);
-        // A locked stage without intent may be replaced by a newer one.
         assert_eq!(
             plan_automatic(&with_locked_stage()),
             AutomaticPlan::CheckThenDownload
@@ -383,12 +272,9 @@ mod tests {
         assert!(matches!(plan_automatic(&s), AutomaticPlan::Skip(_)));
     }
 
-    // plan_after_check
-
     #[test]
     fn after_check_downloads_a_newer_image() {
         assert_eq!(plan_after_check(&healthy()), AfterCheck::Download);
-        // Replacing an older locked stage with a newer remote.
         let mut s = healthy();
         s.host.staged = Some(deployment(STAGED, "45.20260922.1", true));
         assert_eq!(plan_after_check(&s), AfterCheck::Download);
@@ -409,7 +295,6 @@ mod tests {
             AfterCheck::NothingToDo
         );
 
-        // Nothing to do wins over a blocking flag: no deferral is published.
         let mut s = healthy();
         s.remote = None;
         s.host.incompatible = true;
@@ -464,8 +349,6 @@ mod tests {
         s.host.booted.as_mut().expect("booted").version = None;
         assert_eq!(deferred_by(&plan_after_check(&s)), Some(Gate::Version));
     }
-
-    // validate_download
 
     #[test]
     fn user_download_passes_when_healthy() {
@@ -556,8 +439,6 @@ mod tests {
         s.intent = Some(intent("sha256:gone"));
         assert_eq!(validate_download(&s, false), Ok(()));
     }
-
-    // validate_apply
 
     fn apply_ready() -> SystemSnapshot {
         let mut s = with_locked_stage();
@@ -667,7 +548,6 @@ mod tests {
 
     #[test]
     fn apply_uses_the_manifest_version_not_the_label() {
-        // The label says newer, the verified manifest says older: refused.
         let s = apply_ready();
         assert!(matches!(
             validate_apply(&s, REMOTE, Some(&ver("45.20260919.9"))),
@@ -707,8 +587,6 @@ mod tests {
             "Plug in."
         );
     }
-
-    // validate_discard
 
     fn applied() -> SystemSnapshot {
         let mut s = with_locked_stage();
@@ -755,8 +633,7 @@ mod tests {
         assert_eq!(validate_discard(&s), Ok(()));
     }
 
-    /// The tag still points at the applied stage: bootc re-locks it after fetching only
-    /// the manifest, so power, metered and space do not matter.
+    /// bootc re-locks the stage the tag points at after fetching only the manifest.
     #[test]
     fn discard_of_the_current_remote_needs_no_resources() {
         let mut s = applied();
@@ -765,8 +642,7 @@ mod tests {
         s.boot_free = 0;
         s.sysroot_free = 0;
         assert_eq!(validate_discard(&s), Ok(()));
-        // The tag moved back to the booted image: nothing is downloaded either (bootc
-        // then leaves the stage applied, which the daemon must detect afterwards).
+        // Tag back at the booted image: bootc downloads nothing and leaves the stage applied.
         s.remote.as_mut().expect("remote").digest = BOOTED.into();
         assert_eq!(validate_discard(&s), Ok(()));
     }
@@ -778,8 +654,6 @@ mod tests {
         }
     }
 
-    /// The tag moved on to V3 while V2 is applied: `bootc upgrade --download-only`
-    /// downloads and stages V3, so the download gates apply, without override.
     #[test]
     fn discard_after_the_channel_moved_applies_the_download_gates() {
         let moved = || {
@@ -824,8 +698,6 @@ mod tests {
             "{reason}"
         );
     }
-
-    // intent_is_orphaned
 
     #[test]
     fn intent_orphan_detection() {

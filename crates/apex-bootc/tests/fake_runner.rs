@@ -1,6 +1,3 @@
-//! `Bootc` over the scripted `FakeRunner` (feature `testing`), the way `apex-updated`'s
-//! tests will drive it.
-
 #![allow(
     clippy::unwrap_used,
     reason = "test helpers outside #[test] fns; clippy's allow-unwrap-in-tests does not cover them"
@@ -101,9 +98,6 @@ async fn download_falls_back_when_progress_fd_is_unsupported() {
     fake.assert_finished();
 }
 
-/// Cancelling an applied update re-locks it with `upgrade --download-only`. When the
-/// channel tag has moved back to the booted image, bootc prints "No update available.",
-/// exits 0 and leaves the stage unlocked; the outcome must say so.
 #[tokio::test]
 async fn relocking_is_reported_not_assumed() {
     let fake = FakeRunner::new()
@@ -147,7 +141,6 @@ async fn relocking_is_reported_not_assumed() {
         }
     );
 
-    // Empty output is not taken as success, although bootc exited 0.
     let silent = bootc.upgrade_download_only(None, &cancel).await.unwrap();
     assert_eq!(silent, DownloadOutcome::Unknown);
     assert!(!silent.stage_locked());
@@ -175,8 +168,6 @@ async fn the_fallback_without_progress_reports_its_outcome() {
     fake.assert_finished();
 }
 
-/// A pull retry delivered through the runner: the overall value the daemon forwards to
-/// the `Progress` property does not jump back.
 #[tokio::test]
 async fn progress_through_a_retry_does_not_go_backwards() {
     let retry = r#"{"description":"Container image pull failed; retrying in 2 seconds (1/3): Pulling","id":"pull-retry","steps":1,"stepsCached":0,"stepsTotal":3,"subtasks":[],"task":"pulling","type":"ProgressSteps"}"#;
@@ -252,7 +243,6 @@ async fn failures_are_classified() {
         bootc.status(&cancel).await.unwrap_err().kind(),
         ErrorKind::InvalidStatus
     );
-    // A host bootc does not manage is a successful status; the caller decides.
     let host = bootc.status(&cancel).await.unwrap();
     assert_eq!(
         host.require_bootc_host().unwrap_err().kind(),

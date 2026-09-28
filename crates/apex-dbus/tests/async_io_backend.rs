@@ -1,8 +1,5 @@
-//! The proxy on zbus's async-io backend, with no tokio runtime anywhere: the situation of a
-//! client driven by the `GLib` main loop. Run with `cargo test -p apex-dbus --features async-io`.
-//!
-//! The futures are driven by a minimal thread-parking executor, standing in for
-//! `glib::MainContext`; zbus's own async-io thread drives the sockets.
+//! No tokio runtime anywhere, as in a `GLib` main-loop client; a thread-parking executor stands
+//! in for `glib::MainContext`. Run with `cargo test -p apex-dbus --features async-io`.
 
 #![allow(
     clippy::expect_used,
@@ -32,7 +29,6 @@ impl Wake for Unparker {
     }
 }
 
-/// Polls `future` on the current thread, parking between wake-ups.
 fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = pin!(future);
     let waker = Waker::from(Arc::new(Unparker(thread::current())));
@@ -45,7 +41,6 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-/// Runs two futures concurrently to completion.
 async fn join<A: Future, B: Future>(a: A, b: B) -> (A::Output, B::Output) {
     let (mut a, mut b) = (pin!(a), pin!(b));
     let (mut a_out, mut b_out) = (None, None);

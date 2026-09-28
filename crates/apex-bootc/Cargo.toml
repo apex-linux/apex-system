@@ -13,12 +13,10 @@ publish.workspace = true
 name = "apex_bootc"
 
 [features]
-# Exposes `FakeRunner`, a scripted `CommandRunner` for downstream tests.
 testing = []
 
 [dependencies]
-# Maps the progress pipe to fd 3 in the child. Its `pre_exec` hook is the only
-# unsafe code involved, and it lives in that crate (Apache-2.0, by Google), not here.
+# Maps the progress pipe to fd 3; its `pre_exec` hook keeps the unsafe code out of this crate.
 command-fds = { version = "0.3.3", features = ["tokio"] }
 nix = { workspace = true, features = ["signal", "process"] }
 serde.workspace = true

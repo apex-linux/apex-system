@@ -1,28 +1,3 @@
-//! bootc for Apex.
-//!
-//! `apex-updated` is the only component that runs bootc (ADR 0008); this crate is how
-//! it does so. It provides:
-//!
-//! - [`Host`]: a lenient model of `bootc status --format=json --format-version=1`
-//!   (`org.containers.bootc/v1`), with query helpers such as
-//!   [`Host::booted_digest`], [`Host::staged_download_only`] and
-//!   [`BootEntry::deployment_root`];
-//! - [`progress`]: a parser for the JSON Lines bootc writes to `--progress-fd`, which
-//!   never fails an update;
-//! - [`BootcCommand`]: every invocation Apex makes, with its exact argv, environment
-//!   and timeout (`docs/specs/M1-IMPLEMENTATION.md` §6);
-//! - [`CommandRunner`]: the process boundary, implemented by [`TokioRunner`] (output
-//!   caps, progress on fd 3, process-group kill on timeout and cancellation) and, with
-//!   the `testing` feature, by the scripted `FakeRunner`;
-//! - [`BootcError`] and [`classify_failure`]: failures classified from exit status and
-//!   stderr;
-//! - [`CheckOutcome`] and [`DownloadOutcome`]: what `bootc upgrade --check` and
-//!   `bootc upgrade --download-only` report on stdout;
-//! - [`Bootc`]: typed operations tying it all together.
-//!
-//! The crate contains no `unsafe` code. Mapping the progress pipe to fd 3 needs a
-//! `pre_exec` hook, which the `command-fds` crate provides.
-
 mod check;
 mod client;
 mod command;

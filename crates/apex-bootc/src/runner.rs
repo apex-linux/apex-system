@@ -1,17 +1,3 @@
-//! Running bootc: the [`CommandRunner`] I/O boundary and its tokio implementation.
-//!
-//! [`TokioRunner`] starts `/usr/bin/bootc` with the argv and environment of
-//! [`BootcCommand`], in its own process group, with stdin at `/dev/null`:
-//!
-//! - stdout and stderr are captured, keeping only the last [`OUTPUT_LIMIT`] bytes each;
-//! - for `--progress-fd 3` a pipe is mapped to fd 3 with the `command-fds` crate (the
-//!   `pre_exec` hook that needs `unsafe` lives there, not in Apex), parsed with
-//!   [`ProgressDecoder`] and forwarded to the caller's channel without ever blocking bootc;
-//! - on timeout or cancellation the whole group gets `SIGTERM`, then `SIGKILL` once the
-//!   leader has exited or [`KILL_GRACE`] has passed. The leader is not reaped before
-//!   the `SIGKILL`, so its pid, which is the group id, cannot have been recycled.
-//!   Dropping a run mid-way also kills the group.
-
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::future::Future;
@@ -39,25 +25,20 @@ use crate::error::{BootcError, ExitState, classify_failure};
 use crate::lock::{SYSROOT_LOCK_PATH, sysroot_lock_held};
 use crate::progress::{Progress, ProgressDecoder};
 
-/// Bytes of stdout and of stderr kept per run (the tail).
+/// Per stream; the tail is kept.
 pub const OUTPUT_LIMIT: usize = 1 << 20;
 
-/// Time between `SIGTERM` and `SIGKILL` when a run is stopped.
 pub const KILL_GRACE: Duration = Duration::from_secs(5);
 
-/// After bootc exits, how long to keep reading pipes a leftover descendant holds open.
+/// A descendant bootc left behind can hold its output pipes open.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-/// After `SIGKILL`, how long to wait for the kernel to let the leader be reaped.
 const REAP_GRACE: Duration = Duration::from_secs(10);
 
-/// Poll interval while waiting for the leader to exit after `SIGTERM`.
-const POLL_INTERVAL: Duration = Duration::from_millis(20);
+const LEADER_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-/// Read buffer size for the child's pipes.
 const READ_CHUNK: usize = 16 * 1024;
 
-/// Cancellation signal shared by a caller and running commands. Cloning shares it.
 #[derive(Debug, Clone)]
 pub struct CancelToken(Arc<watch::Sender<bool>>);
 
@@ -68,46 +49,37 @@ impl Default for CancelToken {
 }
 
 impl CancelToken {
-    /// A token that is not cancelled.
     pub fn new() -> Self {
         Self(Arc::new(watch::Sender::new(false)))
     }
 
-    /// Cancels every run using this token (now or later).
+    /// Also cancels runs that start later with this token.
     pub fn cancel(&self) {
         self.0.send_replace(true);
     }
 
-    /// Whether [`CancelToken::cancel`] was called.
     pub fn is_cancelled(&self) -> bool {
         *self.0.borrow()
     }
 
-    /// Completes once the token is cancelled.
     pub async fn cancelled(&self) {
         let mut rx = self.0.subscribe();
         if rx.wait_for(|cancelled| *cancelled).await.is_err() {
-            // The sender lives in `self`, so this cannot happen; never report a
-            // cancellation that did not occur.
+            // `self` holds the sender, so this is unreachable; never invent a cancellation.
             std::future::pending::<()>().await;
         }
     }
 }
 
-/// One request to run bootc.
 #[derive(Debug)]
 pub struct Invocation {
-    /// What to run.
     pub command: BootcCommand,
-    /// Where progress updates go, for commands that report progress. Updates are
-    /// dropped when the channel is full: progress is lossy by design.
+    /// Lossy: updates are dropped while the channel is full.
     pub progress: Option<mpsc::Sender<Progress>>,
-    /// Stops the run (killing bootc's process group) when cancelled.
     pub cancel: CancelToken,
 }
 
 impl Invocation {
-    /// Runs `command` without a progress sink and with a fresh cancel token.
     pub fn new(command: BootcCommand) -> Self {
         Self {
             command,
@@ -116,14 +88,12 @@ impl Invocation {
         }
     }
 
-    /// Sends progress updates to `sink`.
     #[must_use]
     pub fn with_progress(mut self, sink: mpsc::Sender<Progress>) -> Self {
         self.progress = Some(sink);
         self
     }
 
-    /// Uses `cancel` to stop the run.
     #[must_use]
     pub fn with_cancel(mut self, cancel: CancelToken) -> Self {
         self.cancel = cancel;
@@ -131,23 +101,16 @@ impl Invocation {
     }
 }
 
-/// What a finished bootc run produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandOutput {
-    /// How bootc ended.
     pub exit: ExitState,
-    /// Captured stdout (the last [`OUTPUT_LIMIT`] bytes).
     pub stdout: Vec<u8>,
-    /// Captured stderr (the last [`OUTPUT_LIMIT`] bytes).
     pub stderr: Vec<u8>,
-    /// stdout was longer than the limit and its beginning was dropped.
     pub stdout_truncated: bool,
-    /// stderr was longer than the limit and its beginning was dropped.
     pub stderr_truncated: bool,
 }
 
 impl CommandOutput {
-    /// An output with the given exit state and streams, nothing truncated.
     pub fn new(exit: ExitState, stdout: impl Into<Vec<u8>>, stderr: impl Into<Vec<u8>>) -> Self {
         Self {
             exit,
@@ -158,7 +121,6 @@ impl CommandOutput {
         }
     }
 
-    /// `Ok(self)` on exit status 0, otherwise the failure classified from stderr.
     pub fn into_result(self, command: CommandKind) -> Result<Self, BootcError> {
         if self.exit.success() {
             Ok(self)
@@ -167,22 +129,13 @@ impl CommandOutput {
         }
     }
 
-    /// stdout as text, with invalid UTF-8 replaced.
     pub fn stdout_lossy(&self) -> std::borrow::Cow<'_, str> {
         String::from_utf8_lossy(&self.stdout)
     }
 }
 
-/// Runs bootc commands. The daemon holds a [`TokioRunner`]; tests use `FakeRunner`
-/// (cargo feature `testing`).
 pub trait CommandRunner: Send + Sync {
-    /// Runs `invocation` to completion.
-    ///
-    /// A non-zero exit is **not** an error at this level: it is returned as a
-    /// [`CommandOutput`] and classified by [`CommandOutput::into_result`]. The errors
-    /// are [`BootcError::Spawn`], [`BootcError::Timeout`], [`BootcError::Cancelled`],
-    /// and [`BootcError::Busy`] for a timeout while another process held the ostree
-    /// sysroot lock.
+    /// A non-zero exit is no error here: [`CommandOutput::into_result`] classifies it.
     fn run(
         &self,
         invocation: Invocation,
@@ -207,13 +160,11 @@ impl<R: CommandRunner> CommandRunner for &R {
     }
 }
 
-/// The real runner: bootc as a child process of the tokio runtime.
 #[derive(Debug, Clone)]
 pub struct TokioRunner {
     program: PathBuf,
     lock_path: PathBuf,
     kill_grace: Duration,
-    /// Replaces the per-command timeouts; only tests set it.
     timeout_override: Option<Duration>,
 }
 
@@ -224,7 +175,6 @@ impl Default for TokioRunner {
 }
 
 impl TokioRunner {
-    /// Runs [`command::program`] (`/usr/bin/bootc`; `APEX_BOOTC` in debug builds).
     pub fn new() -> Self {
         Self {
             program: command::program(),
@@ -234,7 +184,6 @@ impl TokioRunner {
         }
     }
 
-    /// The executable this runner starts.
     pub fn program(&self) -> &Path {
         &self.program
     }
@@ -281,7 +230,7 @@ impl CommandRunner for TokioRunner {
                 source,
             }),
             Err(ProcessError::TimedOut) => {
-                // Our bootc is dead, so a lock held now belongs to someone else.
+                // Our bootc is dead, so a lock held now is someone else's.
                 if sysroot_lock_held(&self.lock_path).unwrap_or(false) {
                     Err(BootcError::Busy {
                         detail: format!(
@@ -302,8 +251,6 @@ impl CommandRunner for TokioRunner {
     }
 }
 
-/// Everything needed to run one child process. Internal: [`TokioRunner`] builds it from
-/// a [`BootcCommand`]; tests build it directly to run arbitrary programs.
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessSpec {
     pub(crate) program: PathBuf,
@@ -315,14 +262,10 @@ pub(crate) struct ProcessSpec {
     pub(crate) output_limit: usize,
 }
 
-/// Why [`run_process`] produced no output.
 #[derive(Debug)]
 pub(crate) enum ProcessError {
-    /// The process could not be started or waited for.
     Spawn(io::Error),
-    /// The timeout expired; the process group was killed.
     TimedOut,
-    /// The cancel token fired; the process group was killed.
     Cancelled,
 }
 
@@ -332,7 +275,6 @@ enum Ended {
     Cancelled,
 }
 
-/// Runs `spec` to completion, timeout or cancellation.
 pub(crate) async fn run_process(
     spec: &ProcessSpec,
     progress: Option<mpsc::Sender<Progress>>,
@@ -363,8 +305,8 @@ pub(crate) async fn run_process(
         None
     };
     let child = cmd.spawn().map_err(ProcessError::Spawn)?;
-    // `cmd` owns our copy of the progress pipe's write end. Close it now, so the reader
-    // sees end-of-file once bootc and its descendants are gone.
+    // Closes our copy of the progress pipe's write end, so the reader sees end-of-file
+    // once bootc and its descendants are gone.
     drop(cmd);
     let mut child = GroupChild::new(child);
 
@@ -393,12 +335,11 @@ pub(crate) async fn run_process(
                 status = child.wait() => break Ended::Exited(status),
             }
         };
-        if matches!(ended, Ended::Exited(_)) && !io_done {
-            // bootc exited; take what is still buffered in the pipes, unless a leftover
-            // descendant keeps them open.
-            if tokio::time::timeout(DRAIN_GRACE, &mut io).await.is_err() {
-                tracing::warn!("a process left behind by bootc keeps its output open");
-            }
+        if matches!(ended, Ended::Exited(_))
+            && !io_done
+            && tokio::time::timeout(DRAIN_GRACE, &mut io).await.is_err()
+        {
+            tracing::warn!("a process left behind by bootc keeps its output open");
         }
         ended
     };
@@ -432,11 +373,11 @@ pub(crate) async fn run_process(
     }
 }
 
-/// A child that leads its own process group, killed as a group unless reaped.
+/// Leads its own process group. The leader is not reaped before the group's `SIGKILL`, so
+/// its pid, which is the group id, cannot have been recycled by then.
 #[derive(Debug)]
 struct GroupChild {
     child: Child,
-    /// The group id, which is the leader's pid (`process_group(0)`).
     pgid: Option<Pid>,
     reaped: bool,
 }
@@ -444,9 +385,9 @@ struct GroupChild {
 #[derive(Debug, PartialEq, Eq)]
 enum Leader {
     Running,
-    /// Exited but not reaped: its pid (the group id) is still reserved.
+    /// Not reaped yet, so the group id is still ours.
     Exited,
-    /// Already reaped; the group id may have been recycled.
+    /// The group id may have been recycled.
     Gone,
 }
 
@@ -463,7 +404,7 @@ impl GroupChild {
         }
     }
 
-    /// Waits for the leader and records that it was reaped. Cancel-safe.
+    /// Cancel-safe.
     async fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.child.wait().await;
         if status.is_ok() {
@@ -472,8 +413,6 @@ impl GroupChild {
         status
     }
 
-    /// `SIGTERM` to the group, up to `grace` for the leader to exit, `SIGKILL` to the
-    /// group, then reap the leader.
     async fn terminate(&mut self, grace: Duration) {
         let Some(pgid) = self.pgid else {
             // No pid means tokio already reaped the leader; nothing safe to signal.
@@ -482,7 +421,7 @@ impl GroupChild {
         signal_group(pgid, Signal::SIGTERM);
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline && leader_state(pgid) == Leader::Running {
-            tokio::time::sleep(POLL_INTERVAL).await;
+            tokio::time::sleep(LEADER_EXIT_POLL_INTERVAL).await;
         }
         // The leader is at most a zombie here (only `wait` reaps it), so the group id
         // still names our group; this reaches stragglers that ignored SIGTERM.
@@ -512,7 +451,6 @@ impl Drop for GroupChild {
     }
 }
 
-/// Whether the leader has exited, without reaping it (`waitid(WNOWAIT)`).
 fn leader_state(pid: Pid) -> Leader {
     let flags = WaitPidFlag::WEXITED | WaitPidFlag::WNOWAIT | WaitPidFlag::WNOHANG;
     match waitid(Id::Pid(pid), flags) {
@@ -545,8 +483,7 @@ async fn read_into<R: AsyncRead + Unpin>(reader: Option<R>, sink: &mut TailBuffe
     }
 }
 
-/// Drains the progress pipe until end-of-file, forwarding parsed updates. It keeps
-/// reading when the caller's channel is full or closed, so bootc never blocks on it.
+/// Keeps reading while the caller's channel is full or closed, so bootc never blocks on it.
 async fn pump_progress(rx: Option<pipe::Receiver>, mut sink: Option<mpsc::Sender<Progress>>) {
     let Some(mut rx) = rx else { return };
     let mut decoder = ProgressDecoder::new();
@@ -580,11 +517,6 @@ pub(crate) fn forward(sink: &mut Option<mpsc::Sender<Progress>>, update: Progres
     }
 }
 
-/// The last `limit` bytes of a stream.
-///
-/// A `VecDeque` is a ring buffer: appending a chunk and evicting the oldest bytes costs
-/// O(chunk) without moving the rest, and memory stays bounded by `limit` however much
-/// the child writes.
 #[derive(Debug)]
 struct TailBuffer {
     buf: VecDeque<u8>,

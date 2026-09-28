@@ -1,43 +1,14 @@
-//! Lenient parser for the JSON Lines bootc writes to `--progress-fd`.
-//!
-//! The format is bootc's experimental progress protocol 0.1.0: schema
-//! `docs/src/progress-v0.schema.json`, emitted by `crates/lib/src/progress_jsonl.rs`
-//! (canonical JSON, one event per line, a `Start` event first, lossy updates capped at
-//! 5 Hz). The events used today (bootc `crates/lib/src/deploy.rs`) are:
-//!
-//! | `type` | `task` | meaning |
-//! |---|---|---|
-//! | `ProgressBytes` | `pulling` | layer download; `bytes` of `bytesTotal` |
-//! | `ProgressSteps` | `pulling`, id `pull-retry` | a pull retry; `steps` is the attempt |
-//! | `ProgressSteps` | `importing` | ostree import, 0 or 1 of 1 steps |
-//! | `ProgressSteps` | `staging` | deploying: `steps` of 3 |
-//!
-//! A retried pull does not continue the byte count. `retry_pull_operation` runs
-//! `pull_once` again: a new `prepare_for_pull`, whose `bytesTotal` covers only the layers
-//! still missing (finished layers are committed one by one and now count as
-//! `bytesCached`), and a new layer printer whose `bytes` start again at 0. The failed
-//! attempt also ends with the two `importing` events that normally follow a finished
-//! pull, because `handle_layer_progress_print` and `pull_from_prepared` send them before
-//! the error propagates. [`ProgressDecoder`] accounts for both, so the
-//! [`Progress::overall`] values of one run never decrease.
-//!
-//! Progress must never fail an update: every malformed, unknown or oversized line is
-//! ignored, and nothing here returns an error.
+//! bootc's `--progress-fd` JSON Lines, protocol 0.1.0 (`docs/src/progress-v0.schema.json`).
+//! Progress never fails an update: malformed, unknown or oversized lines are ignored.
 
 use serde::Deserialize;
 
-/// Which part of an operation a [`Progress`] update describes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Stage {
-    /// Downloading image layers (`task: pulling`).
     Pulling,
-    /// The download failed transiently and bootc is retrying (`id: pull-retry`).
     Retrying,
-    /// Importing the image into the ostree repository (`task: importing`).
     Importing,
-    /// Creating the staged deployment (`task: staging`).
     Staging,
-    /// A task this version of Apex does not know, with bootc's machine-readable name.
     Other(String),
 }
 
@@ -52,8 +23,6 @@ impl Stage {
         }
     }
 
-    /// Stable machine-readable label (`pulling`, `retrying`, `importing`, `staging`, or
-    /// bootc's own task name).
     pub fn as_str(&self) -> &str {
         match self {
             Self::Pulling => "pulling",
@@ -64,19 +33,15 @@ impl Stage {
         }
     }
 
-    /// The share of a whole download this stage occupies in [`Progress::overall`].
-    ///
-    /// A heuristic: layer downloads dominate the wall time, so they get 90 %.
     fn overall_span(&self) -> Option<(f64, f64)> {
         match self {
             Self::Pulling => Some((0.0, PULLING_END)),
-            Self::Importing => Some((PULLING_END, 0.95)),
-            Self::Staging => Some((0.95, 1.0)),
+            Self::Importing => Some((PULLING_END, IMPORTING_END)),
+            Self::Staging => Some((IMPORTING_END, 1.0)),
             Self::Retrying | Self::Other(_) => None,
         }
     }
 
-    /// Where `fraction` of this stage lies on the overall scale, for one event on its own.
     fn position(&self, fraction: Option<f64>) -> Option<f64> {
         let (start, end) = self.overall_span()?;
         let within = fraction.unwrap_or(0.0);
@@ -84,61 +49,43 @@ impl Stage {
     }
 }
 
-/// Where the pulling stage ends on the [`Progress::overall`] scale.
+/// Layer downloads dominate the wall time.
 const PULLING_END: f64 = 0.90;
+const IMPORTING_END: f64 = 0.95;
 
-/// Byte counts of a download in this run (bytes already cached are excluded by bootc).
+/// bootc leaves out the bytes already cached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ByteProgress {
-    /// Bytes fetched so far.
     pub done: u64,
-    /// Bytes to fetch in total.
     pub total: u64,
 }
 
-/// One progress update.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
-    /// What is happening.
     pub stage: Stage,
-    /// bootc's human-readable description (English, e.g. `Pulling Image: sha256:…`).
+    /// bootc's English description, e.g. `Pulling Image: sha256:…`.
     pub label: String,
-    /// Completion of this stage in `[0, 1]`, or `None` when bootc gave no usable total.
     /// `None` means "keep showing the last known value", not "restart".
     pub fraction: Option<f64>,
-    /// Byte counts, for `ProgressBytes` events with a known total.
     pub bytes: Option<ByteProgress>,
-    /// See [`Progress::overall`]; computed when the update is produced.
     overall: Option<f64>,
 }
 
 impl Progress {
-    /// Completion of the whole download in `[0, 1]`, mapping each stage onto a fixed
-    /// span (pulling 0-0.90, importing 0.90-0.95, staging 0.95-1). `None` means "keep
-    /// showing the last value".
-    ///
-    /// - From a [`ProgressDecoder`] (the way [`crate::Bootc`] delivers updates), the
-    ///   values of one run never decrease: after a pull retry the new attempt fills the
-    ///   rest of the pulling span, and `importing` events count only once the current
-    ///   attempt finished pulling. `None` for retries, unknown tasks, pulling events
-    ///   without totals, and `importing` events that may be the tail of a failed attempt.
-    /// - From [`parse_line`], the position of that single event; `None` for retries and
-    ///   unknown tasks.
+    /// Completion of the whole download; never decreases within one [`ProgressDecoder`] run.
+    /// `None` means "keep showing the last value".
     pub fn overall(&self) -> Option<f64> {
         self.overall
     }
 }
 
-/// Turns the events of one run into overall values that never decrease.
+/// After a retry bootc counts `bytes` from 0 of the layers still missing, and the failed
+/// attempt first sends the `importing` events of a finished pull (`retry_pull_operation`).
 #[derive(Debug, Default)]
 struct RunTracker {
-    /// Highest overall value reported so far.
-    shown: f64,
-    /// Where the current pull attempt's zero lies on the overall scale: 0, or the value
-    /// already shown when bootc retried.
-    pull_base: f64,
-    /// The current pull attempt reported all of its bytes (or steps).
-    pull_finished: bool,
+    highest_shown: f64,
+    pull_attempt_start: f64,
+    pull_attempt_finished: bool,
 }
 
 impl RunTracker {
@@ -146,25 +93,23 @@ impl RunTracker {
         let position = match stage {
             Stage::Pulling => {
                 let within = fraction?;
-                self.pull_finished = within >= 1.0;
-                self.pull_base + within * (PULLING_END - self.pull_base)
+                self.pull_attempt_finished = within >= 1.0;
+                self.pull_attempt_start + within * (PULLING_END - self.pull_attempt_start)
             }
             Stage::Retrying => {
-                self.pull_base = self.shown.min(PULLING_END);
-                self.pull_finished = false;
+                self.pull_attempt_start = self.highest_shown.min(PULLING_END);
+                self.pull_attempt_finished = false;
                 return None;
             }
             // A failed attempt sends these before bootc retries: not progress yet.
-            Stage::Importing if !self.pull_finished => return None,
+            Stage::Importing if !self.pull_attempt_finished => return None,
             Stage::Importing | Stage::Staging | Stage::Other(_) => stage.position(fraction)?,
         };
-        self.shown = self.shown.max(position.clamp(0.0, 1.0));
-        Some(self.shown)
+        self.highest_shown = self.highest_shown.max(position.clamp(0.0, 1.0));
+        Some(self.highest_shown)
     }
 }
 
-/// Wire form of the events. Subtasks are ignored; unknown fields are ignored; any
-/// unknown `type` becomes `Unknown`.
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum RawEvent {
@@ -203,13 +148,11 @@ enum RawEvent {
     Unknown,
 }
 
-/// `done / total` clamped to `[0, 1]`; `None` when the total is unspecified (zero).
+/// A zero total means bootc does not know it.
 fn ratio(done: u64, total: u64) -> Option<f64> {
     (total > 0).then(|| (done as f64 / total as f64).clamp(0.0, 1.0))
 }
 
-/// Parses one line of progress JSON. Returns `None` for the `Start` marker, unknown
-/// event types, and anything malformed.
 pub fn parse_line(line: &str) -> Option<Progress> {
     let event: RawEvent = serde_json::from_str(line.trim()).ok()?;
     match event {
@@ -266,12 +209,7 @@ pub fn parse_line(line: &str) -> Option<Progress> {
     }
 }
 
-/// Splits the byte stream of **one run** into lines, parses each with [`parse_line`], and
-/// sets [`Progress::overall`] so that it never decreases within the run.
-///
-/// Use a new decoder for every bootc invocation. Lines longer than
-/// [`ProgressDecoder::MAX_LINE`] are dropped whole (bounded memory even if the stream
-/// never contains a newline), as are lines that are not UTF-8.
+/// One decoder per bootc run.
 #[derive(Debug, Default)]
 pub struct ProgressDecoder {
     line: Vec<u8>,
@@ -280,16 +218,13 @@ pub struct ProgressDecoder {
 }
 
 impl ProgressDecoder {
-    /// Longest line kept. A real event with every layer listed as a subtask is a few
-    /// tens of KiB; 1 MiB leaves ample room.
+    /// A real event listing every layer as a subtask is a few tens of KiB.
     pub const MAX_LINE: usize = 1 << 20;
 
-    /// A decoder with no buffered data.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Feeds a chunk of the stream and returns the updates completed by it.
     pub fn push(&mut self, mut chunk: &[u8]) -> Vec<Progress> {
         let mut out = Vec::new();
         while let Some(pos) = chunk.iter().position(|&b| b == b'\n') {
@@ -303,7 +238,7 @@ impl ProgressDecoder {
         out
     }
 
-    /// Parses a final line that was not terminated by a newline.
+    /// Parses a last line that has no newline.
     pub fn finish(&mut self) -> Option<Progress> {
         self.take_line()
     }
@@ -413,12 +348,10 @@ mod tests {
         let (a, b) = BYTES.split_at(40);
         assert!(d.push(a.as_bytes()).is_empty());
         assert_eq!(d.push(format!("{b}\n").as_bytes()).len(), 1);
-        // An oversized line is dropped, the next one still parses.
         let huge = vec![b'x'; ProgressDecoder::MAX_LINE + 1];
         assert!(d.push(&huge).is_empty());
         assert!(d.push(b"more garbage\n").is_empty());
         assert_eq!(d.push(format!("{BYTES}\n").as_bytes()).len(), 1);
-        // A final unterminated line is parsed by finish().
         assert!(d.push(BYTES.as_bytes()).is_empty());
         assert!(d.finish().is_some());
         assert!(d.finish().is_none());
@@ -440,7 +373,6 @@ mod tests {
         steps("pulling", "pull-retry", 1, 3)
     }
 
-    /// Feeds `lines` to one decoder and returns each update's overall value.
     fn run(lines: &[String]) -> Vec<Option<f64>> {
         let mut d = ProgressDecoder::new();
         let stream = lines.join("\n") + "\n";
@@ -450,8 +382,6 @@ mod tests {
             .collect()
     }
 
-    /// The sequence bootc writes when a blob fetch fails at 160 of 300 MB and the retry
-    /// has 200 MB left: without the run tracker, overall would go 0.48, 0.90, 0.95, 0.
     #[test]
     fn a_retried_pull_fills_the_rest_of_the_pulling_span() {
         let lines = [
@@ -483,7 +413,6 @@ mod tests {
                 Some(1.0),
             ]
         );
-        // Each event on its own goes backwards; that is what the decoder corrects.
         let single: Vec<_> = lines
             .iter()
             .map(|l| parse_line(l).and_then(|p| p.overall()))
@@ -510,15 +439,12 @@ mod tests {
 
     #[test]
     fn importing_counts_only_after_a_finished_pull() {
-        // Nothing to fetch (all layers cached): no pulling events, so importing does not
-        // move the bar, and staging does.
-        let cached = [
+        let all_layers_cached = [
             steps("importing", "sha256:ab", 1, 1),
             steps("staging", "sha256:ab", 0, 3),
         ];
-        assert_eq!(run(&cached), [None, Some(0.95)]);
-        // A byte count that never reaches its total (actual blob sizes differ from the
-        // manifest): the bar waits for staging.
+        assert_eq!(run(&all_layers_cached), [None, Some(0.95)]);
+        // Actual blob sizes can differ from the manifest's, so a byte count can stop short.
         let short = [
             pulling(99, 100),
             steps("importing", "sha256:ab", 1, 1),
@@ -532,7 +458,6 @@ mod tests {
         let no_totals = r#"{"type":"ProgressBytes","task":"pulling","description":"d","id":"i","bytes":0,"bytesTotal":0,"steps":0,"stepsTotal":0,"subtasks":[]}"#;
         let lines = [pulling(50, 100), no_totals.to_owned()];
         assert_eq!(run(&lines), [Some(0.45), None]);
-        // On its own, such an event sits at the start of the pulling span.
         assert_eq!(parse_line(no_totals).and_then(|p| p.overall()), Some(0.0));
     }
 

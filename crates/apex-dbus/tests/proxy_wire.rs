@@ -1,16 +1,5 @@
-//! The proxy and the server-side types against the contract, over a real D-Bus connection.
-//!
-//! A peer-to-peer connection pair stands in for the system bus. On one end, `MockDaemon`
-//! serves Update1 through `#[zbus::interface]` with this crate's types; on the other end,
-//! `Update1Proxy` calls it.
-//!
-//! - The mock's generated introspection must equal the contract XML member by member (names,
-//!   argument names, signatures, directions, access, change signals).
-//! - Every proxy method and property is exercised against the mock. zbus rejects a call whose
-//!   body signature differs from the handler's arguments, and the proxy fails to decode a reply
-//!   or property of another type, so with the first check this ties the proxy to the XML.
-//! - The coverage checks fail when the XML gains a member the proxy (or this test) lacks.
-//! - Every error kind makes the round trip daemon → wire → client.
+//! zbus rejects a call whose body signature differs from the handler's, and the proxy fails to
+//! decode another type, so exercising every member against the mock ties the proxy to the XML.
 
 #![allow(
     clippy::expect_used,
@@ -33,7 +22,6 @@ use zbus::{
     proxy::CacheProperties,
 };
 
-/// A connected (server, client) pair; the server serves `daemon` at the contract path.
 async fn connect(daemon: MockDaemon) -> (Connection, Connection) {
     let (server_socket, client_socket) = tokio::net::UnixStream::pair().expect("socket pair");
     let server = connection::Builder::unix_stream(server_socket)
@@ -57,7 +45,6 @@ async fn proxy(client: &Connection, cache: CacheProperties) -> Update1Proxy<'sta
         .expect("proxy")
 }
 
-/// The contract's member names of one kind (`"method"` or `"property"`).
 fn contract_members(kind: &str) -> BTreeSet<String> {
     common::interface_description(INTROSPECTION_XML)
         .into_keys()
@@ -131,7 +118,6 @@ async fn every_method_matches_the_contract_on_the_wire() {
         "every contract method must be exposed by Update1Proxy and exercised here"
     );
 
-    // Polkit-guarded methods let polkit ask the authentication agent; the others must not.
     let interactive: BTreeSet<&str> = calls
         .iter()
         .filter(|call| call.interactive)
@@ -148,7 +134,6 @@ async fn every_method_matches_the_contract_on_the_wire() {
     ]
     .into();
     assert_eq!(interactive, expected);
-    // Exactly the methods polkit guards (contract §8) may prompt.
     let guarded: BTreeSet<&str> = calls
         .iter()
         .map(|call| call.member.as_str())
@@ -209,11 +194,9 @@ async fn every_error_kind_round_trips() {
         );
     }
 
-    // `into_contract` turns a stray zbus error into Internal before it reaches the wire...
     let error = proxy.apply("error:zbus").await.expect_err("scripted error");
     assert_eq!(error.kind(), Some(ErrorKind::Internal));
     assert!(error.message().contains("socket closed"), "{error}");
-    // ...without it the client sees a non-contract error name.
     let error = proxy
         .apply("error:unconverted")
         .await
@@ -226,7 +209,6 @@ async fn every_error_kind_round_trips() {
         other => panic!("unexpected {other:?}"),
     }
 
-    // Ordinary contract failures carry their message to the client.
     match proxy.apply("sha256:0000").await {
         Err(ApexError::DigestMismatch(message)) => assert!(message.contains(STAGED_DIGEST)),
         other => panic!("unexpected {other:?}"),
@@ -239,8 +221,6 @@ async fn every_error_kind_round_trips() {
 
 #[tokio::test]
 async fn invalid_strings_are_the_daemons_to_reject() {
-    // The proxy only sends valid channels and verdicts; a raw caller can send anything, and
-    // the daemon answers with the contract's InvalidArgument.
     let (_server, client) = connect(MockDaemon::new(Log::default())).await;
     let raw = zbus::Proxy::new(&client, BUS_NAME, OBJECT_PATH, INTERFACE)
         .await
@@ -258,7 +238,7 @@ async fn invalid_strings_are_the_daemons_to_reject() {
     }
 }
 
-/// Polls the next item of a stream (the tests avoid a futures-util dependency).
+/// Avoids a futures-util dependency.
 async fn next<S: Stream + Unpin>(stream: &mut S) -> Option<S::Item> {
     poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
 }
@@ -277,7 +257,6 @@ async fn cached_properties_follow_change_signals() {
     );
 
     let mut changes = proxy.receive_state_changed().await;
-    // The stream first yields the current value.
     let first = next(&mut changes).await.expect("current value");
     assert_eq!(first.get().await.expect("value"), State::Staged);
     proxy.check().await.expect("Check");

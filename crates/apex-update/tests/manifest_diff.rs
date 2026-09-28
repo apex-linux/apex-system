@@ -1,5 +1,3 @@
-//! Package diff: properties over generated manifests, and snapshots of a realistic pair.
-
 #![allow(clippy::expect_used, reason = "test helpers panic on broken fixtures")]
 
 use std::cmp::Ordering;
@@ -54,9 +52,6 @@ fn fixture_summary_snapshot() {
     );
 }
 
-// Generated manifests: a sorted, unique package list built from a map keyed by
-// (name, arch), like `apexctl build manifest` writes.
-
 type Key = (String, String);
 
 fn evr() -> impl Strategy<Value = Evr> {
@@ -102,8 +97,10 @@ fn to_packages(map: &BTreeMap<Key, Evr>) -> Vec<Package> {
         .collect()
 }
 
-/// A pair where `b` is `a` with some packages changed, removed and added, so that
-/// shared keys are common.
+const REMOVE: u8 = 0;
+const CHANGE: u8 = 1;
+
+/// `b` derives from `a`, so the two share most keys.
 fn manifest_pair() -> impl Strategy<Value = (BTreeMap<Key, Evr>, BTreeMap<Key, Evr>)> {
     (
         package_map(),
@@ -114,9 +111,8 @@ fn manifest_pair() -> impl Strategy<Value = (BTreeMap<Key, Evr>, BTreeMap<Key, E
             let mut b = BTreeMap::new();
             for (i, (key, evr)) in a.iter().enumerate() {
                 match choices[i % choices.len()] % 4 {
-                    0 => {} // removed
-                    1 => {
-                        // changed: take a generated EVR for the same key if there is one
+                    REMOVE => {}
+                    CHANGE => {
                         let new = extra.get(key).cloned().unwrap_or_else(|| {
                             Evr::new(evr.epoch, format!("{}.1", evr.version), evr.release.clone())
                         });
@@ -162,7 +158,7 @@ proptest! {
                 }
             }
         }
-        // Equal up to rpm equivalence: EVRs rpm considers equal are not reported.
+        // Only up to rpm equivalence: EVRs rpm considers equal are not reported.
         prop_assert_eq!(applied.keys().collect::<Vec<_>>(), b.keys().collect::<Vec<_>>());
         for (key, evr) in &applied {
             prop_assert_eq!(evr.rpm_cmp(&b[key]), Ordering::Equal, "{:?}", key);
@@ -262,7 +258,6 @@ fn duplicated_keys_keep_the_newest_evr() {
         release: "200.fc45".into(),
         arch: "x86_64".into(),
     };
-    // A malformed manifest with two kernels; the newest one is compared.
     let changes = diff(&[p("7.2.9"), p("7.2.7")], &[p("7.2.9")]);
     assert!(changes.is_empty(), "{changes:?}");
 }
