@@ -1,26 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-#
-# The only workflow while the repository is private (ARCHITECTURE sections 4 and 11).
-# It checks the code and builds nothing. Packages and images build in the builder VM
-# (tools/builder-vm/); `just publish` publishes from there (S1d).
-#
-#   rust         fmt, clippy -D warnings, the tests, cargo deny and the RPM License tag,
-#                with Fedora 45's rust in registry.fedoraproject.org/fedora:45
-#   scripts      bash -n, sh -n and shellcheck, actionlint, the script self-tests and
-#                renovate.json
-#   image-tests  image/tests/run.sh in fedora:45, with the tools of the real build
-#   layer-tests  tests/layer/run.sh in fedora:45: the Apex layer's kill switches, fault
-#                injection and crash guard in gjs
-#   privacy      no biometric data in the tracked files (privacy-guard.sh)
-#
-# It runs on every pull request and every push to main, with no path filter. A newer
-# run for the same pull request cancels the older one; runs on main always finish, so
-# each one saves the Rust cache. The token is
-# read-only and no job holds a secret. Actions are pinned by commit SHA; tools come
-# from install-tool.sh (pinned releases, SHA-256 checked). The Justfile runs the same
-# commands locally: just check, just deny, just image-test, just layer-test, just privacy.
 name: ci
 
+# No path filter: biometric data can arrive in any directory (the privacy job).
 on:
   pull_request: {}
   push:
@@ -32,6 +13,7 @@ defaults:
   run:
     shell: bash
 
+# Runs on main always finish, so that each one saves the Rust cache.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -44,7 +26,6 @@ jobs:
     permissions:
       contents: read
     container:
-      # Renovate keeps the digest current; the tag documents the Fedora release.
       image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
     env:
       CARGO_TERM_COLOR: always
@@ -52,11 +33,8 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - name: Tools for checkout, the cache and the tests
-        # git, tar and zstd are for actions/checkout and the cache inside the container;
-        # dbus-daemon (/usr/bin/dbus-daemon) runs the private message buses of the D-Bus
-        # tests (apexctl tests/update_bus.rs, apex-boot tests/assess_process.rs); git,
-        # tar and diff (diffutils) run for real in apex-lane's tests/shell_fakes.rs.
-        # Fedora's released repositories only.
+        # dbus-daemon runs the D-Bus tests' private buses; git, tar and diffutils run for
+        # real in apex-lane's tests/shell_fakes.rs.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
           git-core tar gzip zstd xz findutils curl python3 dbus-daemon diffutils
@@ -66,8 +44,6 @@ jobs:
           persist-credentials: false
 
       - name: Install Fedora's Rust toolchain (the compose's repositories)
-        # Fedora's cargo is the real binary (no rustup proxy), so rust-toolchain.toml
-        # cannot make it download anything; the next step checks the versions match.
         run: .github/scripts/rpms.sh toolchain
 
       - name: Fedora rustc matches rust-toolchain.toml
@@ -76,8 +52,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: "false"
-          # Pull requests restore but never write, so a pull request cannot seed the
-          # cache that main uses.
+          # A pull request must not seed the cache that main uses.
           save-if: ${{ github.event_name == 'push' }}
 
       - name: Install cargo-deny (pinned release, SHA-256 checked)
@@ -92,10 +67,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
-        # The private-bus tests must run here, not skip: apexctl's fail without
-        # dbus-daemon unless APEXCTL_TEST_SKIP_BUS is set (so it is removed), and
-        # apex-boot's skip when /usr/bin/dbus-daemon is missing (so its presence is
-        # checked first).
+        # The private-bus tests must run, not skip: apexctl's skip under
+        # APEXCTL_TEST_SKIP_BUS, apex-boot's without /usr/bin/dbus-daemon.
         run: |
           unset APEXCTL_TEST_SKIP_BUS
           test -x /usr/bin/dbus-daemon || { echo "::error::/usr/bin/dbus-daemon is missing: the D-Bus tests would not run"; exit 1; }
@@ -131,28 +104,19 @@ jobs:
         run: actionlint -config-file .github/scripts/actionlint.yaml
 
       - name: bash -n and shellcheck of the CI, packaging, builder VM and test scripts
-        # tools/builder-vm/desktop-disk.sh sources qualify.sh; tools/builder-vm/lane.sh
-        # sources lib.sh.
         run: |
           for f in .github/scripts/*.sh packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh tests/*/run.sh; do bash -n "$f"; done
           shellcheck -x -P .github/scripts --severity=style .github/scripts/*.sh
           shellcheck -x --severity=style packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh tests/*/run.sh
 
       - name: sh -n, bash -n and shellcheck of image/checks and image/tests
-        # The Containerfile's final stage runs image/checks with sh. -P SCRIPTDIR: each
-        # script sources its helpers relative to its own directory. fake/createrepo_c
-        # is a shell script; the other fakes are Python (the image-tests job compiles
-        # them).
+        # The Containerfile's final stage runs image/checks with sh.
         run: |
           files=(image/checks/*.sh image/checks/lib/*.sh image/tests/*.sh image/tests/fake/createrepo_c)
           for f in "${files[@]}"; do sh -n "$f"; bash -n "$f"; done
           shellcheck -x -P SCRIPTDIR -s sh --severity=style "${files[@]}"
 
       - name: Script self-tests
-        # Also compares what the scripts rely on elsewhere in the tree: the Fedora pins
-        # of image/Containerfile and of this file, and their Renovate managers; the
-        # trust mapping of policy.json and image/checks/keys.sh; the installed layout of
-        # contract section 2 against the Makefile and apex.spec; and .gitignore.
         run: .github/scripts/selftest.sh
 
       - name: renovate.json is valid JSON
@@ -165,23 +129,15 @@ jobs:
     permissions:
       contents: read
     container:
-      # Renovate keeps the digest current; the tag documents the Fedora release.
       image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-      # t-repos.sh runs the repos stage in a bubblewrap sandbox with an overlayfs /usr,
-      # which needs mount namespaces that an unprivileged container does not get. The
-      # hosted runner is disposable and this job holds no secrets.
+      # bubblewrap in t-repos.sh needs mount namespaces. The hosted runner is disposable
+      # and this job holds no secrets.
       options: --privileged
     env:
-      # A test file that would skip for a missing tool fails instead.
       APEX_IMAGE_TESTS_NO_SKIP: "1"
     steps:
       - name: Tools of the checks and their tests
-        # The tools of the real build: systemd 262's systemd-analyze, udevadm and
-        # systemd-tmpfiles (t-overlay.sh, t-desktop.sh), python3 for the fakes,
-        # bubblewrap for the repos stage (t-repos.sh), glib2's glib-compile-schemas and
-        # gsettings (t-desktop.sh), and dash, since run.sh runs every file with sh (bash,
-        # as in the image build) and with dash. git-core: actions/checkout and
-        # t-lists.sh's ignore checks. Fedora's released repositories only.
+        # dash: run.sh runs every file with sh and with dash.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
           git-core python3 bubblewrap dash bash coreutils diffutils findutils gawk grep sed
@@ -200,9 +156,8 @@ jobs:
           done
 
       - name: image/tests/run.sh
-        # The checkout belongs to the runner's user and this job runs as root: git
-        # refuses such a repository unless it is marked safe, and t-lists.sh would then
-        # silently leave out its .gitignore checks.
+        # Without safe.directory, git refuses the runner-owned checkout to root, and
+        # t-lists.sh silently leaves out its .gitignore checks.
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git rev-parse --git-dir >/dev/null
@@ -215,18 +170,14 @@ jobs:
     permissions:
       contents: read
     container:
-      # Renovate keeps the digest current; the tag documents the Fedora release.
       image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-      # The kernel command line cases bind a fixture over /proc/cmdline with bubblewrap,
-      # which needs mount namespaces. The hosted runner is disposable and this job holds
-      # no secrets.
+      # bubblewrap binds a fixture over /proc/cmdline, which needs mount namespaces. The
+      # hosted runner is disposable and this job holds no secrets.
       options: --privileged
     env:
-      # A case that would skip for a missing tool fails instead.
       APEX_LAYER_TESTS_NO_SKIP: "1"
     steps:
       - name: gjs, glib2 and bubblewrap
-        # Fedora's released repositories only, as for image-tests.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
           gjs glib2 bubblewrap bash coreutils grep sed
@@ -250,9 +201,4 @@ jobs:
           persist-credentials: false
 
       - name: Tracked files
-        # ADR 0006, THREAT-MODEL T6, docs/hardware/FINGERPRINT.md: fingerprint images,
-        # print templates, umockdev recordings, usbmon captures, var/lib/fprint, hex
-        # runs, hex-dump lines and long lines. The script lists the rules and their
-        # reviewed exemptions. Such a file can arrive in any directory, hence no path
-        # filter on this workflow.
         run: .github/scripts/privacy-guard.sh

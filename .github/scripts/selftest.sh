@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Tests for the pure parts of .github/scripts (lib.sh): version ordering, tag
-# sanitising, Containerfile parsing, the policy and lock-list transforms, the trust
-# mapping (policy.json = image/checks/keys.sh = ADR 0012), the registry error
-# classification (against a fake skopeo), the boot-counter state checks, and
-# qualify.sh's counting of an armed update's self-reboots (against a fake QEMU and a
-# fake ssh). Also, against fakes: the compose's repository options (lib.sh, rpms.sh,
-# packaging/libfprint/build.sh), the installed layout (contract section 2 = make
-# install = apex.spec %files), the Fedora registry pins (registry.fedoraproject.org
-# only, image.sh refusing others) and their Renovate managers, ci-host.sh preflight,
-# qualify.sh's kernel arguments, image.sh replay-check, publish.sh's version and commit
-# order, oci-artifact.sh's attested lookup, privacy-guard.sh and .gitignore. And
-# image.sh's check of the rebuild lane's lock, against apex-lane's golden locks (the
-# lane's own tests are Rust: crates/apex-lane/tests); desktop/shell's licence; the apex
-# and apex-desktop keys and files. No network, no root, no KVM.
-#
-#   selftest.sh
+# Tests of .github/scripts and of the tree facts they rely on, against fakes: no network,
+# no root, no KVM.
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -35,12 +21,11 @@ flunk() {
     printf 'FAIL: %s\n' "$*" >&2
 }
 
-# check NAME EXPECTED ACTUAL
 check() {
-    if [[ $2 == "$3" ]]; then pass; else flunk "$1: expected '$2', got '$3'"; fi
+    local name=$1 expected=$2 actual=$3
+    if [[ $expected == "$actual" ]]; then pass; else flunk "$name: expected '$expected', got '$actual'"; fi
 }
 
-# check_true NAME CMD...  /  check_false NAME CMD...
 check_true() {
     local name=$1
     shift
@@ -141,29 +126,27 @@ if [[ -f $committed ]]; then
     check "committed policy keys exist in the checkout" "" "$absent_keys"
 fi
 
-# --- trust mapping: policy.json, image/checks/keys.sh and ADR 0012 agree exactly ---------
-# ADR 0012: release and backup keys for ghcr.io/sekirokenjii/apex, the CI key only for
-# apex-testing. Changing trust means changing this, keys.sh's TRUST_MAP and policy.json
-# in one reviewed change (keys/README.md).
-ADR0012_MAP=$'ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release-backup.pub
+# --- trust mapping: policy.json and image/checks/keys.sh agree exactly ---------------------
+# Changing trust means changing this, keys.sh's TRUST_MAP and policy.json in one reviewed
+# change.
+EXPECTED_TRUST_MAP=$'ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release-backup.pub
 ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release.pub
 ghcr.io/sekirokenjii/apex-testing\t/usr/share/apex/keys/ci.pub'
 keys_sh="$APEX_ROOT/image/checks/keys.sh"
 if [[ -f $keys_sh ]]; then
     keys_map=$(sed -n "/^TRUST_MAP='/,/'\$/p" "$keys_sh" | sed -e "s/^TRUST_MAP='//" -e "s/'\$//" |
         LC_ALL=C sort)
-    check "image/checks/keys.sh TRUST_MAP is the ADR 0012 mapping" "$ADR0012_MAP" "$keys_map"
+    check "image/checks/keys.sh TRUST_MAP is the ADR 0012 mapping" "$EXPECTED_TRUST_MAP" "$keys_map"
 fi
 if [[ -f $committed ]]; then
     policy_map=$(policy_trust_map <"$committed" 2>&1) || true
-    check "the committed policy.json trusts exactly the ADR 0012 mapping" "$ADR0012_MAP" "$policy_map"
+    check "the committed policy.json trusts exactly the ADR 0012 mapping" "$EXPECTED_TRUST_MAP" "$policy_map"
 fi
-check "policy_trust_map of the fixture policy without its extra scope" "$ADR0012_MAP" \
+check "policy_trust_map of the fixture policy without its extra scope" "$EXPECTED_TRUST_MAP" \
     "$(jq 'del(.transports.docker["example.com/data"])' <<<"$policy" | policy_trust_map)"
-check "key order in keyPaths does not matter" "$ADR0012_MAP" \
+check "key order in keyPaths does not matter" "$EXPECTED_TRUST_MAP" \
     "$(jq 'del(.transports.docker["example.com/data"])
         | .transports.docker["ghcr.io/sekirokenjii/apex"][0].keyPaths |= reverse' <<<"$policy" | policy_trust_map)"
-# Each of these edits of the committed policy must fail, or change the mapping.
 A='.transports.docker["ghcr.io/sekirokenjii/apex"]'
 TT='.transports.docker["ghcr.io/sekirokenjii/apex-testing"]'
 while IFS='|' read -r name edit; do
@@ -174,7 +157,7 @@ while IFS='|' read -r name edit; do
     fi
     trust_rc=0
     trust_map=$(policy_trust_map <<<"$edited" 2>/dev/null) || trust_rc=$?
-    if ((trust_rc == 0)) && [[ $trust_map == "$ADR0012_MAP" ]]; then
+    if ((trust_rc == 0)) && [[ $trust_map == "$EXPECTED_TRUST_MAP" ]]; then
         flunk "trust mapping: '$name' is accepted as the ADR 0012 mapping"
     else
         pass
@@ -232,7 +215,7 @@ esac
 EOF
 chmod +x "$TMP/bin/skopeo"
 rc_of() { local rc=0; "$@" >/dev/null 2>&1 || rc=$?; printf '%s' "$rc"; }
-# Runs in a subshell (PATH and the retry delay stay local); returns its failure count.
+# Run in a subshell, which keeps PATH and the retry delay; returns its failure count.
 registry_checks() {
     local FAILS=0
     PATH="$TMP/bin:$PATH"
@@ -297,9 +280,6 @@ check_false "health failure with no checks" health_failure_has "$D1" forced-red 
     <<<"{\"digest\":\"$D1\",\"failed_checks\":[],\"at\":1}"
 
 # --- qualify.sh: counting the armed boots' self-reboots (fake QEMU and ssh) --------------
-# armed_attempts must restart QEMU after each guest reboot, pass -no-reboot every time
-# (without it a guest reboot does not end QEMU), keep one console log per boot, and never
-# run ssh: a login would stop apex-boot-assess from rebooting.
 Q="$TMP/qualify"
 mkdir -p "$Q/bin" "$Q/out/logs"
 cat >"$Q/bin/qemu-system-x86_64" <<'EOF'
@@ -335,8 +315,8 @@ chmod +x "$Q/bin/qemu-system-x86_64" "$Q/bin/ssh"
 : >"$Q/vars.fd"
 : >"$Q/out/red.raw"
 
-# run_armed_attempts PLAN TIMEOUT: armed_attempts red 3 in a fresh bash that sources
-# qualify.sh (lib.sh's readonly names are already set in this shell). Its exit status.
+# run_armed_attempts PLAN... TIMEOUT: in a fresh bash, since this shell already holds
+# lib.sh's readonly names.
 run_armed_attempts() {
     printf '%s\n' "$@" | head -n -1 >"$Q/plan"
     : >"$Q/qemu.log"
@@ -347,7 +327,6 @@ run_armed_attempts() {
         FAKE_QEMU_LOG="$Q/qemu.log" FAKE_QEMU_PLAN="$Q/plan" FAKE_SSH_LOG="$Q/ssh.log" \
         bash -c '. "$1"; require_kvm() { :; }; armed_attempts red "$APEX_BOOT_ATTEMPTS"' \
         _ "$APEX_ROOT/.github/scripts/qualify.sh" >"$Q/stderr.log" 2>&1 || rc=$?
-    # Whatever still "runs" (a stay boot) is stopped here.
     if [[ -f $Q/out/red.pid ]]; then kill "$(cat "$Q/out/red.pid")" 2>/dev/null || true; fi
     return "$rc"
 }
@@ -422,10 +401,7 @@ atree=$(bash -c '. "$1"; git_() { [[ $1 != ls-tree ]] || printf "100644 blob 111
 check "the apex key leaves crates/apex-lane/, the builder VM's tool, out" "100644 blob 1111	crates/apexctl/src/main.rs
 100644 blob 3333	crates/apex-lanes/x.rs" "$atree"
 
-# --- the installed layout: contract section 2 = make install = apex.spec %files --------
-# M1-IMPLEMENTATION.md section 2 is the contract; the Makefile implements it and the spec
-# lists it. A file added to one and not the others is either not installed, not in the
-# RPM, or an rpmbuild "installed but unpackaged" failure.
+# --- the installed layout: M1-IMPLEMENTATION.md, make install and apex.spec agree ---------
 if command -v make >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     L="$TMP/layout"
     mkdir -p "$L/target/release"
@@ -447,7 +423,7 @@ import os, re, sys
 root, dry_run, installed = sys.argv[1:4]
 problems = []
 
-# Contract section 2: | `source`[, `.ext`] | `destination` or `directory/` |
+# Rows: | `source`[, `.ext`] | `destination` or `directory/` |
 text = open(f"{root}/docs/specs/M1-IMPLEMENTATION.md", encoding="utf-8").read()
 section = re.search(r"^## 2\..*?$(.*?)^## ", text, re.M | re.S)
 contract = set()
@@ -478,7 +454,6 @@ for d in sorted(dests - got):
 for d in sorted(got - dests):
     problems.append(f"a real make install produced {d}, which contract section 2 lacks")
 
-# packaging/apex.spec %files, with the macros it uses.
 macros = {"_bindir": "/usr/bin", "_libexecdir": "/usr/libexec", "_datadir": "/usr/share",
           "_unitdir": "/usr/lib/systemd/system", "_tmpfilesdir": "/usr/lib/tmpfiles.d",
           "_prefix": "/usr"}
@@ -499,7 +474,6 @@ for d in sorted(dests - listed):
     problems.append(f"apex.spec %files does not list {d}")
 for d in sorted(listed - dests):
     problems.append(f"apex.spec %files lists {d}, which make install does not produce")
-# Every drop-in directory the RPM creates under systemd's unit directory is owned.
 for d in sorted({os.path.dirname(p) for p in dests if p.startswith("/usr/lib/systemd/system/")
                  and p.count("/") == 6} - dirs):
     problems.append(f"apex.spec %files does not own the drop-in directory {d} (%dir)")
@@ -523,8 +497,7 @@ check "pre-GA with an allowlist: only those builds from updates-testing" \
 check "pre-GA with an empty allowlist: no updates-testing" "--repo=fedora --repo=updates" "$(repo_args_with 0 '')"
 check "after GA: no updates-testing" "--repo=fedora --repo=updates" "$(repo_args_with 1 gtk4-4.24.0-1.fc45)"
 
-# packaging/libfprint/build.sh key against a fake rpm and dnf5: the same rule, and the
-# repository options are part of the key.
+# packaging/libfprint/build.sh key, against a fake rpm and dnf5.
 F="$TMP/fprint"
 mkdir -p "$F/bin"
 cat >"$F/bin/rpm" <<'EOF'
@@ -541,8 +514,7 @@ printf '%s\n' "$*" >>"$FAKE_DNF_LOG"
 echo 'libfprint 0 1.94.100 1.fc45 libfprint-1.94.100-1.fc45.src.rpm'
 EOF
 chmod +x "$F/bin/rpm" "$F/bin/dnf5"
-# fprint_key GA LIST: build.sh key with that GA_REACHED and TESTING_INCLUDEPKGS; the
-# dnf5 arguments land in $F/dnf.log.
+# fprint_key GA_REACHED TESTING_INCLUDEPKGS: the dnf5 arguments land in $F/dnf.log.
 fprint_key() {
     : >"$F/dnf.log"
     PATH="$F/bin:$PATH" FAKE_DNF_LOG="$F/dnf.log" GA_REACHED=$1 TESTING_INCLUDEPKGS=$2 \
@@ -562,7 +534,7 @@ if [[ -x $APEX_ROOT/packaging/libfprint/build.sh ]]; then
     check "libfprint key is the same with no updates-testing either way" "$k_empty" "$k_ga"
 fi
 
-# --- desktop/shell ships inside gnome-shell under gnome-shell's licence (ADR 0014) --------
+# --- desktop/shell ships inside gnome-shell under gnome-shell's licence -------------------
 if [[ -d $APEX_ROOT/desktop/shell ]]; then
     unlicensed=$(cd "$APEX_ROOT/desktop/shell" && find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do
         [[ $(head -n 3 -- "$f") == *'SPDX-License-Identifier: GPL-2.0-or-later'* ]] || printf '%s ' "$f"
@@ -571,7 +543,6 @@ if [[ -d $APEX_ROOT/desktop/shell ]]; then
 fi
 
 # --- image.sh: the rebuild lane's lock in the image context ------------------------------
-# image_sh CODE: run CODE with image.sh sourced (its main does not start).
 image_sh() { bash -c '. "$1"; shift; eval "$1"' _ "$APEX_ROOT/.github/scripts/image.sh" "$@"; }
 IL="$TMP/image-lane"
 mkdir -p "$IL/pkgs/gnome-shell/k1"
@@ -616,8 +587,7 @@ bad_lane() {
     bad_lane "an unknown record" '$a pin mutter 51.0'
 }
 check "lane lock refuses a missing file" 1 "$(rc_of image_sh "lane_lock_check '$IL/nope.lock' gnome-shell")"
-# apex-lane's golden locks, first written by the Bash lane: what the writer writes, the
-# reader accepts.
+# What apex-lane writes (its golden locks), image.sh must accept.
 GOLDEN=$APEX_ROOT/crates/apex-lane/tests/golden
 golden_locks=0
 for g in "$GOLDEN"/lock/b-*.lock "$GOLDEN"/lock/store-rpms.lock.next "$GOLDEN"/hold/*/expect/rpms.lock.next; do
@@ -626,7 +596,6 @@ for g in "$GOLDEN"/lock/b-*.lock "$GOLDEN"/lock/store-rpms.lock.next "$GOLDEN"/h
     check "lane lock: apex-lane's golden ${g#"$GOLDEN"/} is accepted" 0 "$(rc_of image_sh "lane_lock_check '$g' gnome-shell")"
 done
 check "lane lock: apex-lane's golden locks are there" 1 "$((golden_locks > 0))"
-# image.sh context stops without a lane lock: gnome-shell never falls back to Fedora's.
 mkdir -p "$IL/rpms"
 : >"$IL/rpms/apex-0.1.0-1.fc45.x86_64.rpm"
 (cd "$IL/rpms" && sha256sum -- *.rpm >SHA256SUMS)
@@ -669,7 +638,6 @@ check "unknown option is a usage error" 2 \
     "$(PATH="$TMP/rustc-bin:$PATH" rc_of "$APEX_ROOT/.github/scripts/rust-toolchain-check.sh" --nope)"
 
 # --- Fedora images: digest pins on registry.fedoraproject.org only ------------------------
-# quay.io stops serving a Fedora digest about a day after the tag moves (lib.sh).
 DQ="sha256:$(printf 'd%.0s' {1..64})"
 check_true "a registry.fedoraproject.org digest pin" is_fedora_pin "registry.fedoraproject.org/fedora-bootc@$DQ"
 check_true "a registry.fedoraproject.org digest pin with a tag" is_fedora_pin "registry.fedoraproject.org/fedora:45@$DQ"
@@ -684,8 +652,8 @@ if [[ -f $APEX_CONTAINERFILE ]]; then
             is_fedora_pin "$(containerfile_arg "$arg")"
     done
 fi
-# image.sh build refuses a quay.io pin before it runs anything: a copy of the scripts
-# next to an edited Containerfile, with fake podman and git that fail the check if called.
+# A copy of the scripts next to an edited Containerfile; the fake podman and git report
+# any call.
 IB="$TMP/image-build"
 mkdir -p "$IB/bin" "$IB/work" "$IB/tree/.github" "$IB/tree/image"
 cp -R "$APEX_ROOT/.github/scripts" "$IB/tree/.github/"
@@ -697,7 +665,7 @@ EOF
 cp "$IB/bin/podman" "$IB/bin/git"
 chmod +x "$IB/bin/podman" "$IB/bin/git"
 : >"$IB/work/inputs.env"
-# image_build_with SED: image.sh build with SED applied to the real Containerfile.
+# image_build_with SED: image.sh build of the committed Containerfile edited by SED.
 image_build_with() {
     sed "$1" "$APEX_CONTAINERFILE" >"$IB/tree/image/Containerfile"
     ib_rc=0
@@ -715,19 +683,15 @@ image_build_with 's|^ARG REPOS_BASE=.*|ARG REPOS_BASE=|'
 check "image.sh build refuses an empty REPOS_BASE" 1 "$ib_rc"
 image_build_with 's|^\(ARG BASE=registry\.fedoraproject\.org/fedora-bootc\)@.*|\1:45|'
 check "image.sh build refuses a floating BASE tag" 1 "$ib_rc"
-# The unedited Containerfile gets past the check: to git (for the revision), which fails.
+# Past the check, image.sh build calls the fake git for the revision.
 image_build_with 's|^$||'
 check_true "the committed Containerfile passes the check" grep -q 'unexpected: .*git' <<<"$ib_log"
-# Every Fedora container of the workflows (ci.yml) is a digest pin on
-# registry.fedoraproject.org.
 wf_quay=$(grep -rhoE 'quay\.io/fedora/[a-z0-9._-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}' \
     "$APEX_ROOT/.github/workflows" || true)
 check "no workflow pins a Fedora image by digest on quay.io" "" "$wf_quay"
 wf_unpinned=$(grep -rhE '^[[:space:]]*image:[[:space:]]' "$APEX_ROOT/.github/workflows" |
     grep -vE 'image: registry\.fedoraproject\.org/fedora:45@sha256:[0-9a-f]{64}$' || true)
 check "every workflow container is registry.fedoraproject.org/fedora:45 by digest" "" "$wf_unpinned"
-# No script, workflow, recipe or Containerfile line names quay.io outside a comment
-# (renovate.json is checked below).
 quay_refs=$(grep -nE '^[[:space:]]*[^#[:space:]].*quay' "$APEX_ROOT"/.github/scripts/*.sh \
     "$APEX_ROOT"/.github/workflows/*.yml "$APEX_ROOT/Justfile" "$APEX_CONTAINERFILE" |
     grep -v '/selftest\.sh:' || true)
@@ -748,7 +712,6 @@ managers = [m for m in cfg.get("customManagers", [])
             if any(re.search(p.strip("/"), "image/Containerfile") for p in m.get("managerFilePatterns", []))]
 fedora_rule = [r for r in cfg["packageRules"] if r.get("groupName") == "fedora 45 images"]
 names = set(fedora_rule[0]["matchPackageNames"]) if fedora_rule else set()
-# The rule that keeps Fedora images on release 45 must cover the same names.
 frozen = [r for r in cfg["packageRules"] if r.get("enabled") is False and "docker" in r.get("matchDatasources", [])]
 if not frozen or set(frozen[0]["matchPackageNames"]) != names:
     problems.append("the rule that disables Fedora major/minor/patch updates lists other names than 'fedora 45 images'")
@@ -787,7 +750,6 @@ print("\n".join(problems))
 PY
 )
     check "renovate.json keeps every Fedora digest pin current" "" "$renovate_problems"
-    # Each form of the two lines matches exactly one manager, or none for quay.io.
     matches=$(python3 - "$APEX_ROOT" <<'PY'
 import json, re, sys
 cfg = json.load(open(f"{sys.argv[1]}/renovate.json"))
@@ -830,7 +792,6 @@ done
 check_true "qualification still enables sshd" grep -qF -- "--karg systemd.wants=sshd.service" <<<"$kargs"
 units_dir="$APEX_ROOT/image/system_files/usr/lib/systemd/system"
 if [[ -d $units_dir ]]; then
-    # A Flatpak unit the image adds later must be masked too (or this list reviewed).
     unmasked=$(find "$units_dir" -maxdepth 1 -name '*flatpak*' -printf '%f\n' | sort |
         while read -r u; do grep -qF -- "systemd.mask=$u" <<<"$kargs" || printf '%s ' "$u"; done)
     check "every Flatpak unit of the image is masked in qualification" "" "$unmasked"
@@ -895,8 +856,8 @@ check "a sibling branch does not" 1 "$(desc_rc "$C_B" "$C_S")"
 check "an unknown commit is unknown, not older" 2 "$(desc_rc "$C_X" "$C_B")"
 check "an empty revision is unknown" 2 "$(desc_rc "" "$C_B")"
 
-# check_increases against a fake registry: <tag>.json holds `skopeo inspect` output,
-# tags.json the `skopeo list-tags` answer.
+# The fake registry answers `skopeo inspect` from <tag>.json, `skopeo list-tags` from
+# tags.json.
 P="$TMP/publish"
 mkdir -p "$P/bin" "$P/reg"
 cat >"$P/bin/skopeo" <<'EOF'
@@ -989,13 +950,11 @@ check "a bad workflow name is refused" 1 \
 V="$TMP/privacy"
 git init -q "$V"
 guard_rc() { GITHUB_ACTIONS='' rc_of "$APEX_ROOT/.github/scripts/privacy-guard.sh" --dir "$V" "$@"; }
-# guard_findings: how many findings the guard reports for the tracked files.
 guard_findings() {
     GITHUB_ACTIONS='' "$APEX_ROOT/.github/scripts/privacy-guard.sh" --dir "$V" 2>&1 |
         grep -c '^privacy guard: [^0-9]' || true
 }
-# tracked_fails NAME PATH CONTENT: PATH with CONTENT (printf %s, plus a newline) is one
-# finding once tracked; it is untracked again afterwards.
+# tracked_fails NAME PATH CONTENT: one finding while tracked; untracked again afterwards.
 tracked_fails() {
     mkdir -p "$V/$(dirname "$2")"
     printf '%s\n' "$3" >"$V/$2"
@@ -1004,7 +963,7 @@ tracked_fails() {
     git -C "$V" rm -q --cached "$2"
     rm -f "$V/$2"
 }
-# tracked_passes NAME PATH CONTENT: the same, and it passes (and stays tracked).
+# tracked_passes NAME PATH CONTENT: passes, and stays tracked.
 tracked_passes() {
     mkdir -p "$V/$(dirname "$2")"
     printf '%s\n' "$3" >"$V/$2"
@@ -1050,7 +1009,6 @@ tracked_fails "a long Markdown line outside a table fails" docs/prose.md "$(x_ti
 tracked_fails "a Markdown table row with a long blob fails" docs/blob.md "| frame | $(x_times 150 QUJD) |"
 tracked_fails "a table row outside Markdown fails" table.txt "$(table_row 100)"
 tracked_fails "a long line in another Rust file fails" crates/x/src/lib.rs "$(x_times 450)"
-# A finding names the place, never the content (CI logs are public).
 mkdir -p "$V/leak"
 printf '%s\n' "SECRETMARKER $(x_times 450)" >"$V/leak/data.txt"
 git -C "$V" add leak/data.txt
@@ -1061,7 +1019,6 @@ git -C "$V" rm -q --cached leak/data.txt
 check "the tree is clean again" 0 "$(guard_rc)"
 check "the repository itself is clean" 0 \
     "$(GITHUB_ACTIONS='' rc_of "$APEX_ROOT/.github/scripts/privacy-guard.sh" --untracked)"
-# .gitignore keeps the same names out of `git add` (in any letter case).
 for f in a.pgm B.PGM x/print.Variant rec.ioctl x/y/rec.UMOCKDEV cap.pcap cap.PcapNG \
     var/lib/fprint/u/1 image/system_files/var/lib/fprint/u/1; do
     check_true ".gitignore ignores $f" git -C "$APEX_ROOT" check-ignore -q --no-index "$f"

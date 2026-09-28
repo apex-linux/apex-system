@@ -4,16 +4,7 @@
 # Assert that the rustc on PATH is the release pinned in rust-toolchain.toml.
 #
 #   rust-toolchain-check.sh              fail on a mismatch (ci.yml)
-#   rust-toolchain-check.sh --warn-only  report a mismatch as a warning (rpms.sh build:
-#                                        the RPM is built with Fedora's current rust
-#                                        anyway, and OS updates must not stop for it)
-#
-# CI runs this in registry.fedoraproject.org/fedora:45 with Fedora's rust and cargo.
-# Fedora's /usr/bin/cargo is the real cargo, not a rustup proxy (rust.spec, %files -n
-# cargo; the Fedora rustup package ships only rustup-init), so rust-toolchain.toml is
-# inert there: nothing tries to download a toolchain. The pin exists so that developer machines with
-# rustup build with the same compiler that builds the RPM, and this check keeps the two
-# in step (ARCHITECTURE section 11).
+#   rust-toolchain-check.sh --warn-only  report a mismatch as a warning (rpms.sh build)
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -37,8 +28,6 @@ actual=$(rustc -vV | sed -n 's/^release: //p')
 [[ -n $actual ]] || die "could not read the release from 'rustc -vV'"
 
 if command -v rustup >/dev/null 2>&1 && [[ -z ${RUSTUP_TOOLCHAIN:-} ]]; then
-    # With rustup, rustc is a proxy that honours rust-toolchain.toml; the comparison
-    # below then checks the toolchain that rustup resolved.
     log "rustup found: rustc is a proxy and follows rust-toolchain.toml"
 fi
 

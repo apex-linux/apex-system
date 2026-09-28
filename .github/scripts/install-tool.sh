@@ -4,18 +4,15 @@
 # Install a pinned, prebuilt release binary after checking its SHA-256.
 #
 #   install-tool.sh TOOL DESTDIR   download, verify and install DESTDIR/TOOL
-#   install-tool.sh --pin TOOL     print TOOL's pin, "<version> <sha256>" (no download;
-#                                  rpms.sh folds cargo-auditable's into the RPM key)
+#   install-tool.sh --pin TOOL     print TOOL's pin, "<version> <sha256>" (no download)
 #
-# TOOL is one of: cargo-deny, cargo-auditable, cosign, actionlint, shellcheck. The
-# versions and checksums below are the only source of truth; Renovate bumps each
-# VERSION/SHA256 pair together (renovate.json, github-release-attachments).
-# Used instead of third-party installer actions, so a secret-bearing job (cosign) runs
-# only first-party actions plus this reviewed script.
+# TOOL is one of: cargo-deny, cargo-auditable, cosign, actionlint, shellcheck.
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# Pinned here instead of third-party installer actions, so a secret-bearing job runs only
+# first-party actions and this reviewed script. Renovate bumps each pair together.
 # renovate: datasource=github-release-attachments depName=EmbarkStudios/cargo-deny
 CARGO_DENY_VERSION=0.20.2
 CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
@@ -36,8 +33,8 @@ ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3
 SHELLCHECK_VERSION=v0.11.0
 SHELLCHECK_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 
-# tool_pin TOOL: set version, url, sha and member (the path inside the archive; empty
-# for a bare binary) for TOOL.
+# tool_pin TOOL: sets the caller's version, url, sha and member (the path inside the
+# archive; empty for a bare binary).
 tool_pin() {
     case $1 in
         cargo-deny)

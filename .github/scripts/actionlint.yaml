@@ -1,7 +1,5 @@
-# actionlint configuration for this repository's workflows. Use it with
-#   actionlint -config-file .github/scripts/actionlint.yaml
-# actionlint 1.7.12 predates GitHub's ubuntu-26.04 runner image (public preview),
-# so the label is declared here; it is a GitHub-hosted label, not a self-hosted one.
+# actionlint 1.7.12 predates GitHub's ubuntu-26.04 runner image (public preview); it is a
+# GitHub-hosted label, not a self-hosted one.
 self-hosted-runner:
   labels:
     - ubuntu-26.04
