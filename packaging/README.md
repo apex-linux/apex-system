@@ -12,7 +12,7 @@ and [ADR 0013](../docs/adr/0013-build-pipeline.md)).
 | `../Makefile`, `apex.spec` | the `apex` RPM: `apexctl`, `apex-updated`, `apex-boot-assess` and their data files | `rpms.yml` | `ghcr.io/sekirokenjii/apex-rpms:<key>` |
 | `licenses.py` | the `License:` tag of `apex.spec`, from `cargo metadata` | `rust.yml` and `rpms.yml` (check) | pass/fail |
 | `libfprint/` | Fedora's libfprint SRPM plus the ELAN 04f3:0c6e patches | `libfprint.yml` | `ghcr.io/sekirokenjii/apex-libfprint:<key>`, or "degraded" |
-| `kernel/` | a thin fork of Fedora's kernel (COPR) | none: **M2, deferred** ([ADR 0005](../docs/adr/0005-kernel-fedora-fork.md)) | none |
+| `pkgs/kernel/` | the CachyOS kernel and NVIDIA open modules as one pair ([ADR 0015](../docs/adr/0015-cachyos-kernel-and-nvidia.md)) | none yet: the lane arrives in roadmap S1c | none yet |
 
 ## The apex RPM
 
@@ -110,9 +110,10 @@ elan replay tests. Exit 3 means degraded: the image ships Fedora's stock libfpri
 `io.github.sekirokenjii.apex.degraded=fingerprint` and an issue is opened, so OS updates
 never wait for this package.
 
-## Kernel (M2)
+## Kernel and NVIDIA (S1c)
 
-See [kernel/README.md](kernel/README.md): a `kernel-local` config overlay, a spec header
-(`buildid .1.apex`, Zen 3 `kcflags`), the not-yet-upstream ALC294 quirk (disabled until
-measured) and a `make_srpm` recipe that pins Fedora's dist-git commit and verifies every
-lookaside source. Nothing uses it until the ADR 0005 gates hold.
+The image will boot the CachyOS kernel (GCC build), rebuilt from the COPR's signed SRPM,
+with NVIDIA's open modules built for exactly that kernel in the same job
+([ADR 0015](../docs/adr/0015-cachyos-kernel-and-nvidia.md)). The lane lands in roadmap
+S1c. Today `pkgs/kernel/patches/` holds only the ALC294 quirk, which is out of any
+series: it ships only if the `model=` alias fails (ADR 0004, as amended).
