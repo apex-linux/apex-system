@@ -130,6 +130,7 @@ pub fn manifest(version: &str, packages: Vec<Package>) -> Manifest {
         revision: "0123456789abcdef0123456789abcdef01234567".into(),
         base_image: "quay.io/fedora/fedora-bootc@sha256:00".into(),
         degraded: vec!["audio".into()],
+        held: Vec::new(),
         packages,
     }
 }

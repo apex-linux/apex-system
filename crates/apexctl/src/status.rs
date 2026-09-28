@@ -365,6 +365,7 @@ fn degraded_meaning(component: &str) -> &'static str {
         "audio" => "the speaker fix is not available yet",
         "fingerprint" => "the fingerprint reader may fail to enroll fingers",
         "nvidia" => "no NVIDIA driver",
+        "shell" => "stock GNOME Shell, without the Apex layer and theme",
         _ => "degraded",
     }
 }

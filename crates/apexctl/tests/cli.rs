@@ -395,6 +395,8 @@ fn build_manifest_with_a_fake_rpm() {
         "fingerprint",
         "--degraded",
         "audio",
+        "--held",
+        "gnome-shell",
     ])
     .env("PATH", path.clone()));
     assert_eq!(code, 0, "{stderr}");
@@ -407,6 +409,7 @@ fn build_manifest_with_a_fake_rpm() {
         manifest["degraded"],
         serde_json::json!(["audio", "fingerprint"])
     );
+    assert_eq!(manifest["held"], serde_json::json!(["gnome-shell"]));
     assert_eq!(manifest["packages"][0]["name"], "bash");
     assert_eq!(manifest["fedora"], 45);
 

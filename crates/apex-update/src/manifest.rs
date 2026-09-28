@@ -44,6 +44,9 @@ pub struct Manifest {
     /// Components shipped in degraded form (`audio`, `fingerprint`, ...), sorted.
     #[serde(default)]
     pub degraded: Vec<String>,
+    /// Rebuild-lane families held at their last good build (`gnome-shell`, ...), sorted.
+    #[serde(default)]
+    pub held: Vec<String>,
     /// Installed packages, sorted by `(name, arch)` in byte order and unique on that key.
     #[serde(default)]
     pub packages: Vec<Package>,
@@ -134,7 +137,7 @@ impl Manifest {
         Version::parse(&self.version)
     }
 
-    /// Sorts `packages` and `degraded` the way the contract requires, and drops
+    /// Sorts `packages`, `degraded` and `held` the way the contract requires, and drops
     /// duplicate `(name, arch)` keys, keeping the newest EVR. Writers call this before
     /// serializing.
     pub fn normalize(&mut self) {
@@ -143,6 +146,8 @@ impl Manifest {
             .dedup_by(|later, kept| later.key() == kept.key());
         self.degraded.sort();
         self.degraded.dedup();
+        self.held.sort();
+        self.held.dedup();
     }
 }
 
@@ -442,6 +447,7 @@ mod tests {
           "revision": "0123456789abcdef0123456789abcdef01234567",
           "base_image": "quay.io/fedora/fedora-bootc@sha256:00",
           "degraded": ["audio"],
+          "held": ["gnome-shell"],
           "packages": [
             { "name": "bash", "epoch": 0, "version": "5.3.0", "release": "2.fc45", "arch": "x86_64", "sha256": "x" }
           ],
@@ -450,6 +456,7 @@ mod tests {
         let m = Manifest::from_json(json).expect("valid manifest");
         assert_eq!(m.parsed_version(), Version::parse("45.20260924.117"));
         assert_eq!(m.degraded, ["audio"]);
+        assert_eq!(m.held, ["gnome-shell"]);
         assert_eq!(m.packages, [pkg("bash", (0, "5.3.0", "2.fc45"), "x86_64")]);
     }
 
@@ -460,6 +467,7 @@ mod tests {
         assert_eq!(m.schema, MANIFEST_SCHEMA);
         assert_eq!(m.version, "");
         assert_eq!(m.parsed_version(), None);
+        assert!(m.held.is_empty(), "a manifest from before the held field");
         assert_eq!(m.packages[0].epoch, 0);
     }
 
@@ -502,6 +510,7 @@ mod tests {
             pkg("a", (0, "1", "1"), "i686"),
         ];
         m.degraded = vec!["fingerprint".into(), "audio".into(), "audio".into()];
+        m.held = vec!["nautilus".into(), "gnome-shell".into(), "nautilus".into()];
         m.normalize();
         assert_eq!(
             m.packages,
@@ -512,6 +521,7 @@ mod tests {
             ]
         );
         assert_eq!(m.degraded, ["audio", "fingerprint"]);
+        assert_eq!(m.held, ["gnome-shell", "nautilus"]);
     }
 
     #[test]

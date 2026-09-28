@@ -23,7 +23,7 @@ pub const RPM_QUERY_FORMAT: &str = "%{NAME}\\t%{EPOCHNUM}\\t%{VERSION}\\t%{RELEA
 pub const IMAGE_NAME: &str = "apex";
 
 /// Components the `degraded` list may name (contract §3).
-pub const DEGRADED_COMPONENTS: &[&str] = &["audio", "fingerprint", "nvidia"];
+pub const DEGRADED_COMPONENTS: &[&str] = &["audio", "fingerprint", "nvidia", "shell"];
 
 /// Name of the rpm pseudo packages that hold imported signing keys.
 const GPG_PUBKEY: &str = "gpg-pubkey";
@@ -43,8 +43,11 @@ pub enum ManifestBuildError {
     #[error("base image {0:?} is not pinned by digest (<repository>@sha256:<64 hex digits>)")]
     Base(String),
     /// A `--degraded` value outside the contract's list.
-    #[error("unknown degraded component {0:?} (known: audio, fingerprint, nvidia)")]
+    #[error("unknown degraded component {0:?} (known: audio, fingerprint, nvidia, shell)")]
     Degraded(String),
+    /// A `--held` value that is not a lane family name.
+    #[error("held family {0:?} is not a package name ([a-z0-9][a-z0-9._+-]*)")]
+    Held(String),
     /// An rpm output line that does not have five fields.
     #[error("rpm output line {line}: {reason}: {text:?}")]
     RpmLine {
@@ -89,6 +92,8 @@ pub struct ManifestInput {
     pub base: String,
     /// `--degraded` values, in any order.
     pub degraded: Vec<String>,
+    /// `--held` values: rebuild-lane families held at their last good build.
+    pub held: Vec<String>,
 }
 
 /// Validates a version string: exactly three numeric fields, canonical (no leading zeros),
@@ -121,6 +126,17 @@ fn validate_revision(text: &str) -> Result<(), ManifestBuildError> {
     } else {
         Err(ManifestBuildError::Revision(text.to_owned()))
     }
+}
+
+/// A family name as `packaging/rebuild.sh` accepts a package name.
+fn is_family_name(text: &str) -> bool {
+    let mut bytes = text.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        && bytes.all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'+' | b'-')
+        })
 }
 
 fn validate_base(text: &str) -> Result<(), ManifestBuildError> {
@@ -199,6 +215,9 @@ pub fn build(
             return Err(ManifestBuildError::Degraded(component.clone()));
         }
     }
+    if let Some(family) = input.held.iter().find(|family| !is_family_name(family)) {
+        return Err(ManifestBuildError::Held(family.clone()));
+    }
     let mut seen = BTreeSet::new();
     let mut duplicates = BTreeSet::new();
     for package in &packages {
@@ -217,6 +236,7 @@ pub fn build(
         revision: input.revision.clone(),
         base_image: input.base.clone(),
         degraded: input.degraded.clone(),
+        held: input.held.clone(),
         packages,
     };
     manifest.normalize();
@@ -290,6 +310,7 @@ kernel-core\t0\t7.2.9\t300.fc45\tx86_64
             revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
             base: format!("quay.io/fedora/fedora-bootc@sha256:{}", "5".repeat(64)),
             degraded: vec!["fingerprint".to_owned(), "audio".to_owned()],
+            held: vec!["gnome-shell".to_owned()],
         }
     }
 
@@ -303,6 +324,7 @@ kernel-core\t0\t7.2.9\t300.fc45\tx86_64
         assert_eq!(m.name, "apex");
         assert_eq!(m.fedora, 45);
         assert_eq!(m.degraded, ["audio", "fingerprint"]);
+        assert_eq!(m.held, ["gnome-shell"]);
         let keys: Vec<(&str, &str)> = m.packages.iter().map(Package::key).collect();
         // Byte order: uppercase sorts before lowercase.
         assert_eq!(
@@ -343,6 +365,16 @@ kernel-core\t0\t7.2.9\t300.fc45\tx86_64
         assert!(with(|i| i.revision = "ABCDEF".into()).contains("revision"));
         assert!(with(|i| i.base = "quay.io/fedora/fedora-bootc:45".into()).contains("pinned"));
         assert!(with(|i| i.degraded.push("wifi".into())).contains("wifi"));
+        assert!(with(|i| i.held.push("Gnome Shell".into())).contains("Gnome Shell"));
+        assert!(with(|i| i.held.push(String::new())).contains("held family"));
+        assert!(with(|i| i.held.push("-x".into())).contains("-x"));
+        let mut shell = input();
+        shell.degraded = vec!["shell".to_owned()];
+        shell.held = vec!["kernel-cachyos".to_owned(), "libadwaita".to_owned()];
+        assert!(
+            build(&shell, Vec::new()).is_ok(),
+            "degraded=shell and lane families"
+        );
     }
 
     #[test]

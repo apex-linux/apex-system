@@ -206,9 +206,13 @@ pub enum BuildCommand {
         /// Base image, pinned by digest (REPOSITORY@sha256:…).
         #[arg(long, value_name = "B")]
         base: String,
-        /// A component shipped degraded (audio, fingerprint, nvidia); repeat for several.
+        /// A component shipped degraded (audio, fingerprint, nvidia, shell); repeat for several.
         #[arg(long = "degraded", value_name = "X")]
         degraded: Vec<String>,
+        /// A rebuild-lane family held at its last good build (gnome-shell, ...); repeat
+        /// for several.
+        #[arg(long = "held", value_name = "FAMILY")]
+        held: Vec<String>,
     },
 }
 
@@ -287,9 +291,12 @@ mod tests {
             "audio",
             "--degraded",
             "nvidia",
+            "--held",
+            "gnome-shell",
         ])
         .unwrap();
         assert!(manifest.contains(r#"degraded: ["audio", "nvidia"]"#));
+        assert!(manifest.contains(r#"held: ["gnome-shell"]"#));
         let render = parse(&["profile", "render"]).unwrap();
         assert!(render.contains("hardware/m7400qc/profile.toml"));
         assert!(parse(&["update", "reboot"]).is_err());

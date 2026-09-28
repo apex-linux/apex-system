@@ -14,7 +14,8 @@
 # order, oci-artifact.sh's attested lookup, privacy-guard.sh and .gitignore. And the
 # pure parts of packaging/rebuild.sh: the pkg.env, series and spec-edit parsers, the
 # .apexN.M release rule, the signature check, Source1's paths, the lock records, and
-# the committed gnome-shell inputs. No network, no root, no KVM.
+# the committed gnome-shell inputs; image.sh's check of the lane's lock; the
+# apex-desktop key and files. No network, no root, no KVM.
 #
 #   selftest.sh
 
@@ -781,6 +782,83 @@ EOF
     for pair in $(lane_sh "load_pkg gnome-shell; words prep_moved") $(lane_sh "load_pkg gnome-shell; words prep_deleted"); do
         check_true "gnome-shell: spec-edit's %prep handles ${pair%%:*}" grep -q -- "${pair%%:*}" "$APEX_ROOT/packaging/pkgs/gnome-shell/spec-edit"
     done
+fi
+
+# --- image.sh: the rebuild lane's lock in the image context ------------------------------
+# image_sh CODE: run CODE with image.sh sourced (its main does not start).
+image_sh() { bash -c '. "$1"; shift; eval "$1"' _ "$APEX_ROOT/.github/scripts/image.sh" "$@"; }
+IL="$TMP/image-lane"
+mkdir -p "$IL/pkgs/gnome-shell/k1"
+ilsha=$(printf 'c%.0s' {1..64})
+{
+    printf '# apex rpms.lock 1: written by packaging/rebuild.sh (packaging/README.md, "rpms.lock")\n'
+    printf 'family gnome-shell built k1\n'
+    printf 'rpm gnome-shell built gnome-shell gnome-shell-0:51.0-1.fc45.apex1.x86_64 %s pkgs/gnome-shell/k1/gnome-shell-51.0-1.fc45.apex1.x86_64.rpm\n' "$ilsha"
+    printf 'rpm gnome-shell mirror mutter mutter-0:51.0-1.fc45.x86_64 %s pkgs/gnome-shell/k1/mutter-51.0-1.fc45.x86_64.rpm\n' "$ilsha"
+    printf 'family libfprint degraded - since=2026-10-12T04:10:00Z reason=0001 does not apply\n'
+} >"$IL/rpms.lock"
+check "lane lock: the RPMs to copy" "pkgs/gnome-shell/k1/gnome-shell-51.0-1.fc45.apex1.x86_64.rpm $ilsha
+pkgs/gnome-shell/k1/mutter-51.0-1.fc45.x86_64.rpm $ilsha" "$(image_sh "lane_lock_check '$IL/rpms.lock' gnome-shell libfprint" 2>/dev/null)"
+check "lane lock: degraded families" libfprint "$(image_sh "lane_lock_states '$IL/rpms.lock' degraded")"
+check "lane lock: no held family" "" "$(image_sh "lane_lock_states '$IL/rpms.lock' held")"
+if [[ -f $APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env ]]; then
+    check "lane families: the committed pkg.env files" gnome-shell "$(image_sh lane_families | paste -sd' ' -)"
+fi
+# bad_lane NAME SED [FAMILY...]: the lock edited by SED is refused.
+bad_lane() {
+    local name=$1 script=$2
+    shift 2
+    sed -e "$script" "$IL/rpms.lock" >"$IL/bad.lock"
+    check "lane lock refuses $name" 1 "$(rc_of image_sh "lane_lock_check '$IL/bad.lock' ${*:-gnome-shell}")"
+}
+# shellcheck disable=SC2016 # sed scripts: $a appends a line
+{
+    bad_lane "a lock that misses a lane family" 's/^x//' gnome-shell nautilus
+    bad_lane "another format" '1s/rpms.lock 1:/rpms.lock 2:/'
+    bad_lane "an unknown state" 's/^family gnome-shell built/family gnome-shell maybe/'
+    bad_lane "a repeated family" '$a family gnome-shell stock -'
+    bad_lane "rpm lines of a stock family" 's/^family gnome-shell built/family gnome-shell stock/'
+    bad_lane "an rpm line before its family" '2d'
+    bad_lane "a built family with mirrors only" '/ built gnome-shell /d'
+    bad_lane "a NEVRA of another package" 's/built gnome-shell gnome-shell-0:/built gnome-shell mutter-0:/'
+    bad_lane "a NEVRA without an epoch" 's/gnome-shell-0:51/gnome-shell-51/'
+    bad_lane "a short sha256" "s/$ilsha/abc/"
+    bad_lane "a path outside the store" 's|pkgs/gnome-shell/k1/mutter|../mutter|'
+    bad_lane "an absolute path" 's| pkgs/gnome-shell/k1/mutter| /tmp/mutter|'
+    bad_lane "a file name that is not the NEVRA's" 's|/mutter-51.0-1.fc45.x86_64.rpm|/mutter-51.0-2.fc45.x86_64.rpm|'
+    bad_lane "a package twice" '$a rpm gnome-shell mirror mutter mutter-0:51.0-1.fc45.x86_64 '"$ilsha"' pkgs/gnome-shell/k1/mutter-51.0-1.fc45.x86_64.rpm'
+    bad_lane "an unknown record" '$a pin mutter 51.0'
+}
+check "lane lock refuses a missing file" 1 "$(rc_of image_sh "lane_lock_check '$IL/nope.lock' gnome-shell")"
+# image.sh context stops without a lane lock: gnome-shell never falls back to Fedora's.
+mkdir -p "$IL/rpms"
+: >"$IL/rpms/apex-0.1.0-1.fc45.x86_64.rpm"
+(cd "$IL/rpms" && sha256sum -- *.rpm >SHA256SUMS)
+ctx_rc=0
+ctx_log=$(APEX_WORK="$IL/work" GITHUB_ACTIONS='' "$APEX_ROOT/.github/scripts/image.sh" context --rpms-dir "$IL/rpms" 2>&1) || ctx_rc=$?
+check "image.sh context without --lane-lock fails" 1 "$ctx_rc"
+check_true "and says the lane's lock is required" grep -q "the rebuild lane's lock is required" <<<"$ctx_log"
+
+# --- rpms.sh: the apex-desktop key ----------------------------------------------------------
+check "the apex-desktop key covers desktop/, its spec, the Makefile and LICENSE" \
+    "desktop packaging/apex-desktop.spec Makefile LICENSE" \
+    "$(bash -c '. "$1"; printf "%s\n" "${DESKTOP_KEY_PATHS[*]}"' _ "$APEX_ROOT/.github/scripts/rpms.sh")"
+dkey=$(rpms_fn desktop_key_of "$RECIPE_A" "tree")
+check "an apex-desktop key is 64 hex digits" 64 "$(tr -dc '0-9a-f' <<<"$dkey" | wc -c)"
+check_false "a desktop change changes the apex-desktop key" test "$dkey" = "$(rpms_fn desktop_key_of "$RECIPE_A" "tree2")"
+check_false "a recipe change changes the apex-desktop key" test "$dkey" = "$(rpms_fn desktop_key_of "${RECIPE_A/1111/2222}" "tree")"
+check_false "the apex-desktop key is not the apex key" test "$dkey" = "$key_a"
+dtree=$(bash -c '. "$1"; git_() { [[ $1 != ls-tree ]] || printf "100644 blob 1111\tdesktop/schemas/x.gschema.xml\n100644 blob 2222\tdesktop/shell/js/ui/apex/hooks.js\n100644 blob 3333\tMakefile\n"; }; desktop_tree' _ "$APEX_ROOT/.github/scripts/rpms.sh" 2>/dev/null)
+check "the apex-desktop key leaves desktop/shell/ to the lane" "100644 blob 1111	desktop/schemas/x.gschema.xml
+100644 blob 3333	Makefile" "$dtree"
+
+# --- apex-desktop.spec installs every file of desktop/ outside desktop/shell/ -------------------
+if [[ -f $APEX_ROOT/packaging/apex-desktop.spec ]]; then
+    unpackaged=$(cd "$APEX_ROOT" && git ls-files --cached --others --exclude-standard -- desktop ':(exclude)desktop/shell' ':(exclude)desktop/README.md' |
+        while IFS= read -r f; do
+            grep -Fq -- "$f" packaging/apex-desktop.spec || printf '%s ' "$f"
+        done)
+    check "apex-desktop.spec installs every desktop/ file" "" "$unpackaged"
 fi
 
 # --- rust-toolchain-check.sh --warn-only (fake rustc) ----------------------------------

@@ -35,6 +35,10 @@ privacy:
 image-test:
     image/tests/run.sh
 
+# The Apex layer's safety net in gjs, also run by ci.yml: kill switches, fault injection, crash guard.
+layer-test:
+    tests/layer/run.sh
+
 # Render hardware/m7400qc/generated from the hardware profile.
 render:
     cargo run --locked -p apexctl -- profile render --profile {{ profile }} --out {{ generated }}
@@ -65,7 +69,8 @@ image:
     @echo '  # RPM inputs: build them'
     @echo '  sudo podman run --rm -v "$PWD:/src:z" -w /src registry.fedoraproject.org/fedora:45 .github/scripts/rpms.sh build /src/_build/rpms'
     @echo '  sudo podman run --rm -v "$PWD:/src:z" -w /src registry.fedoraproject.org/fedora:45 .github/scripts/libfprint.sh build /src/_build/libfprint   # exit 3 = degraded'
-    @echo '  .github/scripts/image.sh context --rpms-dir _build/rpms --libfprint-dir _build/libfprint'
+    @echo '  packaging/rebuild.sh build all      # the rebuild lane (gnome-shell); exit 3 = held, degraded or stock'
+    @echo '  .github/scripts/image.sh context --rpms-dir _build/rpms --libfprint-dir _build/libfprint --lane-lock ~/apex-store/rpms.lock.next'
     @echo '  .github/scripts/image.sh build'
     @echo '  .github/scripts/image.sh inspect'
     @echo '  .github/scripts/image.sh rechunk      # optional locally; output in _build/image/oci'
@@ -132,11 +137,11 @@ vm-ssh *args:
 vm-sync:
     tools/builder-vm/builder-vm.sh sync
 
-# Build the apex RPM, libfprint and the image in the builder VM (nothing is pushed).
+# Build the apex and apex-desktop RPMs, libfprint, the rebuild lane and the image in the builder VM (nothing is pushed).
 vm-image:
     tools/builder-vm/builder-vm.sh image
 
-# Rebuild only the image in the builder VM, reusing the RPMs of the last vm-image.
+# Rebuild only the image in the builder VM, reusing the RPMs and the lane lock of the last vm-image.
 vm-image-only:
     tools/builder-vm/builder-vm.sh image --image-only
 

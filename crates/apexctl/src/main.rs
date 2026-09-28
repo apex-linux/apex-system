@@ -98,6 +98,7 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
             revision,
             base,
             degraded,
+            held,
         }) => build_manifest(
             &root,
             &ManifestInput {
@@ -105,6 +106,7 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
                 revision,
                 base,
                 degraded,
+                held,
             },
         ),
     }

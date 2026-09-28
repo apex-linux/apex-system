@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Content key and build of the apex RPM (ADR 0013). The builder VM runs `build`; ci.yml
-# runs `toolchain`.
+# Content keys and build of the apex and apex-desktop RPMs (ADR 0013). The builder VM
+# runs `build`; ci.yml runs `toolchain`.
 #
 #   rpms.sh key                  print the content key of the apex RPM for git HEAD
-#   rpms.sh build OUTDIR [KEY]   install build deps, `make rpm`, copy the binary RPMs to
-#                                OUTDIR; with KEY, fail if the key changed meanwhile
+#   rpms.sh build OUTDIR [KEY]   install build deps, `make rpm` and `make rpm-desktop`,
+#                                copy the binary RPMs to OUTDIR with their keys (KEY,
+#                                KEY_DESKTOP); with KEY, fail if the apex key changed
+#                                meanwhile
 #   rpms.sh toolchain            install Fedora's rust, cargo, clippy, rustfmt and gcc
 #                                from the same repositories (ci.yml)
 #
@@ -31,6 +33,11 @@
 #     are packaged as %license and %doc).
 # It is also the tag of ghcr.io/sekirokenjii/apex-rpms (lib.sh APEX_REPO_RPMS).
 #
+# apex-desktop (noarch data, packaging/apex-desktop.spec) has its own key, so an asset
+# change never changes the apex key: a schema line, the same recipe, and `git ls-tree -r
+# HEAD desktop packaging/apex-desktop.spec Makefile LICENSE` without desktop/shell/, which
+# ships inside the rebuilt gnome-shell (packaging/rebuild.sh keys it).
+#
 # The build also runs `packaging/licenses.py --check` first, so an RPM whose License tag
 # no longer matches the linked crates is never built or published.
 
@@ -39,9 +46,12 @@ set -euo pipefail
 
 readonly KEY_SCHEMA=3
 readonly KEY_PATHS=(crates packaging/apex.spec Makefile Cargo.lock Cargo.toml LICENSE README.md)
+readonly DESKTOP_KEY_SCHEMA=1
+readonly DESKTOP_KEY_PATHS=(desktop packaging/apex-desktop.spec Makefile LICENSE)
 # The build recipe; the caller only runs `rpms.sh build` in fedora:45.
 readonly RECIPE_PATHS=(.github/scripts/rpms.sh)
 readonly SPEC="$APEX_ROOT/packaging/apex.spec"
+readonly DESKTOP_SPEC="$APEX_ROOT/packaging/apex-desktop.spec"
 readonly INSTALL_TOOL="$APEX_ROOT/.github/scripts/install-tool.sh"
 
 git_() { git -c safe.directory="$APEX_ROOT" -C "$APEX_ROOT" "$@"; }
@@ -117,6 +127,32 @@ compute_key() {
     key_of "$rust" "$pin" "$rec" "$tree"
 }
 
+# desktop_key_of RECIPE TREE: the apex-desktop key over its inputs (see the header).
+desktop_key_of() {
+    {
+        printf 'apex-desktop key schema %s\n' "$DESKTOP_KEY_SCHEMA"
+        printf 'recipe %s\n' "$1"
+        printf '%s\n' "$2"
+    } | sha256sum | cut -c1-64
+}
+
+# desktop_tree: the committed apex-desktop inputs, without desktop/shell/.
+desktop_tree() {
+    local p
+    for p in "${DESKTOP_KEY_PATHS[@]}"; do
+        git_ cat-file -e "HEAD:$p" 2>/dev/null ||
+            die "$p is not committed at HEAD; the apex-desktop key covers committed files only"
+    done
+    git_ ls-tree -r HEAD -- "${DESKTOP_KEY_PATHS[@]}" | awk -F '\t' '$2 !~ /^desktop\/shell\//'
+}
+
+compute_desktop_key() {
+    local tree rec
+    tree=$(desktop_tree)
+    rec=$(recipe)
+    desktop_key_of "$rec" "$tree"
+}
+
 cmd_toolchain() {
     (($# == 0)) || die "usage: rpms.sh toolchain"
     ((EUID == 0)) || die "rpms.sh toolchain installs packages; run it as root in a fedora:45 container"
@@ -142,7 +178,7 @@ install_deps() {
     repo_args
     retry 3 10 dnf5 -y --setopt=install_weak_deps=False "${REPOS[@]}" install \
         dnf5-plugins rpm-build make git-core findutils tar xz curl python3
-    retry 3 10 dnf5 -y --setopt=install_weak_deps=False "${REPOS[@]}" builddep "$SPEC"
+    retry 3 10 dnf5 -y --setopt=install_weak_deps=False "${REPOS[@]}" builddep "$SPEC" "$DESKTOP_SPEC"
     if [[ $(spec_auditable "$SPEC") == on ]]; then
         # Fedora does not package cargo-auditable, so the spec cannot BuildRequire it and
         # `make build AUDITABLE=yes` fails without it: the pinned release binary, SHA-256
@@ -163,9 +199,10 @@ cmd_build() {
     ((EUID == 0)) || die "rpms.sh build installs packages; run it as root in a fedora:45 container"
     install_deps
 
-    local installed key
+    local installed key desktop_key
     installed=$(rpm -q --queryformat '%{name}-%{evr}.%{arch}\n' rust)
     key=$(compute_key "$installed")
+    desktop_key=$(compute_desktop_key)
     if [[ -n $expected && $key != "$expected" ]]; then
         die "content key changed between resolve and build ($expected -> $key, rust now \
 $installed); the Fedora repositories moved in between. Build again."
@@ -192,17 +229,26 @@ $installed); the Fedora repositories moved in between. Build again."
         make -C "$APEX_ROOT" rpm
     endgroup
 
+    group "make rpm-desktop"
+    # The same target/rpm, so the collection below takes both packages.
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$APEX_ROOT" \
+        make -C "$APEX_ROOT" rpm-desktop
+    endgroup
+
     mkdir -p "$outdir"
     local -a rpms
     mapfile -t rpms < <(find "$APEX_ROOT/target/rpm/RPMS" -type f -name '*.rpm' \
         ! -name '*-debuginfo-*' ! -name '*-debugsource-*' | sort)
     ((${#rpms[@]} > 0)) || die "make rpm produced no binary RPMs under target/rpm/RPMS"
+    [[ " ${rpms[*]##*/} " == *' apex-desktop-'[0-9]* ]] ||
+        die "make rpm-desktop produced no apex-desktop RPM under target/rpm/RPMS"
     cp -- "${rpms[@]}" "$outdir/"
     (cd "$outdir" && sha256sum -- *.rpm >SHA256SUMS)
     printf '%s\n' "$key" >"$outdir/KEY"
+    printf '%s\n' "$desktop_key" >"$outdir/KEY_DESKTOP"
 
-    summary "### apex RPMs" "" "Key \`$key\` (rust \`$installed\`, cargo-auditable \`$(auditable_pin)\`)" "" '```' \
-        "$(cd "$outdir" && cat SHA256SUMS)" '```'
+    summary "### apex RPMs" "" "Key \`$key\` (rust \`$installed\`, cargo-auditable \`$(auditable_pin)\`)," \
+        "apex-desktop key \`$desktop_key\`" "" '```' "$(cd "$outdir" && cat SHA256SUMS)" '```'
     log "built ${#rpms[@]} RPM(s) into $outdir"
 }
 

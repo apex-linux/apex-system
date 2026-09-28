@@ -11,14 +11,14 @@ and [4](../docs/ARCHITECTURE.md#4-build-and-publish)).
 |---|---|---|---|
 | `../Makefile`, `apex.spec` | the `apex` RPM: `apexctl`, `apex-updated`, `apex-boot-assess` and their data files | the builder VM (`rpms.sh build`) | `_build/rpms/` |
 | `licenses.py` | the `License:` tag of `apex.spec`, from `cargo metadata` | `ci.yml` and `rpms.sh build` (check) | pass/fail |
-| `apex-desktop.spec` | the `apex-desktop` noarch RPM from `desktop/` (S1a: the Apex GSettings schema only) | `make rpm-desktop`, by hand in the builder VM until the image build takes it | `target/rpm/` |
-| `rebuild.sh`, `pkgs/gnome-shell/` | Fedora's gnome-shell SRPM with the Apex series and `desktop/shell/` ([ADR 0014](../docs/adr/0014-engine-level-desktop.md)) | the builder VM (`just pkg-build`) | `~/apex-store/`, `rpms.lock.next` |
+| `apex-desktop.spec` | the `apex-desktop` noarch RPM from `desktop/` (S1a: the Apex GSettings schema and the shell's crash guard) | the builder VM (`rpms.sh build`, next to the apex RPM) | `_build/rpms/` |
+| `rebuild.sh`, `pkgs/gnome-shell/` | Fedora's gnome-shell SRPM with the Apex series and `desktop/shell/` ([ADR 0014](../docs/adr/0014-engine-level-desktop.md)) | the builder VM (`just pkg-build`, and step 3 of `just vm-image`) | `~/apex-store/`, `rpms.lock.next` |
 | `libfprint/` | Fedora's libfprint SRPM plus the ELAN 04f3:0c6e patches | the builder VM (`libfprint.sh build`) | `_build/libfprint/`, or "degraded" |
 | `pkgs/kernel/` | the CachyOS kernel and NVIDIA open modules as one pair ([ADR 0015](../docs/adr/0015-cachyos-kernel-and-nvidia.md)) | none yet: the lane arrives in roadmap S1c | none yet |
 
-The image build does not read the lane's output yet: wiring `rpms.lock.next` into
-`image.sh context`, the Containerfile's repos stage and `build-image.sh` is the next
-step of roadmap S1a.
+`just vm-image` (`tools/builder-vm/build-image.sh`) runs them in order: `rpms.sh build`,
+libfprint, `rebuild.sh build all`, then the image from `rpms.lock.next`
+([The image](#the-image)).
 
 ## The apex RPM
 
@@ -78,12 +78,14 @@ all of updates-testing before GA:
 
 ```bash
 dnf5 -y install $REPOS dnf5-plugins rpm-build make git-core findutils tar xz curl python3
-dnf5 -y builddep $REPOS packaging/apex.spec
+dnf5 -y builddep $REPOS packaging/apex.spec packaging/apex-desktop.spec
 # only while apex.spec has `%bcond auditable 1`: the pinned release, SHA-256 checked
 .github/scripts/install-tool.sh cargo-auditable /usr/local/bin
 python3 packaging/licenses.py --check packaging/apex.spec
 make rpm        # git runs with safe.directory set for this command only
 # -> target/rpm/RPMS/x86_64/apex-0.1.0-0.<date>.git<hash>.fc45.x86_64.rpm, SRPMS/…
+make rpm-desktop
+# -> target/rpm/RPMS/noarch/apex-desktop-0.1.0-0.<date>.git<hash>.fc45.noarch.rpm
 ```
 
 `make rpm` refuses a checkout without commits, refuses a spec `Version` that differs
@@ -259,7 +261,9 @@ dependency drift does not warrant a rebuild.
 ### The store and `rpms.lock`
 
 Builder state lives outside the checkout, which `builder-vm.sh sync` replaces
-(`rsync --delete`), in `APEX_STORE` (default `~/apex-store`):
+(`rsync --delete`), in `APEX_STORE` (default `~/apex-store`). The lock is builder state
+too, not a committed file: the S1d timers absorb Fedora updates without a commit. Each
+image carries the lock it was built from, at `/usr/share/apex/rpms.lock`.
 
 ```
 ~/apex-store/
@@ -291,6 +295,37 @@ rpm FAMILY KIND NAME NEVRA SHA256 PATH
   needs a last good build in `rpms.lock`; with none (the first build, or a lost store)
   the lane exits 1, and only the owner can choose `stock`.
 
+### The image
+
+The image takes gnome-shell only through the lane: nothing degrades a design package to
+stock on its own (ADR 0014).
+
+- `image.sh context --lane-lock ~/apex-store/rpms.lock.next` is required; the image
+  build stops without it. It checks the lock (format 1; every family of
+  `pkgs/*/pkg.env` recorded; rpm lines only for built and held families, at least one
+  Apex-built; each NEVRA a build of its package, with a sha256 and a store path whose
+  file name matches), copies the RPMs of the built and held families from the store
+  into the build context's `rpms/`, verifying each sha256, and puts the lock itself
+  there as `rpms/rpms.lock`. `--image-only` reuses the current `rpms.lock.next`.
+- The Containerfile's repos stage requires `rpms/rpms.lock`, and `[apex]` must offer
+  exactly the locked NEVRAs of the locked names (no missing build, no second build of a
+  locked name). `includepkgs` of `[apex]` is `image/packages/apex.txt` plus the locked
+  names; `excludepkgs` of `[fedora]` and `[updates]` is the locked names plus libfprint
+  when rpms/ carries the Apex libfprint, in one line each; `[apex-gnome51]` gets the
+  same line after its own check. A stock or degraded family adds nothing, so Fedora's
+  build is installed.
+- The final stage installs the lock as `/usr/share/apex/rpms.lock`, records held
+  families in the manifest's `held` field and a stock or degraded gnome-shell family as
+  `degraded=shell` (docs/specs/M1-IMPLEMENTATION.md section 3); `image.sh` copies both
+  into the `…apex.held` and `…apex.degraded` labels. The content key adds the lock's
+  sha256, the apex-desktop key and the `desktop/` tree.
+- G1's `image/checks/desktop.sh` checks the installed result against the lock: the
+  locked NEVRAs, `.apexN`, the mutter pin and its Fedora signature, the theme markers
+  (`grep -a` on `gnome-shell-theme.gresource`), `rpm -V`, the Apex schema and the crash
+  guard (ARCHITECTURE 11).
+- Nothing promotes the lock by itself: after the image passed its gates (G2, and G4 for
+  a new gnome-shell, mutter or gdm NVR), `just pkg-promote`.
+
 ### Signing
 
 Not yet: there is no Apex RPM key, and `[apex]` keeps `gpgcheck=0`. The plug-in point is
@@ -313,11 +348,26 @@ so the private key never meets upstream build scripts. When the key exists
 `apex-desktop.spec` packages `desktop/` except `desktop/shell/` (which ships inside
 gnome-shell), with `make rpm-desktop`: `git archive HEAD` of `desktop/` and `LICENSE`,
 then `rpmbuild -ba` with the `commitdate` and `shortcommit` macros of `make rpm`, so its
-release is `0.<commit date>.git<12-hex commit>.fc45`. In S1a it holds only
-`io.github.sekirokenjii.Apex.Desktop`, whose `%check` runs
-`glib-compile-schemas --strict --dry-run`. It has no scriptlets: the image compiles the
-schemas, and glib2's file trigger covers dnf. `image/packages/apex.txt` does not list it
-yet; the image takes it with the lane.
+release is `0.<commit date>.git<12-hex commit>.fc45`. `rpms.sh build` builds it after
+the apex RPM, into the same output directory, and writes its own content key to
+`KEY_DESKTOP`: `git ls-tree -r HEAD` of `desktop/` (without `desktop/shell/`),
+`apex-desktop.spec`, the `Makefile` and `LICENSE`, plus the recipe, so an asset change
+never changes the apex key. `image/packages/apex.txt` lists it.
+
+In S1a it holds:
+
+- `io.github.sekirokenjii.Apex.Desktop` (`layer-enabled`, `disabled-features`), whose
+  `%check` runs `glib-compile-schemas --strict --dry-run`;
+- the shell's crash guard (ADR 0014): `org.gnome.Shell@.service.d/50-apex.conf`, which
+  adds `OnFailure=apex-shell-safe.service` to GNOME Shell's user unit, and
+  `apex-shell-safe.service`, a oneshot ordered before the session bus restart
+  (`gnome-session-restart-dbus.service`) and gated on the layer's `%t/apex-shell-starting`
+  that sets `layer-enabled=false`, leaves `$XDG_STATE_HOME/apex/shell-guard-tripped`
+  and removes the layer's file. `tests/layer/run.sh` runs the unit's condition and
+  commands after an aborted shell; G1 verifies both units in the image.
+
+It has no scriptlets: the image compiles the schemas, glib2's file trigger covers dnf,
+and the user units have no `[Install]` section.
 
 ## libfprint
 

@@ -55,6 +55,7 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
   "revision": "0123456789abcdef0123456789abcdef01234567",
   "base_image": "registry.fedoraproject.org/fedora-bootc@sha256:…",
   "degraded": ["audio"],
+  "held": ["gnome-shell"],
   "packages": [
     { "name": "bash", "epoch": 0, "version": "5.3.0", "release": "2.fc45", "arch": "x86_64" }
   ]
@@ -62,12 +63,25 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 ```
 
 - `packages` is sorted by `(name, arch)` in byte order and is unique on that key.
-- `degraded` is sorted and holds any of `audio`, `fingerprint` and `nvidia`. `nvidia`
-  (S1c) marks an image the owner published without the NVIDIA set, because the kmod
-  could not follow the kernel: the dGPU stays unbound in D3cold (ADR 0015 §4).
+- `degraded` is sorted and holds any of `audio`, `fingerprint`, `nvidia` and `shell`.
+  `nvidia` (S1c) marks an image the owner published without the NVIDIA set, because the
+  kmod could not follow the kernel: the dGPU stays unbound in D3cold (ADR 0015 §4).
+  `shell` (S1a) marks an image with Fedora's gnome-shell and mutter: the owner chose
+  stock for the gnome-shell family at a hold limit (`just pkg-stock gnome-shell`), so
+  the shell has no Apex layer, theme, dock or glass until the rebase (ARCHITECTURE
+  §4.3). A rebuild-lane family that is stock or degraded needs its name here before an
+  image can ship it; the build fails otherwise.
+- `held` (S1a) is sorted and lists the rebuild-lane families (`packaging/pkgs/*/pkg.env`
+  `family=`, for example `gnome-shell`) that the lane's lock holds at their last good
+  build because the newer Fedora build could not be rebuilt (ARCHITECTURE §4.3). It is
+  empty when nothing is held. A manifest written before S1a has no `held` field; it
+  reads as empty.
 - Consumers must ignore unknown fields. `schema` increases only on breaking change.
-- The image build copies `degraded` into the `io.github.sekirokenjii.apex.degraded`
-  label (comma-separated) at rechunk time.
+- The image build copies `degraded` and `held` into the
+  `io.github.sekirokenjii.apex.degraded` and `io.github.sekirokenjii.apex.held` labels
+  (comma-separated) at rechunk time. `held` and `shell` come from the rebuild lane's
+  lock, which the image also carries as `/usr/share/apex/rpms.lock` (packaging/README.md,
+  "The image").
 
 ## 4. Persisted daemon state (`/var/lib/apex`, JSON, atomic write = temp file + fsync + rename)
 
@@ -146,7 +160,7 @@ apexctl update automatic                  (root, used by the timer)
 apexctl hw report [--json]                read-only: audio init_verbs, charge threshold, dGPU runtime PM, fingerprint device
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
 apexctl profile render [--profile P] [--out DIR] [--check]
-apexctl build manifest --root DIR --version V --revision R --base B [--degraded X]...
+apexctl build manifest --root DIR --version V --revision R --base B [--degraded X]... [--held FAMILY]...
 ```
 
 `profile render` writes into `hardware/<machine>/generated/`:
