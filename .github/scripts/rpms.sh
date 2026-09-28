@@ -29,14 +29,15 @@
 #   - the recipe: the dnf5 repository options above and `git ls-tree HEAD` of this
 #     script, so a change to how the RPM is built never reuses RPMs built the old way,
 #   - `git ls-tree -r HEAD crates packaging/apex.spec Makefile Cargo.lock Cargo.toml
-#     LICENSE README.md` (blob hashes of every committed input of the RPM; the last two
-#     are packaged as %license and %doc).
+#     LICENSE README.md` without crates/apex-lane/ except its Cargo.toml: the RPM never
+#     carries the builder VM's dev tool, but Cargo unifies dependency features across the
+#     workspace (blob hashes of every committed input; the last two are %license and %doc).
 # It is also the tag of ghcr.io/sekirokenjii/apex-rpms (lib.sh APEX_REPO_RPMS).
 #
 # apex-desktop (noarch data, packaging/apex-desktop.spec) has its own key, so an asset
 # change never changes the apex key: a schema line, the same recipe, and `git ls-tree -r
 # HEAD desktop packaging/apex-desktop.spec Makefile LICENSE` without desktop/shell/, which
-# ships inside the rebuilt gnome-shell (packaging/rebuild.sh keys it).
+# ships inside the rebuilt gnome-shell (apex-lane keys it).
 #
 # The build also runs `packaging/licenses.py --check` first, so an RPM whose License tag
 # no longer matches the linked crates is never built or published.
@@ -113,6 +114,11 @@ recipe() {
     git_ ls-tree HEAD -- "${RECIPE_PATHS[@]}"
 }
 
+apex_tree() {
+    git_ ls-tree -r HEAD -- "${KEY_PATHS[@]}" |
+        awk -F '\t' '$2 !~ /^crates\/apex-lane\// || $2 == "crates/apex-lane/Cargo.toml"'
+}
+
 compute_key() {
     local rust=$1 tree p pin rec
     for p in "${KEY_PATHS[@]:1}"; do
@@ -121,7 +127,7 @@ compute_key() {
     done
     # Assigned one by one: a failure inside $(...) then stops the script instead of
     # silently shortening the key's input.
-    tree=$(git_ ls-tree -r HEAD -- "${KEY_PATHS[@]}")
+    tree=$(apex_tree)
     pin=$(auditable_pin)
     rec=$(recipe)
     key_of "$rust" "$pin" "$rec" "$tree"

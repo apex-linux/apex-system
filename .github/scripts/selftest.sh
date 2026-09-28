@@ -11,11 +11,10 @@
 # install = apex.spec %files), the Fedora registry pins (registry.fedoraproject.org
 # only, image.sh refusing others) and their Renovate managers, ci-host.sh preflight,
 # qualify.sh's kernel arguments, image.sh replay-check, publish.sh's version and commit
-# order, oci-artifact.sh's attested lookup, privacy-guard.sh and .gitignore. And the
-# pure parts of packaging/rebuild.sh: the pkg.env, series and spec-edit parsers, the
-# .apexN.M release rule, the signature check, Source1's paths, the lock records, and
-# the committed gnome-shell inputs; image.sh's check of the lane's lock; the
-# apex-desktop key and files. No network, no root, no KVM.
+# order, oci-artifact.sh's attested lookup, privacy-guard.sh and .gitignore. And
+# image.sh's check of the rebuild lane's lock, against apex-lane's golden locks (the
+# lane's own tests are Rust: crates/apex-lane/tests); desktop/shell's licence; the apex
+# and apex-desktop keys and files. No network, no root, no KVM.
 #
 #   selftest.sh
 
@@ -419,6 +418,9 @@ check "the recipe covers rpms.sh" ".github/scripts/rpms.sh" \
 check "the key covers the Makefile, Cargo.toml and the packaged docs" \
     "crates packaging/apex.spec Makefile Cargo.lock Cargo.toml LICENSE README.md" \
     "$(bash -c '. "$1"; printf "%s\n" "${KEY_PATHS[*]}"' _ "$APEX_ROOT/.github/scripts/rpms.sh")"
+atree=$(bash -c '. "$1"; git_() { [[ $1 != ls-tree ]] || printf "100644 blob 1111\tcrates/apexctl/src/main.rs\n100644 blob 2222\tcrates/apex-lane/src/main.rs\n100644 blob 3333\tcrates/apex-lanes/x.rs\n"; }; apex_tree' _ "$APEX_ROOT/.github/scripts/rpms.sh" 2>/dev/null)
+check "the apex key leaves crates/apex-lane/, the builder VM's tool, out" "100644 blob 1111	crates/apexctl/src/main.rs
+100644 blob 3333	crates/apex-lanes/x.rs" "$atree"
 
 # --- the installed layout: contract section 2 = make install = apex.spec %files --------
 # M1-IMPLEMENTATION.md section 2 is the contract; the Makefile implements it and the spec
@@ -560,228 +562,12 @@ if [[ -x $APEX_ROOT/packaging/libfprint/build.sh ]]; then
     check "libfprint key is the same with no updates-testing either way" "$k_empty" "$k_ga"
 fi
 
-# --- packaging/rebuild.sh: the lane's parsers, release rule and locks -------------------
-# lane_sh CODE: run CODE with rebuild.sh sourced (its main does not start).
-lane_sh() { bash -c '. "$1"; shift; eval "$1"' _ "$APEX_ROOT/packaging/rebuild.sh" "$@"; }
-LN="$TMP/lane"
-mkdir -p "$LN/patches" "$LN/store"
-cat >"$LN/pkg.env" <<'EOF'
-# a comment
-source=fedora-srpm
-srpm=gnome-shell
-on_fail=hold
-family=gnome-shell
-install=gnome-shell gnome-shell-common
-pin=mutter
-mirror=mutter mutter-common
-source1=desktop/shell
-source1_paths=apex.gresource.xml js/ui/apex/
-prep_moved=a/b.css:a/apex/stock/b.css
-EOF
-check "pkg.env: a list value" "gnome-shell gnome-shell-common" \
-    "$(lane_sh "parse_pkg_env '$LN/pkg.env'; words install | paste -sd' ' -")"
-check "pkg.env: a single value" mutter "$(lane_sh "parse_pkg_env '$LN/pkg.env'; printf '%s' \"\${CFG[pin]}\"")"
-# bad_env NAME SED: pkg.env edited by SED must be refused with exit 2.
-bad_env() {
-    sed -e "$2" "$LN/pkg.env" >"$LN/bad.env"
-    check "pkg.env refuses $1" 2 "$(rc_of lane_sh "parse_pkg_env '$LN/bad.env'")"
-}
-# shellcheck disable=SC2016 # sed scripts: $a appends a line, and $(reboot) is the test
-{
-    bad_env "an unknown key" '$a colour=blue'
-    bad_env "a repeated key" '$a pin=mutter'
-    bad_env "a missing required key" '/^family=/d'
-    bad_env "a shell character" 's/^srpm=.*/srpm=$(reboot)/'
-    bad_env "a reserved source" 's/^source=.*/source=copr-srpm/'
-    bad_env "an unknown on_fail" 's/^on_fail=.*/on_fail=maybe/'
-    bad_env "mirror without pin" '/^pin=/d'
-    bad_env "source1 without source1_paths" '/^source1_paths=/d'
-    bad_env "a prep_moved entry without TO" 's/^prep_moved=.*/prep_moved=a\/b.css/'
-    bad_env "a line that is not KEY=VALUE" '$a just words'
-}
-
-touch "$LN/patches/0001-build.patch" "$LN/patches/0002-loader.patch" "$LN/patches/0101-extra.patch"
-printf '# c\n0001-build.patch\n\n0002-loader.patch  # trailing comment\n0101-extra.patch\n' >"$LN/series"
-check "series: entries in order, 01xx allowed" "0001-build.patch 0002-loader.patch 0101-extra.patch" \
-    "$(lane_sh "parse_series '$LN/series' '$LN/patches'; printf '%s' \"\${PATCHES[*]}\"")"
-printf '0001-build.patch\n0001-build.patch\n' >"$LN/series.dup"
-check "series refuses a duplicate" 2 "$(rc_of lane_sh "parse_series '$LN/series.dup' '$LN/patches'")"
-printf '0001-build.patch\n../x.patch\n' >"$LN/series.path"
-check "series refuses a path" 2 "$(rc_of lane_sh "parse_series '$LN/series.path' '$LN/patches'")"
-printf '0003-missing.patch\n' >"$LN/series.missing"
-check "series refuses a missing patch" 2 "$(rc_of lane_sh "parse_series '$LN/series.missing' '$LN/patches'")"
-check "series without file checks (export) takes a missing patch" 0 \
-    "$(rc_of lane_sh "parse_series '$LN/series.missing' '$LN/patches' --no-files")"
-printf '# nothing\n' >"$LN/series.empty"
-check "series refuses an empty series" 2 "$(rc_of lane_sh "parse_series '$LN/series.empty' '$LN/patches'")"
-
-cat >"$LN/spec" <<'EOF'
-Name:           x
-Release:        %autorelease
-Source0:        x.tar.xz
-Patch:          fedora.patch
-BuildRequires:  meson
-BuildRequires:  mutter-devel >= %{mutter_version}
-Requires:       mutter%{?_isa} >= %{mutter_version}
-%prep
-%autosetup -S git -n x
-EOF
-printf 'replace ^Release:[[:space:]]+%%autorelease$\n\tRelease:        %%{autorelease}@APEX_RELEASE@\nend\n\n# c\nafter ^Source0:\n\tSource1:        @SOURCE1@\nend\nafter ^Requires:[[:space:]]+mutter%%\\{\\?_isa\\}[[:space:]]\n\tRequires:       mutter%%{?_isa} = @PIN_EVR@\nend\nafter ^%%autosetup[[:space:]]\n\ttar -xkf %%{SOURCE1}\n\tmkdir data/stock\nend\n' >"$LN/spec-edit"
-check "spec-edit: blocks parsed" 4 "$(lane_sh "spec_edit_parse '$LN/spec-edit' '$LN/edits'"; find "$LN/edits" -name '*.op' | wc -l)"
-lane_sh "SPEC_EDIT_VALUES=([APEX_RELEASE]=.apex3.1 [PIN_EVR]=51.0-1.fc45 [SOURCE1]=apex-shell-0123456789ab.tar); spec_edit_apply '$LN/edits' '$LN/spec'" 2>/dev/null
-check "spec-edit: the edited spec" "Name:           x
-Release:        %{autorelease}.apex3.1
-Source0:        x.tar.xz
-Source1:        apex-shell-0123456789ab.tar
-Patch:          fedora.patch
-BuildRequires:  meson
-BuildRequires:  mutter-devel >= %{mutter_version}
-Requires:       mutter%{?_isa} >= %{mutter_version}
-Requires:       mutter%{?_isa} = 51.0-1.fc45
-%prep
-%autosetup -S git -n x
-tar -xkf %{SOURCE1}
-mkdir data/stock" "$(cat "$LN/spec")"
-printf 'after ^BuildRequires:\n\tBuildRequires:  sassc\nend\n' >"$LN/spec-edit.two"
-lane_sh "spec_edit_parse '$LN/spec-edit.two' '$LN/edits.two'"
-check "spec-edit: an anchor on two lines holds the build (exit 3)" 3 \
-    "$(rc_of lane_sh "spec_edit_apply '$LN/edits.two' '$LN/spec'")"
-printf 'after ^Nope:\n\tX: y\nend\n' >"$LN/spec-edit.none"
-lane_sh "spec_edit_parse '$LN/spec-edit.none' '$LN/edits.none'"
-check "spec-edit: an anchor that matches nothing holds the build (exit 3)" 3 \
-    "$(rc_of lane_sh "spec_edit_apply '$LN/edits.none' '$LN/spec'")"
-printf 'after ^Source0:\n\tSource9: @NOPE@\nend\n' >"$LN/spec-edit.ph"
-check "spec-edit refuses an unknown placeholder" 2 "$(rc_of lane_sh "spec_edit_parse '$LN/spec-edit.ph' '$LN/e1'")"
-printf 'after ^Source0:\n    Source9: x\nend\n' >"$LN/spec-edit.spaces"
-check "spec-edit refuses a text line indented with spaces" 2 "$(rc_of lane_sh "spec_edit_parse '$LN/spec-edit.spaces' '$LN/e2'")"
-printf 'after ^Source0:\n\tSource9: x\n' >"$LN/spec-edit.noend"
-check "spec-edit refuses a block without end" 2 "$(rc_of lane_sh "spec_edit_parse '$LN/spec-edit.noend' '$LN/e3'")"
-printf 'after ^Source0:\nend\n' >"$LN/spec-edit.empty"
-check "spec-edit refuses a block without text" 2 "$(rc_of lane_sh "spec_edit_parse '$LN/spec-edit.empty' '$LN/e4'")"
-
-printf 'Patch1001:      apex-0001-build.patch\n' >"$LN/patch-lines"
-lane_sh "patch_lines '$LN/spec' '$LN/patch-lines'"
-check "patch lines go after the last Patch line" "Patch:          fedora.patch
-Patch1001:      apex-0001-build.patch" "$(grep '^Patch' "$LN/spec")"
-printf 'Name: y\nSource0: a\nSource1: b\nBuildRequires: c\n' >"$LN/spec.nopatch"
-lane_sh "patch_lines '$LN/spec.nopatch' '$LN/patch-lines'"
-check "patch lines go after the last Source line without a Patch line" "Source1: b
-Patch1001:      apex-0001-build.patch" "$(sed -n '3,4p' "$LN/spec.nopatch")"
-printf 'Name: y\n' >"$LN/spec.nosource"
-check "no Patch or Source line holds the build (exit 3)" 3 "$(rc_of lane_sh "patch_lines '$LN/spec.nosource' '$LN/patch-lines'")"
-
-# release_for: .apexN from git, .M from the store's builds of the same stock NVR (a key
-# already stored keeps its release).
-store_key() { mkdir -p "$LN/store/$1"; printf '# apex-lane manifest 1\n# pkg=x key=%s release=%s n=3 stock=%s pin=-\n' "$1" "$2" "${3:-x-51.0-1.fc45}" >"$LN/store/$1/manifest.txt"; }
-rel() { lane_sh "release_for '$LN/store' $1 $2 $3"; }
-check "release: the first key of .apexN" 1.fc45.apex3 "$(rel x-51.0-1.fc45 1.fc45.apex3 k1)"
-store_key k1 1.fc45.apex3
-check "release: a stored key keeps its release" 1.fc45.apex3 "$(rel x-51.0-1.fc45 1.fc45.apex3 k1)"
-check "release: a second key of the same .apexN gets .1" 1.fc45.apex3.1 "$(rel x-51.0-1.fc45 1.fc45.apex3 k2)"
-store_key k3 1.fc45.apex3.4
-check "release: .M is one above the highest stored" 1.fc45.apex3.5 "$(rel x-51.0-1.fc45 1.fc45.apex3 k4)"
-check "release: another N starts again" 1.fc45.apex4 "$(rel x-51.0-1.fc45 1.fc45.apex4 k5)"
-check "release: .apex3 does not count for .apex31" 1.fc45.apex31 "$(rel x-51.0-1.fc45 1.fc45.apex31 k6)"
-check "release: another stock release starts again" 2.fc45.apex3 "$(rel x-51.0-2.fc45 2.fc45.apex3 k7)"
-check "release: Fedora's next version at the same release starts again" 1.fc45.apex3 "$(rel x-51.1-1.fc45 1.fc45.apex3 k8)"
-store_key k9 1.fc45.apex3 x-51.1-1.fc45
-check "release: .M counts only builds of the same stock NVR" 1.fc45.apex3.1 "$(rel x-51.1-1.fc45 1.fc45.apex3 k10)"
-
-# checksig_ok: rpmkeys --checksig -v output (rpm 6 and rpm 4 forms).
-sig6='x.src.rpm:
-    Header OpenPGP V4 RSA/SHA256 signature, key fingerprint: 4f50a6114cd5c6976a7f1179655a4b02f577861e: OK
-    Header SHA256 digest: OK
-    Payload SHA256 digest: OK'
-check_true "checksig: rpm 6, the Fedora key" lane_sh "checksig_ok F577861E <<<'$sig6'"
-check_false "checksig: another key" lane_sh "checksig_ok 0123abcd <<<'$sig6'"
-check_false "checksig: a bad signature line" lane_sh "checksig_ok f577861e <<<'${sig6/key fingerprint: 4f50a6114cd5c6976a7f1179655a4b02f577861e: OK/key fingerprint: 4f50a6114cd5c6976a7f1179655a4b02f577861e: BAD}'"
-check_true "checksig: rpm 4" lane_sh "checksig_ok f577861e <<<'    Header V4 RSA/SHA256 Signature, key ID f577861e: OK'"
-check_false "checksig: no signature at all" lane_sh "checksig_ok f577861e <<<'    Header SHA256 digest: OK'"
-
-# source1_member_ok: Source1 may only add files under source1_paths.
-allowed=(apex.gresource.xml js/ui/apex/ data/theme/apex/)
-for m in apex.gresource.xml js/ js/ui/ js/ui/apex/ js/ui/apex/hooks.js data/theme/apex/_apex.scss; do
-    check_true "Source1 member $m is allowed" lane_sh "source1_member_ok '$m' ${allowed[*]}"
-done
-for m in meson.build README.md js/ui/main.js data/theme/gnome-shell-light.scss apex.gresource.xml.in; do
-    check_false "Source1 member $m is refused" lane_sh "source1_member_ok '$m' ${allowed[*]}"
-done
-
-# rpms.lock: lock_put replaces one family and keeps the others.
-lk="$LN/rpms.lock"
-printf 'rpm gnome-shell built gnome-shell gnome-shell-0:51.0-1.fc45.apex1.x86_64 %s pkgs/gnome-shell/k1/gnome-shell-51.0-1.fc45.apex1.x86_64.rpm\n' "$(printf 'a%.0s' {1..64})" >"$LN/rpms.gs"
-lane_sh "lock_put '$lk' gnome-shell 'built k1' '$LN/rpms.gs'; lock_put '$lk' libfprint 'degraded - since=2026-10-12T04:10:00Z reason=0001 does not apply'"
-check "lock: a built family" "built k1" "$(lane_sh "lock_family '$lk' gnome-shell")"
-check "lock: its rpm lines" 1 "$(lane_sh "lock_rpms '$lk' gnome-shell" | wc -l)"
-check "lock: a degraded family's reason runs to the end of the line" "0001 does not apply" \
-    "$(lane_sh "lock_family '$lk' libfprint | lock_attr reason")"
-lane_sh "lock_put '$lk' gnome-shell 'held k1 since=2026-10-12T04:10:00Z limit=2026-10-26T04:10:00Z newer=gnome-shell-51.1-1.fc45,mutter-51.1-1.fc45 security=0 reason=0002-loader.patch does not apply' '$LN/rpms.gs'"
-held=$(lane_sh "lock_family '$lk' gnome-shell")
-check "lock: held keeps the last good key" "held k1" "$(cut -d' ' -f1-2 <<<"$held")"
-check "lock: since" 2026-10-12T04:10:00Z "$(lane_sh "lock_attr since" <<<"$held")"
-check "lock: newer" gnome-shell-51.1-1.fc45,mutter-51.1-1.fc45 "$(lane_sh "lock_attr newer" <<<"$held")"
-check "lock: no such attribute" "" "$(lane_sh "lock_attr nope" <<<"$held")"
-check "lock: held keeps the rpm lines" 1 "$(lane_sh "lock_rpms '$lk' gnome-shell" | wc -l)"
-check "lock: the other family is kept" "degraded -" "$(lane_sh "lock_family '$lk' libfprint" | cut -d' ' -f1-2)"
-check "lock: one family line each" 2 "$(grep -c '^family ' "$lk")"
-check "lock: the header comes first" "# apex rpms.lock 1" "$(head -n 1 "$lk" | cut -c1-18)"
-# The Containerfile's parser (ARCHITECTURE 4.3): names and NEVRAs of built and held families.
-check "lock: the image's awk parser" "gnome-shell gnome-shell-0:51.0-1.fc45.apex1.x86_64" \
-    "$(awk '$1=="family"{st[$2]=$3} $1=="rpm"{f[++n]=$2; nm[n]=$4; nv[n]=$5} END{for(i=1;i<=n;i++) if(st[f[i]]=="built"||st[f[i]]=="held") print nm[i], nv[i]}' "$lk")"
-
-# manifest_lock_rpms: the install= packages and the mirrors, never dev, SRPMs or other
-# subpackages.
-sha=$(printf 'b%.0s' {1..64})
-cat >"$LN/manifest.txt" <<EOF
-# apex-lane manifest 1: kind nevra sha256 file
-# pkg=gnome-shell family=gnome-shell key=k1 release=1.fc45.apex1 n=1
-fedora-srpm gnome-shell-0:51.0-1.fc45.src $sha gnome-shell-51.0-1.fc45.src.rpm
-built gnome-shell-0:51.0-1.fc45.apex1.x86_64 $sha gnome-shell-51.0-1.fc45.apex1.x86_64.rpm
-built gnome-shell-common-0:51.0-1.fc45.apex1.noarch $sha gnome-shell-common-51.0-1.fc45.apex1.noarch.rpm
-built gnome-shell-tests-0:51.0-1.fc45.apex1.x86_64 $sha gnome-shell-tests-51.0-1.fc45.apex1.x86_64.rpm
-mirror mutter-0:51.0-1.fc45.x86_64 $sha mutter-51.0-1.fc45.x86_64.rpm
-dev mutter-devkit-0:51.0-1.fc45.x86_64 $sha mutter-devkit-51.0-1.fc45.x86_64.rpm
-apex-srpm gnome-shell-0:51.0-1.fc45.apex1.src $sha gnome-shell-51.0-1.fc45.apex1.src.rpm
-EOF
-check "manifest to lock lines" "rpm gnome-shell built gnome-shell gnome-shell-0:51.0-1.fc45.apex1.x86_64 $sha pkgs/gnome-shell/k1/gnome-shell-51.0-1.fc45.apex1.x86_64.rpm
-rpm gnome-shell built gnome-shell-common gnome-shell-common-0:51.0-1.fc45.apex1.noarch $sha pkgs/gnome-shell/k1/gnome-shell-common-51.0-1.fc45.apex1.noarch.rpm
-rpm gnome-shell mirror mutter mutter-0:51.0-1.fc45.x86_64 $sha pkgs/gnome-shell/k1/mutter-51.0-1.fc45.x86_64.rpm" \
-    "$(lane_sh "manifest_lock_rpms '$LN/manifest.txt' gnome-shell pkgs/gnome-shell/k1 gnome-shell gnome-shell-common")"
-check "nevra_name" gnome-shell-common "$(lane_sh "nevra_name gnome-shell-common-0:51.0-1.fc45.apex1.noarch")"
-
-# The committed gnome-shell inputs parse, Source1 stays inside source1_paths, and the
-# anchors of spec-edit match Fedora's spec lines once each.
-if [[ -f $APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env ]]; then
-    check "gnome-shell: install=" "gnome-shell gnome-shell-common" \
-        "$(lane_sh "load_pkg gnome-shell; words install | paste -sd' ' -")"
-    check "gnome-shell: series" "0001-build.patch 0002-loader.patch" \
-        "$(lane_sh "load_pkg gnome-shell; printf '%s' \"\${PATCHES[*]}\"")"
-    outside=$(cd "$APEX_ROOT/desktop/shell" && find . -type f -printf '%P\n' | while IFS= read -r f; do
-        lane_sh "load_pkg gnome-shell; mapfile -t a < <(words source1_paths); source1_member_ok '$f' \"\${a[@]}\"" ||
-            printf '%s ' "$f"
-    done)
-    check "desktop/shell holds only source1_paths" "" "$outside"
-    # desktop/shell ships inside gnome-shell under gnome-shell's licence (ADR 0014).
+# --- desktop/shell ships inside gnome-shell under gnome-shell's licence (ADR 0014) --------
+if [[ -d $APEX_ROOT/desktop/shell ]]; then
     unlicensed=$(cd "$APEX_ROOT/desktop/shell" && find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do
         [[ $(head -n 3 -- "$f") == *'SPDX-License-Identifier: GPL-2.0-or-later'* ]] || printf '%s ' "$f"
     done)
     check "desktop/shell: every file is GPL-2.0-or-later (SPDX)" "" "$unlicensed"
-    cat >"$LN/fedora.spec" <<'EOF'
-Release:        %autorelease
-Source0:        https://download.gnome.org/sources/%{name}/%{gnome_major_version}/%{name}-%{gnome_tarball_version}.tar.xz
-Patch: gnome-shell-favourite-apps-firefox.patch
-BuildRequires:  meson
-BuildRequires:  mutter-devel >= %{mutter_version}
-Requires:       mutter%{?_isa} >= %{mutter_version}
-%autosetup -S git -n %{name}-%{gnome_tarball_version}
-EOF
-    lane_sh "spec_edit_parse '$APEX_ROOT/packaging/pkgs/gnome-shell/spec-edit' '$LN/gs-edits'"
-    check "gnome-shell: spec-edit applies to Fedora's lines (f45 gnome-shell.spec, 2026-09-28)" 0 \
-        "$(rc_of lane_sh "SPEC_EDIT_VALUES=([APEX_RELEASE]=.apex1 [PIN_EVR]=51.0-1.fc45 [SOURCE1]=apex-shell-0.tar); spec_edit_apply '$LN/gs-edits' '$LN/fedora.spec'")"
-    check_true "gnome-shell: the pin in Requires" grep -qx 'Requires:       mutter%{?_isa} = 51.0-1.fc45' "$LN/fedora.spec"
-    for pair in $(lane_sh "load_pkg gnome-shell; words prep_moved") $(lane_sh "load_pkg gnome-shell; words prep_deleted"); do
-        check_true "gnome-shell: spec-edit's %prep handles ${pair%%:*}" grep -q -- "${pair%%:*}" "$APEX_ROOT/packaging/pkgs/gnome-shell/spec-edit"
-    done
 fi
 
 # --- image.sh: the rebuild lane's lock in the image context ------------------------------
@@ -791,7 +577,7 @@ IL="$TMP/image-lane"
 mkdir -p "$IL/pkgs/gnome-shell/k1"
 ilsha=$(printf 'c%.0s' {1..64})
 {
-    printf '# apex rpms.lock 1: written by packaging/rebuild.sh (packaging/README.md, "rpms.lock")\n'
+    printf '# apex rpms.lock 1: written by apex-lane (packaging/README.md, "rpms.lock")\n'
     printf 'family gnome-shell built k1\n'
     printf 'rpm gnome-shell built gnome-shell gnome-shell-0:51.0-1.fc45.apex1.x86_64 %s pkgs/gnome-shell/k1/gnome-shell-51.0-1.fc45.apex1.x86_64.rpm\n' "$ilsha"
     printf 'rpm gnome-shell mirror mutter mutter-0:51.0-1.fc45.x86_64 %s pkgs/gnome-shell/k1/mutter-51.0-1.fc45.x86_64.rpm\n' "$ilsha"
@@ -830,6 +616,16 @@ bad_lane() {
     bad_lane "an unknown record" '$a pin mutter 51.0'
 }
 check "lane lock refuses a missing file" 1 "$(rc_of image_sh "lane_lock_check '$IL/nope.lock' gnome-shell")"
+# apex-lane's golden locks, first written by the Bash lane: what the writer writes, the
+# reader accepts.
+GOLDEN=$APEX_ROOT/crates/apex-lane/tests/golden
+golden_locks=0
+for g in "$GOLDEN"/lock/b-*.lock "$GOLDEN"/lock/store-rpms.lock.next "$GOLDEN"/hold/*/expect/rpms.lock.next; do
+    [[ -f $g ]] || continue
+    golden_locks=$((golden_locks + 1))
+    check "lane lock: apex-lane's golden ${g#"$GOLDEN"/} is accepted" 0 "$(rc_of image_sh "lane_lock_check '$g' gnome-shell")"
+done
+check "lane lock: apex-lane's golden locks are there" 1 "$((golden_locks > 0))"
 # image.sh context stops without a lane lock: gnome-shell never falls back to Fedora's.
 mkdir -p "$IL/rpms"
 : >"$IL/rpms/apex-0.1.0-1.fc45.x86_64.rpm"

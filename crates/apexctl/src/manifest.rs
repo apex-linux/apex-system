@@ -128,7 +128,7 @@ fn validate_revision(text: &str) -> Result<(), ManifestBuildError> {
     }
 }
 
-/// A family name as `packaging/rebuild.sh` accepts a package name.
+/// A family name as `apex-lane` and `image.sh` accept it.
 fn is_family_name(text: &str) -> bool {
     let mut bytes = text.bytes();
     bytes

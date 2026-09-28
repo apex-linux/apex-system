@@ -51,14 +51,15 @@ jobs:
       CARGO_INCREMENTAL: "0"
       RUST_BACKTRACE: "1"
     steps:
-      - name: Tools for checkout, the cache and the bus tests
+      - name: Tools for checkout, the cache and the tests
         # git, tar and zstd are for actions/checkout and the cache inside the container;
         # dbus-daemon (/usr/bin/dbus-daemon) runs the private message buses of the D-Bus
-        # tests (apexctl tests/update_bus.rs, apex-boot tests/assess_process.rs).
+        # tests (apexctl tests/update_bus.rs, apex-boot tests/assess_process.rs); git,
+        # tar and diff (diffutils) run for real in apex-lane's tests/shell_fakes.rs.
         # Fedora's released repositories only.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
-          git-core tar gzip zstd xz findutils curl python3 dbus-daemon
+          git-core tar gzip zstd xz findutils curl python3 dbus-daemon diffutils
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -130,12 +131,12 @@ jobs:
         run: actionlint -config-file .github/scripts/actionlint.yaml
 
       - name: bash -n and shellcheck of the CI, packaging, builder VM and test scripts
-        # tools/builder-vm/desktop-disk.sh sources qualify.sh; packaging/rebuild.sh
+        # tools/builder-vm/desktop-disk.sh sources qualify.sh; tools/builder-vm/lane.sh
         # sources lib.sh.
         run: |
-          for f in .github/scripts/*.sh packaging/*.sh packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh tests/*/run.sh; do bash -n "$f"; done
+          for f in .github/scripts/*.sh packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh tests/*/run.sh; do bash -n "$f"; done
           shellcheck -x -P .github/scripts --severity=style .github/scripts/*.sh
-          shellcheck -x --severity=style packaging/*.sh packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh tests/*/run.sh
+          shellcheck -x --severity=style packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh tests/*/run.sh
 
       - name: sh -n, bash -n and shellcheck of image/checks and image/tests
         # The Containerfile's final stage runs image/checks with sh. -P SCRIPTDIR: each

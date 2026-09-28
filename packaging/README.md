@@ -12,12 +12,12 @@ and [4](../docs/ARCHITECTURE.md#4-build-and-publish)).
 | `../Makefile`, `apex.spec` | the `apex` RPM: `apexctl`, `apex-updated`, `apex-boot-assess` and their data files | the builder VM (`rpms.sh build`) | `_build/rpms/` |
 | `licenses.py` | the `License:` tag of `apex.spec`, from `cargo metadata` | `ci.yml` and `rpms.sh build` (check) | pass/fail |
 | `apex-desktop.spec` | the `apex-desktop` noarch RPM from `desktop/` (S1a: the Apex GSettings schema and the shell's crash guard) | the builder VM (`rpms.sh build`, next to the apex RPM) | `_build/rpms/` |
-| `rebuild.sh`, `pkgs/gnome-shell/` | Fedora's gnome-shell SRPM with the Apex series and `desktop/shell/` ([ADR 0014](../docs/adr/0014-engine-level-desktop.md)) | the builder VM (`just pkg-build`, and step 3 of `just vm-image`) | `~/apex-store/`, `rpms.lock.next` |
+| `pkgs/gnome-shell/`, with `apex-lane` (`../crates/apex-lane`) | Fedora's gnome-shell SRPM with the Apex series and `desktop/shell/` ([ADR 0014](../docs/adr/0014-engine-level-desktop.md)) | the builder VM (`just pkg-build`, and step 3 of `just vm-image`) | `~/apex-store/`, `rpms.lock.next` |
 | `libfprint/` | Fedora's libfprint SRPM plus the ELAN 04f3:0c6e patches | the builder VM (`libfprint.sh build`) | `_build/libfprint/`, or "degraded" |
 | `pkgs/kernel/` | the CachyOS kernel and NVIDIA open modules as one pair ([ADR 0015](../docs/adr/0015-cachyos-kernel-and-nvidia.md)) | none yet: the lane arrives in roadmap S1c | none yet |
 
 `just vm-image` (`tools/builder-vm/build-image.sh`) runs them in order: `rpms.sh build`,
-libfprint, `rebuild.sh build all`, then the image from `rpms.lock.next`
+libfprint, `apex-lane build all`, then the image from `rpms.lock.next`
 ([The image](#the-image)).
 
 ## The apex RPM
@@ -93,7 +93,8 @@ from the workspace version in `Cargo.toml`, and warns that uncommitted changes a
 in the package (it runs `git archive HEAD`).
 
 The content key (`rpms.sh key`) covers everything that changes the RPM:
-`git ls-tree -r HEAD` of `crates/`, `packaging/apex.spec`, the root `Makefile`,
+`git ls-tree -r HEAD` of `crates/` (without `crates/apex-lane/`, the lane's dev tool),
+`packaging/apex.spec`, the root `Makefile`,
 `Cargo.toml`, `Cargo.lock`, and `LICENSE` and `README.md` (packaged as `%license` and
 `%doc`), plus the `rust` NEVRA those repositories resolve, the cargo-auditable pin
 while the spec builds with it, and the recipe (the repository options and `rpms.sh`
@@ -112,30 +113,41 @@ make rpm RPMBUILD_FLAGS='--without auditable'   # in the Fedora 45 builder VM
 
 ## The rebuild lane
 
-`rebuild.sh` rebuilds a Fedora SRPM with the Apex inputs of `pkgs/<pkg>/`
+`apex-lane` rebuilds a Fedora SRPM with the Apex inputs of `pkgs/<pkg>/`
 ([ARCHITECTURE 4.1](../docs/ARCHITECTURE.md#41-rebuild-lane-s1a) and
 [4.3](../docs/ARCHITECTURE.md#43-hold-on-failure)). It generalises
 `libfprint/build.sh`, which keeps its own script until roadmap S2c moves libfprint here.
 It runs in the builder VM, from the checkout; the Fedora half runs as root in a fresh
 container of `image/Containerfile`'s `REPOS_BASE`, the digest the compose resolves
-with. Signing, the store and the locks stay in the VM.
+with, as `apex-lane in-container`, the same binary mounted read-only. Signing, the
+store and the locks stay in the VM.
+
+`apex-lane` is a Rust dev tool (`crates/apex-lane`), never shipped: the apex RPM does not
+carry the binary and its content key leaves the crate out, though `%cargo_license` lists
+the crate and its dependencies in `LICENSE.dependencies`, since it reads the whole
+workspace. `tools/builder-vm/lane.sh` builds it from the checkout's `HEAD` with Fedora's
+rust in a container of `REPOS_BASE` (`rpms.sh toolchain` once per `REPOS_BASE` digest,
+as `localhost/apex-lane-builder`), so it links against the glibc of the lane's
+containers; it caches the binary in `~/.cache/apex-lane` by its inputs and runs it in
+the checkout. The binary embeds the tree id of `crates/apex-lane` it was built from, and
+`build`, `key` and `prep` refuse to run from any other.
 
 | Recipe | Runs | Does |
 |---|---|---|
-| `just pkg-build [PKG]` | `rebuild.sh build PKG\|all` | builds what changed and records it in `rpms.lock.next` |
-| `just pkg-key PKG` | `rebuild.sh key PKG` | prints the content key |
-| `just pkg-status` | `rebuild.sh status` | each family's state, build and hold timer, in `rpms.lock.next` and `rpms.lock` |
-| `just pkg-prep PKG` | `rebuild.sh prep PKG` | a git work tree in the VM's `_build/pkg/PKG/tree`: Fedora's `%prep`, the series as commits, Source1 |
-| `just pkg-rebase PKG NVR` | `rebuild.sh prep PKG NVR` | the same from another Fedora build, with `git am -3` |
-| `just pkg-export PKG [NEW.patch…]` | `rebuild.sh export PKG` | the work tree's commits back to `pkgs/PKG/patches/` and `series` on the host |
-| `just pkg-promote` | `rebuild.sh promote` | `rpms.lock.next` becomes `rpms.lock`, after an image built from it passed its gates |
-| `just pkg-stock PKG` | `rebuild.sh stock PKG` | the owner's choice at a hold limit: the next image takes Fedora's build of the family |
+| `just pkg-build [PKG]` | `apex-lane build PKG\|all` | builds what changed and records it in `rpms.lock.next` |
+| `just pkg-key PKG` | `apex-lane key PKG` | prints the content key |
+| `just pkg-status` | `apex-lane status` | each family's state, build and hold timer, in `rpms.lock.next` and `rpms.lock` |
+| `just pkg-prep PKG` | `apex-lane prep PKG` | a git work tree in the VM's `_build/pkg/PKG/tree`: Fedora's `%prep`, the series as commits, Source1 |
+| `just pkg-rebase PKG NVR` | `apex-lane prep PKG NVR` | the same from another Fedora build, with `git am -3` |
+| `just pkg-export PKG [NEW.patch…]` | `apex-lane export PKG` | the work tree's commits back to `pkgs/PKG/patches/` and `series` on the host |
+| `just pkg-promote` | `apex-lane promote` | `rpms.lock.next` becomes `rpms.lock`, after an image built from it passed its gates |
+| `just pkg-stock PKG` | `apex-lane stock PKG` | the owner's choice at a hold limit: the next image takes Fedora's build of the family |
 
-The recipes sync the checkout into the VM first. The lane builds committed inputs only;
-in the VM, `tools/builder-vm/snapshot.sh` commits a dirty host tree as a throwaway
-snapshot, as `just vm-image` does.
+The recipes sync the checkout into the VM first. The lane builds committed inputs only,
+and `lane.sh` builds the tool from `HEAD`: in the VM, `tools/builder-vm/snapshot.sh`
+commits a dirty host tree as a throwaway snapshot, as `just vm-image` does.
 
-### What `rebuild.sh build` does
+### What `apex-lane build` does
 
 1. **Parses** `pkg.env`, `series` and `spec-edit` with strict parsers, archives Source1
    and checks its members, all before any network access (exit 2 on an error).
@@ -172,8 +184,9 @@ snapshot, as `just vm-image` does.
     was built; the main package requires `<pin>(x86-64) = <EVR>`; then the package's own
     `check.sh`.
 12. **Stores** the built RPMs (no debuginfo), the mirror RPMs, the Apex SRPM,
-    `manifest.txt`, `key.txt`, `spec.diff` and the logs under
-    `~/apex-store/pkgs/PKG/KEY/`, and writes the family into `rpms.lock.next`.
+    `manifest.txt`, `key.txt`, `key-input.txt` (the text the key hashes), `spec.diff`
+    and the logs under `~/apex-store/pkgs/PKG/KEY/`, and writes the family into
+    `rpms.lock.next`.
 
 ### Exit status
 
@@ -181,10 +194,10 @@ snapshot, as `just vm-image` does.
 |---|---|---|
 | 0 | built, or the key is already stored | `built KEY` |
 | 1 | infrastructure: a repository, a download, a signature, the pin, the release arithmetic, Fedora's own `%prep`, the store, or a hold with no last good build | unchanged; the image build stops |
-| 2 | usage or configuration: `pkg.env`, `series`, `spec-edit`, Source1's members, uncommitted inputs, a shallow clone | unchanged; the image build stops |
+| 2 | usage or configuration: `pkg.env`, `series`, `spec-edit` (an ERE outside the subset included), Source1's members, two packages in one family, uncommitted inputs, a shallow clone, a binary built from another `crates/apex-lane` | unchanged; the image build stops |
 | 3 | the inputs give no shippable build: an anchor matches 0 or 2+ lines, a patch does not apply, the tree is not exact, the build or a lane check fails | `on_fail=hold`: `held`, keeping the last good build of `rpms.lock`; `on_fail=degrade`: `degraded`, no RPMs; the image build goes on |
 
-`build all` builds every `pkgs/*/pkg.env` in turn, stops at the first 1 or 2, and exits
+`build all` builds every `pkgs/*/pkg.env` in byte order, stops at the first 1 or 2, and exits
 3 when any package held or degraded. The reason of an exit 3 names the first series
 entry that does not apply on its own to Fedora's tree, so a rebase conflict names its
 feature; it and the log's tail are kept in `~/apex-store/pkgs/PKG/last-failure.txt`.
@@ -199,14 +212,14 @@ outside `[A-Za-z0-9._/:+ -]`, exits 2.
 | `source` | yes | `fedora-srpm`. `copr-srpm` (S1c) and `git` (S2c) are reserved. |
 | `srpm` | yes | the source package; its binary package of the same name is resolved |
 | `on_fail` | yes | `hold` (a design package) or `degrade` |
-| `family` | yes | the hold unit in the lock |
+| `family` | yes | the hold unit in the lock, `^[a-z0-9][a-z0-9._+-]*$`; one package per family |
 | `install` | yes | the built binary packages the image takes |
-| `pin` | no | a package built against at one exact EVR: its newest `-devel` in the lane's repositories. `spec-edit` writes it with `@PIN_EVR@`; the lane checks the result. |
+| `pin` | no | a package name, built against at one exact EVR: its newest `-devel` in the lane's repositories. `spec-edit` writes it with `@PIN_EVR@`; the lane checks the result. |
 | `mirror` | with `pin` | Fedora-signed binaries of the pin's build, stored and locked with the family |
 | `mirror_dev` | with `pin` | the same, stored but never locked (the dev loop) |
 | `source1` | no | a directory of this repository, archived as `Source1` (`@SOURCE1@`) |
 | `source1_paths` | with `source1` | the paths Source1 may add to the tree; a trailing `/` means a directory |
-| `prep_moved` | no | `FROM:TO` pairs that `spec-edit`'s `%prep` lines move (TO must equal Fedora's FROM) |
+| `prep_moved` | no | `FROM:TO` pairs that `spec-edit`'s `%prep` lines move (TO must equal Fedora's FROM); `prep` makes the same moves in the work tree |
 | `prep_deleted` | no | Fedora files that `spec-edit`'s `%prep` lines delete |
 
 ### `series`
@@ -228,10 +241,23 @@ replace ERE        # or: after ERE
 end
 ```
 
-Each ERE (`grep -E`) must match exactly one line of Fedora's spec. `after` inserts the
-text after that line, `replace` replaces the line. No match, or more than one, exits 3.
-Placeholders: `@APEX_RELEASE@` (`.apexN` or `.apexN.M`), `@PIN_EVR@`, `@SOURCE1@`; any
-other `@NAME@` exits 2. The lane adds the `Patch` lines itself.
+Each ERE must match exactly one line of Fedora's spec, compared as bytes, as `grep -E`
+does in the C locale. `after` inserts the text after that line, `replace` replaces the
+line. No match, or more than one, exits 3. Placeholders: `@APEX_RELEASE@` (`.apexN` or
+`.apexN.M`), `@PIN_EVR@`, `@SOURCE1@`; any other `@NAME@` exits 2. The lane adds the
+`Patch` lines itself.
+
+The ERE is the rest of the directive line after one space, trailing spaces included,
+and must be in this subset of POSIX EREs, checked when `spec-edit` is read (exit 2
+otherwise): literals; `.`; `^` and `$`; bracket expressions with ranges, negation and
+the classes `[:alpha:]`, `[:digit:]`, `[:alnum:]`, `[:upper:]`, `[:lower:]`,
+`[:space:]`, `[:blank:]`, `[:punct:]`, `[:print:]`, `[:graph:]`, `[:cntrl:]`,
+`[:xdigit:]` (ASCII only inside brackets); groups; `|`; `*`, `+`, `?` and the intervals
+`{m}`, `{m,}`, `{m,n}`, `{,n}` up to 255; and `\` before one of ``. [ ] ( ) { } * + ? |
+^ $ \ /``, which stands for that character. Out of the subset, because GNU grep reads
+them its own way: back-references, `\w \W \s \S \b \B \< \>`, a `{` that starts no
+interval (write `\{` or `[{]`), an empty group or alternative, a quantifier after
+nothing or after an anchor, and `[= =]` and `[. .]`.
 
 ### `check.sh`
 
@@ -242,15 +268,27 @@ an infrastructure error.
 
 ### Content key and release
 
-`KEY = <stock NVR>-s<first 12 hex digits of a sha256>` over: the key schema, the package,
-`rebuild.sh`, `check.sh`, the dnf repository options (the admission list included), the
-stock NVR, the pin, `pkg.env`, `spec-edit`, each patch by name and content, Source1's
-tree id and `.apexN`. The container digest is recorded in the manifest but not hashed:
-dependency drift does not warrant a rebuild.
+`KEY = <stock NVR>-s<first 12 hex digits of a sha256>` over: the key schema (2), the
+package, the lane's tool id, `check.sh`, the dnf repository options (the admission list
+included), the stock NVR, the pin, `pkg.env`, `spec-edit`, each patch by name and
+content, Source1's tree id and `.apexN`. `key-input.txt` in each stored set is that
+text. The container digest is recorded in the manifest but not hashed: dependency
+drift does not warrant a rebuild.
 
-- **N** in `.apexN` is `git rev-list --count HEAD` over `pkgs/PKG`, the Source1 directory
-  and `rebuild.sh`: every committed change to an input moves it. In the builder VM a
-  snapshot commit of a dirty tree adds one.
+- **The tool id** is a sha256 over `git ls-tree -r HEAD` of `crates/apex-lane/Cargo.toml`
+  and `crates/apex-lane/src`, and the name, version, source and checksum of every crate
+  `Cargo.lock` compiles into the binary (the `[dependencies]` and `[build-dependencies]`
+  of its `Cargo.toml`, and theirs). A change to the lane or to one of those crates
+  rebuilds every package; its tests, its dev-dependencies and the rest of the workspace
+  do not count. `apex-lane` depends on no workspace crate, whose source the id would
+  miss; the id refuses one (exit 2).
+- **N** in `.apexN` is `git rev-list --count HEAD` over `pkgs/PKG`, the Source1
+  directory, `crates/apex-lane/src`, `crates/apex-lane/Cargo.toml` and
+  `packaging/rebuild.sh`, the Bash lane `apex-lane` replaced: git still counts a
+  deleted path's history, so N never drops below a Bash-built release. Every committed
+  change to an input moves it. In the builder VM a snapshot commit of a dirty tree
+  adds one. A dependency bump in `Cargo.lock` alone changes the key but not N, and
+  takes `.apexN.M`.
 - **M** in `.apexN.M`: a key can change without a commit, when a Fedora update moves only
   the pin (a mutter-only update). The first key of a stock NVR at `.apexN` gets it bare;
   each later key of that stock NVR gets `.M`, one above the highest stored, so two builds
@@ -287,11 +325,13 @@ rpm FAMILY KIND NAME NEVRA SHA256 PATH
 - A hold records `since` (the first failed run for this set of `newer` builds, kept
   across runs), `newer` (the Fedora builds the last good build was not made from),
   `security` (from Bodhi: `1` security, `0` not, `?` unknown, which counts as security)
-  and `limit` (`since` + 72 h for security, + 14 days otherwise). A hold with no newer
+  and `limit` (`since` + 72 h for security, + 14 days otherwise). Both times are
+  `%Y-%m-%dT%H:%M:%SZ`, the only form the lane reads back. A hold with no newer
   Fedora build (the Apex inputs themselves fail) has no limit. `just pkg-status` prints
   `LIMIT REACHED` past the limit.
-- `rebuild.sh build` writes `rpms.lock.next`; `promote` copies it to `rpms.lock` after
-  the image built from it passes its gates, after checking every file's sha256. A hold
+- `apex-lane build` writes `rpms.lock.next`; `promote` copies it to `rpms.lock` after
+  the image built from it passes its gates, after checking every file's sha256 and that
+  each path stays inside the store. A hold
   needs a last good build in `rpms.lock`; with none (the first build, or a lost store)
   the lane exits 1, and only the owner can choose `stock`.
 
@@ -329,13 +369,14 @@ stock on its own (ADR 0014).
 ### Signing
 
 Not yet: there is no Apex RPM key, and `[apex]` keeps `gpgcheck=0`. The plug-in point is
-`sign_built` in `rebuild.sh`, in the VM after the container exits and before the store,
-so the private key never meets upstream build scripts. When the key exists
+`sign_built` in `apex-lane` (`crates/apex-lane/src/vm/build.rs`), in the VM after the
+container exits and before the store, so the private key never meets upstream build
+scripts. When the key exists
 (ARCHITECTURE 5.1; the owner keeps its offline backup):
 
-- `~/.config/apex/rpm-signing.env` names it (`APEX_RPM_KEY_FPR`, and the backend, gpg
-  or Sequoia `sq`); today the lane refuses to run when that file exists, so a key is
-  never half wired.
+- `~/.config/apex/rpm-signing.env` (`APEX_RPM_SIGNING_ENV`) names it (`APEX_RPM_KEY_FPR`,
+  and the backend, gpg or Sequoia `sq`); today the lane refuses to run when that file
+  exists, before any container starts, so a key is never half wired.
 - `rpmsign --addsign --define "_openpgp_sign_id $APEX_RPM_KEY_FPR"` signs the `built`
   RPMs and the Apex SRPM only; `mirror` RPMs keep Fedora's signature. The manifest then
   records the fingerprint, and the lock's sha256 is the signed file's. The signature is

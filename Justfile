@@ -69,7 +69,7 @@ image:
     @echo '  # RPM inputs: build them'
     @echo '  sudo podman run --rm -v "$PWD:/src:z" -w /src registry.fedoraproject.org/fedora:45 .github/scripts/rpms.sh build /src/_build/rpms'
     @echo '  sudo podman run --rm -v "$PWD:/src:z" -w /src registry.fedoraproject.org/fedora:45 .github/scripts/libfprint.sh build /src/_build/libfprint   # exit 3 = degraded'
-    @echo '  packaging/rebuild.sh build all      # the rebuild lane (gnome-shell); exit 3 = held, degraded or stock'
+    @echo '  tools/builder-vm/lane.sh build all  # the rebuild lane, apex-lane (gnome-shell); exit 3 = held, degraded or stock'
     @echo '  .github/scripts/image.sh context --rpms-dir _build/rpms --libfprint-dir _build/libfprint --lane-lock ~/apex-store/rpms.lock.next'
     @echo '  .github/scripts/image.sh build'
     @echo '  .github/scripts/image.sh inspect'
@@ -150,41 +150,42 @@ vm-qualify:
     tools/builder-vm/builder-vm.sh run env QUALIFY_MEM=3G QUALIFY_SMP=4 .github/scripts/qualify.sh local localhost/apex:build
 
 # ---- Rebuild lane: Fedora packages with Apex patches (packaging/README.md) -------------
-# Each recipe syncs this checkout into the builder VM and runs packaging/rebuild.sh there;
-# snapshot.sh commits a dirty tree in the VM copy, because the lane builds from git HEAD.
+# Each recipe syncs this checkout into the builder VM and runs apex-lane there through
+# lane.sh, which builds the tool from git HEAD with Fedora's rust. snapshot.sh commits a
+# dirty tree in the VM copy first, because the lane and its tool build from git HEAD.
 
 # Rebuild PKG (or all) from Fedora's SRPM with its series and Source1, in the builder VM.
 pkg-build pkg="all":
-    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh packaging/rebuild.sh build {{ pkg }}
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh build {{ pkg }}
 
 # Print PKG's content key: Fedora's NVR plus a hash of the pin and every Apex input.
 pkg-key pkg:
-    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh packaging/rebuild.sh key {{ pkg }}
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh key {{ pkg }}
 
 # What the next image takes from the lane: each family's state, build and hold timer.
 pkg-status:
-    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh status
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh status
 
 # A git work tree of PKG in the builder VM: Fedora's %prep, the series as commits, Source1.
 pkg-prep pkg:
-    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh prep {{ pkg }}
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh prep {{ pkg }}
 
 # The series onto another Fedora build of PKG (git am -3) in the work tree; then pkg-export.
 pkg-rebase pkg nvr:
-    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh prep {{ pkg }} {{ nvr }}
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh prep {{ pkg }} {{ nvr }}
 
 # Write the work tree's commits to packaging/pkgs/PKG (patches/, series) on this host.
 pkg-export pkg *new:
     tools/builder-vm/builder-vm.sh sync
-    tools/builder-vm/builder-vm.sh ssh 'cd ~/apex-fedora && packaging/rebuild.sh export {{ pkg }} {{ new }} >&2 && tar -C packaging/pkgs/{{ pkg }} -cf - series patches' | tar -C packaging/pkgs/{{ pkg }} -xf -
+    tools/builder-vm/builder-vm.sh ssh 'cd ~/apex-fedora && tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh export {{ pkg }} {{ new }} >&2 && tar -C packaging/pkgs/{{ pkg }} -cf - series patches' | tar -C packaging/pkgs/{{ pkg }} -xf -
 
 # After an image built from rpms.lock.next passed its gates, make it rpms.lock.
 pkg-promote:
-    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh promote
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh promote
 
 # At a hold limit, ship Fedora's build of PKG's family instead (an owner decision).
 pkg-stock pkg:
-    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh stock {{ pkg }}
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh tools/builder-vm/lane.sh stock {{ pkg }}
 
 # ---- Desktop VM: the built image in a window on this host (tools/builder-vm/README.md) ---
 
