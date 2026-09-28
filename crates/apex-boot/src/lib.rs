@@ -79,7 +79,8 @@
 //!
 //! Still not covered: a boot that hangs in a start job without a timeout never reaches
 //! either the assessment or an emergency shell; the counter then moves only when the user
-//! forces a power-off. `panic=10` and `rd.emergency=reboot` cover panics and the initramfs.
+//! forces a power-off. `panic=10` covers kernel panics; an initramfs failure waits at the
+//! dracut rescue shell, and a forced power-off moves the counter.
 //!
 //! # Time budget
 //!

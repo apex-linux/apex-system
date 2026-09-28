@@ -24,9 +24,9 @@ ConditionPathExists=/run/ostree-booted
 # in the emergency or rescue shell, the drop-ins emergency.service.d/ and
 # rescue.service.d/50-apex-bootcount.conf run `apex-boot-assess --emergency-watchdog`,
 # which reboots after 60 s while GRUB is counting an update on trial (ADR 0009,
-# Consequences). panic=10 and rd.emergency=reboot cover panics and the initramfs. Still
-# not covered: a start job that hangs without a timeout; GRUB's counter then moves only
-# when the user forces a power-off.
+# Consequences). panic=10 covers kernel panics. Not covered: an initramfs failure, which
+# waits at the dracut rescue shell, and a start job that hangs without a timeout; GRUB's
+# counter then moves only when the user forces a power-off.
 After=graphical.target
 
 # Deliberately no Before=boot-complete.target (unlike greenboot-healthcheck.service), and

@@ -8,8 +8,8 @@
 //! `local-fs.target` dependency), waits at `sulogin`; with the root account locked it only
 //! offers "Press Enter to continue". Nothing reboots, so GRUB's counter would move only when
 //! somebody forces a power-off, and the counted rollback would take three manual power
-//! cycles. The kernel arguments `panic=10 rd.shell=0 rd.emergency=reboot` cover the kernel
-//! and the initramfs, not the real root.
+//! cycles. The kernel argument `panic=10` covers kernel panics. The initramfs keeps
+//! dracut's rescue shell, where a forced power-off moves the counter.
 //!
 //! # The watchdog
 //!
