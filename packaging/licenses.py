@@ -2,30 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compute the RPM License: expression for the apex package from `cargo metadata`.
 
-The apex RPM ships statically linked Rust binaries, so its License tag is Apex's own
-license AND the license of every crate linked into them. This script derives that
-expression from the dependency graph instead of by hand:
-
-1. `cargo metadata --format-version 1` (no build; it resolves Cargo.lock, with
-   `--locked` when the lock file exists), filtered to the platform the RPM is built
-   for (default x86_64-unknown-linux-gnu; `--target all` reproduces the more
-   conservative view of Fedora's `%cargo_license_summary`).
-2. Start from the workspace packages that own the binaries (apexctl, apex-updated,
-   apex-boot-assess) and follow only normal dependency edges. Build and dev
-   dependencies and proc-macro crates never end up in the binaries, so they are
-   skipped. That matches `cargo tree --edges no-build,no-dev,no-proc-macro`,
-   the edge set cargo2rpm uses for Fedora's license macros.
-3. Normalise each crate's license (legacy `MIT/Apache-2.0` becomes
-   `Apache-2.0 OR MIT`; flat OR lists are sorted so equivalent spellings collapse),
-   split top-level ANDs into their parts, de-duplicate, and join with AND: simple
-   identifiers first, OR expressions in parentheses after them.
-
-Usage (from the repository root; network may be needed the first time cargo resolves):
-
-    python3 packaging/licenses.py                 # breakdown plus the License: line
-    python3 packaging/licenses.py --expression    # only the expression
-    python3 packaging/licenses.py --check packaging/apex.spec   # CI: tag up to date?
-    python3 packaging/licenses.py --self-test     # run the doctests
+The binaries are statically linked, so the tag covers every crate linked into them:
+normal dependency edges only, without proc-macro crates, as
+`cargo tree --edges no-build,no-dev,no-proc-macro` and cargo2rpm (Fedora's license
+macros) see them. `--target all` gives the more conservative view of Fedora's
+`%cargo_license_summary`.
 
 The metadata resolve is feature-unified across the whole workspace, so a crate that is
 enabled only for a sibling member can appear here; the error is on the safe side.
@@ -79,10 +60,6 @@ def normalize(expr: str) -> str:
 
 def conjuncts(expr: str) -> list[str]:
     """Split a normalised expression at its top-level ANDs (A AND (B AND C) == A AND B AND C).
-
-    Each part loses redundant outer parentheses and is normalised again, so
-    `(MIT OR Apache-2.0) AND Unicode-3.0` contributes `Apache-2.0 OR MIT` and
-    `Unicode-3.0` to the package expression.
 
     >>> conjuncts("(MIT OR Apache-2.0) AND Unicode-3.0")
     ['Apache-2.0 OR MIT', 'Unicode-3.0']
@@ -155,12 +132,7 @@ def is_proc_macro(package: dict) -> bool:
 
 
 def closure(metadata: dict, bins: tuple[str, ...]) -> list[dict]:
-    """Packages linked into the given binaries (roots included), sorted by name.
-
-    A breadth-first walk over normal edges of the resolve graph. A dict keyed by
-    package id is the visited set, so every package is expanded once even though
-    the graph is a DAG with heavy sharing.
-    """
+    """Packages linked into the given binaries (roots included), sorted by name."""
     packages = {p["id"]: p for p in metadata["packages"]}
     nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
     members = set(metadata["workspace_members"])
@@ -226,7 +198,6 @@ def run_cargo_metadata(manifest: Path, target: str, cargo: str) -> dict:
 
 
 def spec_license(spec: Path) -> str:
-    """The value of the License: tag in an RPM spec."""
     for line in spec.read_text(encoding="utf-8").splitlines():
         match = re.match(r"License:\s*(.+?)\s*$", line)
         if match:

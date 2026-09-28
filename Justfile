@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Developer recipes. The Rust ones run anywhere with rustup (rust-toolchain.toml pins
-# Fedora 45's rust); RPM and image work needs Fedora 45, i.e. the KVM builder VM of
-# ADR 0013. Recipes never run sudo: the ones that need root print the command instead.
+# Recipes never run sudo: the ones that need root print the command instead.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -110,7 +108,7 @@ qualify-local:
     @echo 'results.md) and needs about 60 GiB free. QUALIFY_LAYOUT=to-disk switches to the'
     @echo 'bootc install to-disk --via-loopback path.'
 
-# ---- Fedora 45 builder VM (ADR 0013; tools/builder-vm/README.md) ----------------------
+# ---- Fedora 45 builder VM (tools/builder-vm/README.md) --------------------------------
 
 # Create the builder VM: download and verify Fedora Cloud 45, first boot, provision.
 vm-create:
@@ -150,9 +148,8 @@ vm-qualify:
     tools/builder-vm/builder-vm.sh run env QUALIFY_MEM=3G QUALIFY_SMP=4 .github/scripts/qualify.sh local localhost/apex:build
 
 # ---- Rebuild lane: Fedora packages with Apex patches (packaging/README.md) -------------
-# Each recipe syncs this checkout into the builder VM and runs apex-lane there through
-# lane.sh, which builds the tool from git HEAD with Fedora's rust. snapshot.sh commits a
-# dirty tree in the VM copy first, because the lane and its tool build from git HEAD.
+# snapshot.sh commits a dirty tree in the VM copy first: the lane and lane.sh build from
+# git HEAD.
 
 # Rebuild PKG (or all) from Fedora's SRPM with its series and Source1, in the builder VM.
 pkg-build pkg="all":

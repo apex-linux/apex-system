@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
 # try-fix.sh: install or remove the rendered ALC294 HDA patch firmware on the CURRENT
 # host (the Ubuntu dev install of the M7400QC), to test it before Apex ships it.
-# ADR 0004, docs/hardware/AUDIO.md.
-#
-#   install  copies hardware/m7400qc/generated/alc294-m7400qc.fw to
-#            /lib/firmware/apex/ and generated/apex-audio.conf to
-#            /etc/modprobe.d/apex-audio.conf, after validating both
-#   revert   removes exactly those two files
-#   status   shows what is installed and what the running kernel has loaded, and
-#            whether the loaded init_verbs equal the rendered [verb] lines
 #
 # Idempotent: running an action twice changes nothing the second time. Nothing here
 # writes to the codec, reloads a module or rebuilds an initramfs.
@@ -223,7 +215,6 @@ initramfs_note() {
     fi
 }
 
-# copy_atomic SRC DST: installs SRC as DST (mode 0644) via a temporary file and rename.
 copy_atomic() {
     local src=$1 dst=$2 tmp
     [[ ! -L $dst ]] || die 2 "$dst is a symlink; refusing to replace it"
@@ -251,7 +242,6 @@ rendered_verbs() {
 }
 
 codec_init_verbs() {
-    # Prints the init_verbs of the ALC294 hwdep (vendor 0x10ec0294, subsystem 0x10431ab2).
     local dir
     for dir in "$ROOT"/sys/class/sound/hwC*D*; do
         [[ $(cat -- "$dir/vendor_id" 2>/dev/null) == 0x10ec0294 &&

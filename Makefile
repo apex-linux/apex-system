@@ -1,21 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Apex top-level Makefile (GNU make).
-#
-# One install target serves both development and the RPM: %install in
-# packaging/apex.spec runs `make install DESTDIR=%{buildroot}`. The installed layout is
-# therefore defined once, here, and it must match section 2 of
-# docs/specs/M1-IMPLEMENTATION.md exactly.
+# GNU make. packaging/apex.spec's %install runs `make install`, so this file alone
+# defines the installed layout.
 #
 #   make build                   release binaries (cargo auditable when it is installed)
-#   make install DESTDIR=DIR     install the contract layout; never builds
+#   make install DESTDIR=DIR     install the layout; never builds
 #   make check-data              validate D-Bus, polkit, desktop and systemd data files
 #   make rpm                     SRPM and RPMs from git HEAD with rpmbuild (packaging/README.md)
 #   make rpm-desktop             the apex-desktop SRPM and RPM from git HEAD (desktop/, without
 #                                desktop/shell/, which ships in the rebuilt gnome-shell)
 #   make clean
-#
-# Variables can be overridden on the command line or from the environment.
 
 PREFIX      ?= /usr
 BINDIR      ?= $(PREFIX)/bin
@@ -41,22 +35,21 @@ CARGO_BUILD_ARGS ?= --release --locked
 CARGO_TARGET_DIR ?= target
 RELEASE_DIR      := $(CARGO_TARGET_DIR)/release
 
-# The three binaries of the apex RPM. Selecting them with --bin (not --workspace or
-# --bins) keeps later GUI crates (M2) and their GTK dependency out of this build.
+# Selected with --bin, not --workspace or --bins, to keep GUI crates and their GTK
+# dependency out of this build.
 APEX_BINS := apexctl apex-updated apex-boot-assess
 
 DBUS_IFACE_XML := crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml
 UPDATED_DATA   := crates/apex-updated/data
 BOOT_DATA      := crates/apex-boot/data
 
-# Files checked by check-data.
 XML_DATA := $(DBUS_IFACE_XML) \
 	$(UPDATED_DATA)/io.github.sekirokenjii.Apex.Update1.conf \
 	$(UPDATED_DATA)/io.github.sekirokenjii.apex.update.policy
 UNITS := apex-updated.service apex-update-auto.service apex-update-auto.timer \
 	apex-boot-assess.service
-# systemd's own units that get an Apex drop-in (contract section 2). check-data verifies
-# them with a stub of the unit itself, since the check root holds only Apex files.
+# systemd's own units that get an Apex drop-in. check-data verifies them with a stub of
+# the unit itself, since the check root holds only Apex files.
 DROPIN_UNITS := emergency.service rescue.service
 CHECK_ROOT := $(abspath $(CARGO_TARGET_DIR))/check-data/root
 
@@ -115,7 +108,7 @@ install-bin:
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-updated '$(DESTDIR)$(LIBEXECDIR)/apex-updated'
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-boot-assess '$(DESTDIR)$(LIBEXECDIR)/apex-boot-assess'
 
-# $(call install_data,ROOT): the data half of the contract table, below ROOT.
+# $(call install_data,ROOT): the data files, below ROOT.
 define install_data
 	$(INSTALL) -Dm0644 $(DBUS_IFACE_XML) \
 		'$(1)$(DBUSDIR)/interfaces/io.github.sekirokenjii.Apex.Update1.xml'
@@ -219,8 +212,7 @@ rpm:
 		--define 'shortcommit $(SHORTCOMMIT)' \
 		$(RPMBUILD_FLAGS)
 
-# The same rules as rpm: git HEAD only, uncommitted changes are left out. It needs no
-# cargo; the archive holds desktop/ without desktop/shell/, and LICENSE.
+# Packages the committed tree, like rpm.
 rpm-desktop:
 	@if [ -z '$(SHORTCOMMIT)' ]; then \
 		echo "error: 'make rpm-desktop' packages git HEAD, and this checkout has no commit" >&2; \

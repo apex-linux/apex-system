@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # coef-dump.sh: read-only snapshot of the Realtek ALC294 processing coefficients
-# (COEFs) on the ASUS Vivobook Pro 14X OLED M7400QC. ADR 0004, docs/hardware/AUDIO.md.
+# (COEFs) on the ASUS Vivobook Pro 14X OLED M7400QC.
 #
 # The script only READS COEFs: it uses the hda-verb verbs SET_COEF_INDEX (selects a
 # slot, like the kernel's own dump_coef proc code does), GET_PROC_COEF and
@@ -172,7 +172,6 @@ E)
     ;;
 esac
 
-# Normalise and validate the index list: lowercase 0xNN, sorted, no duplicates.
 declare -A SEEN=()
 INDEXES=()
 for raw in "${DEFAULT_INDEXES[@]}" "${EXTRA[@]}"; do
@@ -197,7 +196,6 @@ fi
 HDA_VERB=$(command -v hda-verb) || die 2 "hda-verb not found; install alsa-tools"
 
 read_file() {
-    # Prints a sysfs/proc file with surrounding whitespace removed; empty if unreadable.
     local content
     content=$(cat -- "$1" 2>/dev/null) || content=
     content=${content#"${content%%[![:space:]]*}"}
@@ -206,7 +204,6 @@ read_file() {
 }
 
 one_line() {
-    # Joins a multi-line value with " | " and prints "(empty)" for nothing.
     local text=$1
     if [[ -z $text ]]; then
         printf '(empty)'
@@ -216,13 +213,11 @@ one_line() {
 }
 
 printable() {
-    # Replaces every byte outside printable ASCII (0x20-0x7e) with '?', so a value can
-    # go into a TOML comment or string without breaking the report.
+    # Keeps a value from breaking a TOML comment or string in the report.
     printf '%s' "$1" | tr -c ' -~' '?'
 }
 
 toml_string() {
-    # Prints VALUE as a TOML basic string: printable ASCII, with \ and " escaped.
     local s
     s=$(printable "$1")
     s=${s//\\/\\\\}
@@ -231,7 +226,6 @@ toml_string() {
 }
 
 provenance_ok() {
-    # True when apexctl accepts VALUE as [audio.measurements] bios or kernel.
     local v=$1
     ((${#v} >= 1 && ${#v} <= MAX_PROVENANCE_LEN)) && [[ $v != *[![:print:]]* ]]
 }
@@ -278,7 +272,6 @@ for status in "${STATUS_FILES[@]}"; do
 done
 ((${#BUSY[@]} == 0)) || die 2 "PCM streams are running on card $CARD (${BUSY[*]}); stop playback and recording (or stop PipeWire) and retry"
 
-# Sysfs facts about the codec and the driver.
 CHIP=$(read_file "$CODEC_SYSFS/chip_name")
 REVISION=$(read_file "$CODEC_SYSFS/revision_id")
 MODELNAME=$(read_file "$CODEC_SYSFS/modelname")
@@ -427,7 +420,6 @@ fi
 hex4() { printf '0x%04x' "$1"; }
 
 bits_of() {
-    # Lists the set bit numbers of a 16-bit mask, e.g. "10" or "8 12 13".
     local mask=$1 bit out=()
     for ((bit = 0; bit < 16; bit++)); do
         ((mask & (1 << bit))) && out+=("$bit")

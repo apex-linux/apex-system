@@ -1,9 +1,5 @@
-# Hardware profile: ASUS Vivobook Pro 14X OLED M7400QC.
-#
-# Single source of truth for machine facts. Image drop-ins (HDA patch firmware,
-# monitors.xml, hwdb entries) are generated from this file by Apex tooling, and
-# golden tests keep the committed copies identical to the generated output.
-# Facts were read on the machine itself on 2026-09-23 (BIOS M7400QC.311).
+# ASUS Vivobook Pro 14X OLED M7400QC. Facts read on the machine itself on 2026-09-23
+# (BIOS M7400QC.311); `just render` regenerates the files derived from them.
 
 schema = 1
 
@@ -32,7 +28,7 @@ width_mm = 302
 height_mm = 189
 # Exact rates as mutter reports them (DisplayConfig GetCurrentState).
 refresh_hz = [90.001434326171875, 60.000957489013672]
-# ADR 0003: integer scale is pixel-exact for every client; 5/3 is mutter's own choice.
+# Integer scale is pixel-exact for every client; 5/3 is mutter's own choice.
 default_scale = { num = 2, den = 1 }
 alternative_scales = [{ num = 5, den = 3 }]
 
@@ -45,7 +41,7 @@ address = 0
 # Realtek vendor-defined processing widget that owns the COEF registers.
 coef_nid = 0x20
 
-# ADR 0004: the fix is rendered only from values measured on this unit.
+# The fix is rendered only from values measured on this unit:
 # hardware/m7400qc/audio/coef-dump.sh prints these tables; paste them here.
 # Until audio.measurements.cold_boot exists, `apexctl profile render` produces no
 # firmware file and the image is labelled degraded=audio.
@@ -101,5 +97,5 @@ name = "BAT0"
 # The kernel exposes only an end threshold (no start) and resets it to 100 at boot.
 # UPower's default hwdb already asks for 75,80, but asus-wmi adds the attribute after
 # BAT0 appears without a uevent, so UPower never sees it: image/system_files ships a
-# udev re-trigger, an upower.service wait, and a default-on state file (ARCHITECTURE 6.4).
+# udev re-trigger, an upower.service wait, and a default-on state file.
 charge_end_threshold = 80
