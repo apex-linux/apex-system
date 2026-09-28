@@ -144,6 +144,43 @@ vm-image-only:
 vm-qualify:
     tools/builder-vm/builder-vm.sh run env QUALIFY_MEM=3G QUALIFY_SMP=4 .github/scripts/qualify.sh local localhost/apex:build
 
+# ---- Rebuild lane: Fedora packages with Apex patches (packaging/README.md) -------------
+# Each recipe syncs this checkout into the builder VM and runs packaging/rebuild.sh there;
+# snapshot.sh commits a dirty tree in the VM copy, because the lane builds from git HEAD.
+
+# Rebuild PKG (or all) from Fedora's SRPM with its series and Source1, in the builder VM.
+pkg-build pkg="all":
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh packaging/rebuild.sh build {{ pkg }}
+
+# Print PKG's content key: Fedora's NVR plus a hash of the pin and every Apex input.
+pkg-key pkg:
+    tools/builder-vm/builder-vm.sh run tools/builder-vm/snapshot.sh packaging/rebuild.sh key {{ pkg }}
+
+# What the next image takes from the lane: each family's state, build and hold timer.
+pkg-status:
+    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh status
+
+# A git work tree of PKG in the builder VM: Fedora's %prep, the series as commits, Source1.
+pkg-prep pkg:
+    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh prep {{ pkg }}
+
+# The series onto another Fedora build of PKG (git am -3) in the work tree; then pkg-export.
+pkg-rebase pkg nvr:
+    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh prep {{ pkg }} {{ nvr }}
+
+# Write the work tree's commits to packaging/pkgs/PKG (patches/, series) on this host.
+pkg-export pkg *new:
+    tools/builder-vm/builder-vm.sh sync
+    tools/builder-vm/builder-vm.sh ssh 'cd ~/apex-fedora && packaging/rebuild.sh export {{ pkg }} {{ new }} >&2 && tar -C packaging/pkgs/{{ pkg }} -cf - series patches' | tar -C packaging/pkgs/{{ pkg }} -xf -
+
+# After an image built from rpms.lock.next passed its gates, make it rpms.lock.
+pkg-promote:
+    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh promote
+
+# At a hold limit, ship Fedora's build of PKG's family instead (an owner decision).
+pkg-stock pkg:
+    tools/builder-vm/builder-vm.sh run packaging/rebuild.sh stock {{ pkg }}
+
 # ---- Desktop VM: the built image in a window on this host (tools/builder-vm/README.md) ---
 
 # Install the last vm-image build onto the desktop VM disk (desktop-install --replace redoes it).

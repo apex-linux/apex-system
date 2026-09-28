@@ -11,6 +11,8 @@
 #   make install DESTDIR=DIR     install the contract layout; never builds
 #   make check-data              validate D-Bus, polkit, desktop and systemd data files
 #   make rpm                     SRPM and RPMs from git HEAD with rpmbuild (packaging/README.md)
+#   make rpm-desktop             the apex-desktop SRPM and RPM from git HEAD (desktop/, without
+#                                desktop/shell/, which ships in the rebuilt gnome-shell)
 #   make clean
 #
 # Variables can be overridden on the command line or from the environment.
@@ -67,14 +69,16 @@ CRATE_VERSION  = $(shell sed -n '/^\[workspace\.package\]/,/^\[/s/^version[[:spa
 COMMITDATE     = $(shell TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d HEAD 2>/dev/null)
 SHORTCOMMIT    = $(shell git rev-parse --short=12 HEAD 2>/dev/null)
 RPMBUILD_FLAGS ?=
+DESKTOP_SPEC     := packaging/apex-desktop.spec
+DESKTOP_VERSION   = $(shell sed -n 's/^Version:[[:space:]]*//p' $(DESKTOP_SPEC))
 
-.PHONY: all build install install-bin install-data check-data rpm clean help
+.PHONY: all build install install-bin install-data check-data rpm rpm-desktop clean help
 .DELETE_ON_ERROR:
 
 all: build
 
 help:
-	@echo 'Targets: build install check-data rpm clean'
+	@echo 'Targets: build install check-data rpm rpm-desktop clean'
 	@echo 'Common variables: DESTDIR PREFIX LIBEXECDIR CARGO AUDITABLE=auto|yes|no RPMBUILD_FLAGS'
 
 build:
@@ -210,6 +214,25 @@ rpm:
 	git archive --format=tar.gz --prefix='apex-$(SPEC_VERSION)/' \
 		-o '$(RPM_TOPDIR)/SOURCES/apex-$(SPEC_VERSION).tar.gz' HEAD
 	$(RPMBUILD) -ba $(SPEC) \
+		--define '_topdir $(RPM_TOPDIR)' \
+		--define 'commitdate $(COMMITDATE)' \
+		--define 'shortcommit $(SHORTCOMMIT)' \
+		$(RPMBUILD_FLAGS)
+
+# The same rules as rpm: git HEAD only, uncommitted changes are left out. It needs no
+# cargo; the archive holds desktop/ without desktop/shell/, and LICENSE.
+rpm-desktop:
+	@if [ -z '$(SHORTCOMMIT)' ]; then \
+		echo "error: 'make rpm-desktop' packages git HEAD, and this checkout has no commit" >&2; \
+		exit 1; \
+	fi
+	@git diff --quiet HEAD -- desktop $(DESKTOP_SPEC) 2>/dev/null || \
+		echo "warning: the RPM is built from HEAD; uncommitted changes are not included" >&2
+	mkdir -p '$(RPM_TOPDIR)/SOURCES'
+	git archive --format=tar.gz --prefix='apex-desktop-$(DESKTOP_VERSION)/' \
+		-o '$(RPM_TOPDIR)/SOURCES/apex-desktop-$(DESKTOP_VERSION).tar.gz' HEAD \
+		-- desktop ':(exclude)desktop/shell' LICENSE
+	$(RPMBUILD) -ba $(DESKTOP_SPEC) \
 		--define '_topdir $(RPM_TOPDIR)' \
 		--define 'commitdate $(COMMITDATE)' \
 		--define 'shortcommit $(SHORTCOMMIT)' \

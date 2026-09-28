@@ -127,12 +127,13 @@ jobs:
         # With shellcheck on PATH, actionlint also checks every run: block.
         run: actionlint -config-file .github/scripts/actionlint.yaml
 
-      - name: bash -n and shellcheck of the CI and builder VM scripts
-        # tools/builder-vm/desktop-disk.sh sources qualify.sh.
+      - name: bash -n and shellcheck of the CI, packaging and builder VM scripts
+        # tools/builder-vm/desktop-disk.sh sources qualify.sh; packaging/rebuild.sh
+        # sources lib.sh.
         run: |
-          for f in .github/scripts/*.sh packaging/libfprint/build.sh tools/builder-vm/*.sh; do bash -n "$f"; done
+          for f in .github/scripts/*.sh packaging/*.sh packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh; do bash -n "$f"; done
           shellcheck -x -P .github/scripts --severity=style .github/scripts/*.sh
-          shellcheck -x --severity=style packaging/libfprint/build.sh tools/builder-vm/*.sh
+          shellcheck -x --severity=style packaging/*.sh packaging/*/build.sh packaging/pkgs/*/check.sh tools/builder-vm/*.sh
 
       - name: sh -n, bash -n and shellcheck of image/checks and image/tests
         # The Containerfile's final stage runs image/checks with sh. -P SCRIPTDIR: each
