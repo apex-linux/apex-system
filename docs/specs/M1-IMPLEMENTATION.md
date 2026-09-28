@@ -62,7 +62,9 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 ```
 
 - `packages` is sorted by `(name, arch)` in byte order and is unique on that key.
-- `degraded` is sorted and holds any of `audio`, `fingerprint` (later `nvidia`).
+- `degraded` is sorted and holds any of `audio`, `fingerprint` and `nvidia`. `nvidia`
+  (S1c) marks an image the owner published without the NVIDIA set, because the kmod
+  could not follow the kernel: the dGPU stays unbound in D3cold (ADR 0015 §4).
 - Consumers must ignore unknown fields. `schema` increases only on breaking change.
 - The image build copies `degraded` into the `io.github.sekirokenjii.apex.degraded`
   label (comma-separated) at rechunk time.
