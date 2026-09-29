@@ -394,9 +394,10 @@ check "the recipe covers rpms.sh" ".github/scripts/rpms.sh" \
 check "the key covers the Makefile, Cargo.toml and the packaged docs" \
     "crates packaging/apex.spec Makefile Cargo.lock Cargo.toml LICENSE README.md" \
     "$(bash -c '. "$1"; printf "%s\n" "${KEY_PATHS[*]}"' _ "$APEX_ROOT/.github/scripts/rpms.sh")"
-atree=$(bash -c '. "$1"; git_() { [[ $1 != ls-tree ]] || printf "100644 blob 1111\tcrates/apexctl/src/main.rs\n100644 blob 2222\tcrates/apex-lane/src/main.rs\n100644 blob 3333\tcrates/apex-lanes/x.rs\n"; }; apex_tree' _ "$APEX_ROOT/.github/scripts/rpms.sh" 2>/dev/null)
-check "the apex key leaves crates/apex-lane/, the builder VM's tool, out" "100644 blob 1111	crates/apexctl/src/main.rs
-100644 blob 3333	crates/apex-lanes/x.rs" "$atree"
+atree=$(bash -c '. "$1"; git_() { [[ $1 != ls-tree ]] || printf "100644 blob 1111\tcrates/apexctl/src/main.rs\n100644 blob 2222\tcrates/apex-lane/src/main.rs\n100644 blob 3333\tcrates/apex-lanes/x.rs\n100644 blob 4444\tcrates/apex-lint/src/main.rs\n100644 blob 5555\tcrates/apex-lint/Cargo.toml\n"; }; apex_tree' _ "$APEX_ROOT/.github/scripts/rpms.sh" 2>/dev/null)
+check "the apex key leaves the dev tools apex-lane and apex-lint out, but not their Cargo.toml" "100644 blob 1111	crates/apexctl/src/main.rs
+100644 blob 3333	crates/apex-lanes/x.rs
+100644 blob 5555	crates/apex-lint/Cargo.toml" "$atree"
 
 # --- the installed layout: M1-IMPLEMENTATION.md, make install and apex.spec agree ---------
 if command -v make >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then

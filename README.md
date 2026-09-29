@@ -27,6 +27,8 @@ ELAN fingerprint reader, Samsung 2880×1800 OLED at 90 Hz).
 - [Threat model](docs/THREAT-MODEL.md).
 - Hardware procedures and acceptance tests: [docs/hardware/](docs/hardware/).
 - [Install](docs/INSTALL.md) and [recovery](docs/RECOVERY.md) runbooks.
+- [Contributing](docs/CONTRIBUTING.md): code explains itself, and the comment guard
+  that holds every change to it.
 
 ## Layout
 
@@ -46,6 +48,9 @@ version Fedora 45 ships.
 ```bash
 just check
 ```
+
+`just check` runs fmt, clippy, the tests and the comment guard
+([CONTRIBUTING](docs/CONTRIBUTING.md)) as ci.yml does.
 
 ```bash
 just render

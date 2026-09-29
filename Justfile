@@ -11,11 +11,17 @@ generated := "hardware/m7400qc/generated"
 default:
     @just --list
 
-# fmt --check, clippy with warnings denied, and the tests, as ci.yml runs them.
+# fmt --check, clippy with warnings denied, the tests and the comment guard, as ci.yml runs them.
 check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo test --workspace --locked
+    cargo run -p apex-lint --locked -- comments
+
+# The comment guard (docs/CONTRIBUTING.md) on every tracked file, or on the given files and directories.
+[positional-arguments]
+lint-comments *paths:
+    cargo run -q -p apex-lint --locked -- comments "$@"
 
 # Format the workspace.
 fmt:

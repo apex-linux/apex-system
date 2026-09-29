@@ -135,6 +135,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "apex-lint"
+version = "0.1.0"
+
+[[package]]
 name = "apex-update"
 version = "0.1.0"
 dependencies = [

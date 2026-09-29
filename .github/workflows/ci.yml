@@ -72,6 +72,12 @@ jobs:
           test -x /usr/bin/dbus-daemon || { echo "::error::/usr/bin/dbus-daemon is missing: the D-Bus tests would not run"; exit 1; }
           cargo test --workspace --locked
 
+      - name: Comment guard (docs/CONTRIBUTING.md)
+        # The guard lists files with git, which refuses the runner-owned checkout to root.
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          cargo run -p apex-lint --locked -- comments
+
       - name: cargo deny
         run: cargo deny --locked check
 

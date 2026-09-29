@@ -83,11 +83,11 @@ recipe() {
     git_ ls-tree HEAD -- "${RECIPE_PATHS[@]}"
 }
 
-# The RPM never carries apex-lane, but Cargo unifies features across the workspace, so its
-# Cargo.toml stays in.
+# The RPM never carries the dev tools apex-lane and apex-lint, but Cargo unifies features
+# across the workspace, so their Cargo.toml files stay in.
 apex_tree() {
     git_ ls-tree -r HEAD -- "${KEY_PATHS[@]}" |
-        awk -F '\t' '$2 !~ /^crates\/apex-lane\// || $2 == "crates/apex-lane/Cargo.toml"'
+        awk -F '\t' '$2 !~ /^crates\/apex-lane\// && $2 !~ /^crates\/apex-lint\// || $2 ~ /^crates\/apex-(lane|lint)\/Cargo\.toml$/'
 }
 
 compute_key() {
