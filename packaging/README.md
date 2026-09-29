@@ -18,7 +18,8 @@ and [4](../docs/ARCHITECTURE.md#4-build-and-publish)).
 
 `just vm-image` (`tools/builder-vm/build-image.sh`) runs them in order: `rpms.sh build`,
 libfprint, `apex-lane build all`, then the image from `rpms.lock.next`
-([The image](#the-image)).
+([The image](#the-image)). The Apex RPM key signs every RPM they build
+([Signing](#signing)).
 
 ## The apex RPM
 
@@ -90,7 +91,8 @@ make rpm-desktop
 
 `make rpm` refuses a checkout without commits, refuses a spec `Version` that differs
 from the workspace version in `Cargo.toml`, and warns that uncommitted changes are not
-in the package (it runs `git archive HEAD`).
+in the package (it runs `git archive HEAD`). Outside the container, `build-image.sh`
+signs both RPMs with the Apex RPM key ([Signing](#signing)).
 
 The content key (`rpms.sh key`) covers everything that changes the RPM:
 `git ls-tree -r HEAD` of `crates/` (without `crates/apex-lane/`, the lane's dev tool),
@@ -183,7 +185,9 @@ commits a dirty host tree as a throwaway snapshot, as `just vm-image` does.
 11. **Lane checks**: every built RPM carries the computed release; each `install=` name
     was built; the main package requires `<pin>(x86-64) = <EVR>`; then the package's own
     `check.sh`.
-12. **Stores** the built RPMs (no debuginfo), the mirror RPMs, the Apex SRPM,
+12. **Signs** the built RPMs and the Apex SRPM with the Apex RPM key, in the VM
+    ([Signing](#signing)).
+13. **Stores** the built RPMs (no debuginfo), the mirror RPMs, the Apex SRPM,
     `manifest.txt`, `key.txt`, `key-input.txt` (the text the key hashes), `spec.diff`
     and the logs under `~/apex-store/pkgs/PKG/KEY/`, and writes the family into
     `rpms.lock.next`.
@@ -349,40 +353,102 @@ stock on its own (ADR 0014).
   there as `rpms/rpms.lock`. `--image-only` reuses the current `rpms.lock.next`.
 - The Containerfile's repos stage requires `rpms/rpms.lock`, and `[apex]` must offer
   exactly the locked NEVRAs of the locked names (no missing build, no second build of a
-  locked name). `includepkgs` of `[apex]` is `image/packages/apex.txt` plus the locked
-  names; `excludepkgs` of `[fedora]` and `[updates]` is the locked names plus libfprint
-  when rpms/ carries the Apex libfprint, in one line each; `[apex-gnome51]` gets the
-  same line after its own check. A stock or degraded family adds nothing, so Fedora's
-  build is installed.
+  locked name). `[apex]` has `gpgcheck=1` with the Apex RPM key and Fedora's
+  ([Signing](#signing)). `includepkgs` of `[apex]` is `image/packages/apex.txt` plus the
+  locked names; `excludepkgs` of `[fedora]` and `[updates]` is the locked names plus
+  libfprint when rpms/ carries the Apex libfprint, in one line each; `[apex-gnome51]`
+  gets the same line after its own check. A stock or degraded family adds nothing, so
+  Fedora's build is installed.
 - The final stage installs the lock as `/usr/share/apex/rpms.lock`, records held
   families in the manifest's `held` field and a stock or degraded gnome-shell family as
   `degraded=shell` (docs/specs/M1-IMPLEMENTATION.md section 3); `image.sh` copies both
   into the `…apex.held` and `…apex.degraded` labels. The content key adds the lock's
   sha256, the apex-desktop key and the `desktop/` tree.
 - G1's `image/checks/desktop.sh` checks the installed result against the lock: the
-  locked NEVRAs, `.apexN`, the mutter pin and its Fedora signature, the theme markers
-  (`grep -a` on `gnome-shell-theme.gresource`), `rpm -V`, the Apex schema and the crash
-  guard (ARCHITECTURE 11).
+  locked NEVRAs, `.apexN` and the Apex RPM signature, the mutter pin and its Fedora
+  signature, the theme markers (`grep -a` on `gnome-shell-theme.gresource`), `rpm -V`,
+  the Apex schema and the crash guard (ARCHITECTURE 11).
 - Nothing promotes the lock by itself: after the image passed its gates (G2, and G4 for
   a new gnome-shell, mutter or gdm NVR), `just pkg-promote`.
 
 ### Signing
 
-Not yet: there is no Apex RPM key, and `[apex]` keeps `gpgcheck=0`. The plug-in point is
-`sign_built` in `apex-lane` (`crates/apex-lane/src/vm/build.rs`), in the VM after the
-container exits and before the store, so the private key never meets upstream build
-scripts. When the key exists
-(ARCHITECTURE 5.1; the owner keeps its offline backup):
+The Apex RPM key (ARCHITECTURE 5.1) signs every RPM Apex builds: the lane's builds, and
+the apex, apex-desktop and libfprint RPMs of `just vm-image`. It signs in the builder VM
+after the build container exited, so the private key never meets a build script.
 
-- `~/.config/apex/rpm-signing.env` (`APEX_RPM_SIGNING_ENV`) names it (`APEX_RPM_KEY_FPR`,
-  and the backend, gpg or Sequoia `sq`); today the lane refuses to run when that file
-  exists, before any container starts, so a key is never half wired.
-- `rpmsign --addsign --define "_openpgp_sign_id $APEX_RPM_KEY_FPR"` signs the `built`
-  RPMs and the Apex SRPM only; `mirror` RPMs keep Fedora's signature. The manifest then
-  records the fingerprint, and the lock's sha256 is the signed file's. The signature is
-  not part of the content key.
-- `packaging/keys/RPM-GPG-KEY-apex` holds the public key; `[apex]` becomes `gpgcheck=1`
-  with that key and Fedora's, because the mirrored mutter is Fedora-signed.
+| | |
+|---|---|
+| Key | OpenPGP v4, Ed25519, signing only, no expiry, no passphrase (builds sign unattended); fingerprint `553A 9389 03DF FEEA 647F 7CC4 ABEF 111D 1FCF 882B` |
+| Public half | `image/system_files/usr/share/apex/keys/RPM-GPG-KEY-apex`, shipped as `/usr/share/apex/keys/RPM-GPG-KEY-apex`; pinned in `image/checks/lib/common.sh` |
+| Private half | the builder VM only: the GnuPG home `~/.local/share/apex/rpm-gnupg` |
+| Offline backup | one armoured export of the secret key (`gpg --armor --export-secret-keys`), kept by the owner on offline media |
+| Configuration | `~/.config/apex/rpm-signing.env` in the VM (`APEX_RPM_SIGNING_ENV`) |
+
+`rpm-signing.env` is read, never sourced: `#` comments and exactly these two keys. An
+unknown or repeated key, or a malformed value, exits 2.
+
+```
+APEX_RPM_KEY_FPR=553A938903DFFEEA647F7CC4ABEF111D1FCF882B
+APEX_RPM_GNUPGHOME=/home/builder/.local/share/apex/rpm-gnupg
+```
+
+Before any container starts, `apex-lane build` requires the file (exit 1 without it: the
+lane never stores an unsigned build), a committed public key that holds exactly that
+key, and its secret half in the GnuPG home. After the container, before the store:
+
+- `rpmsign --addsign --define "_gpg_path $APEX_RPM_GNUPGHOME" --define
+  "_openpgp_sign_id $APEX_RPM_KEY_FPR"` signs the `built` RPMs and the Apex SRPM.
+  `mirror` and `dev` RPMs keep Fedora's signature (rpm 6.1's rpmsign refuses a package
+  that already carries one).
+- `rpmkeys -Kv` must verify each against a keyring that holds only the committed public
+  key.
+- The manifest takes the signed files' sha256 and a `# sig=<fingerprint>` line (builds
+  from before the key say `# sig=none`); the lock takes the signed sha256. The signature
+  is not part of the content key, so a stored build keeps the key it was signed with. A
+  stored build the lane takes again (unchanged) must record the key `rpm-signing.env`
+  names, or the lane stops before the lock (RECOVERY §6.8).
+
+`apex-lane sign RPM...` does the same to RPMs the lane does not build, and updates a
+`manifest.txt` beside them that lists them. `build-image.sh` runs it on `_build/rpms/`
+after `rpms.sh build` and on `_build/libfprint/` after `libfprint.sh build`, then
+rewrites their `SHA256SUMS`.
+
+The Containerfile's repos stage copies the public key and Fedora's into the local
+repository, where rpm-ostree's libdnf looks for a local repository's `gpgkey=` files,
+and gives `[apex]` `gpgcheck=1` with both (the mirrored mutter is Fedora's), so the
+compose refuses an unsigned or foreign RPM. G1 checks the result: `signing.sh`, that
+the shipped key is the pinned one and that every Apex package carries its signature
+(`apex.txt`'s names and every `.apexN` release; only a stock libfprint carries
+Fedora's instead), and `desktop.sh`, the locked gnome-shell. By hand, in the VM:
+
+```bash
+rpm -qpi FILE.rpm | sed -n '/^Signature/,/^Source/p'   # EdDSA/SHA512, ..., Key ID abef111d1fcf882b
+```
+
+**A new builder VM.** `builder-vm.sh destroy` deletes the key with the disk. From the
+host, import the offline backup (`BACKUP.asc` below), then name it:
+
+```bash
+tools/builder-vm/builder-vm.sh ssh 'umask 077; install -d -m 0700 ~/.local/share/apex/rpm-gnupg &&
+    GNUPGHOME=~/.local/share/apex/rpm-gnupg gpg --batch --import' <BACKUP.asc
+tools/builder-vm/builder-vm.sh ssh 'umask 077; mkdir -p ~/.config/apex && printf "%s\n" \
+    APEX_RPM_KEY_FPR=553A938903DFFEEA647F7CC4ABEF111D1FCF882B \
+    "APEX_RPM_GNUPGHOME=$HOME/.local/share/apex/rpm-gnupg" >~/.config/apex/rpm-signing.env'
+```
+
+**A new key** (a rotation, or an exposed key: RECOVERY §6.8), in the VM, in a new GnuPG
+home that `rpm-signing.env` then names:
+
+```bash
+install -d -m 0700 ~/.local/share/apex/rpm-gnupg-new
+GNUPGHOME=~/.local/share/apex/rpm-gnupg-new gpg --batch --pinentry-mode loopback --passphrase '' \
+    --quick-gen-key 'Apex RPM signing key (github.com/SekiroKenjii/apex-fedora)' ed25519 sign never
+```
+
+Its public half (`gpg --armor --export-options export-minimal --export FPR`) replaces
+`RPM-GPG-KEY-apex`, and its fingerprint every copy that RECOVERY §6.8 lists, in one
+reviewed change.
 
 ## apex-desktop
 
@@ -416,9 +482,10 @@ See [libfprint/README.md](libfprint/README.md). In short: `build.sh key` gives t
 key (Fedora's libfprint NVR plus a hash of the enabled patches); `build.sh` downloads
 the same SRPM the compose would install, verifies its signature against the
 pinned Fedora 45 key, applies `series`, builds `libfprint-…-1.fc45.apex1`, and runs the
-elan replay tests. Exit 3 means degraded: the image ships Fedora's stock libfprint with
-`io.github.sekirokenjii.apex.degraded=fingerprint`, so OS updates never wait for this
-package.
+elan replay tests. `build-image.sh` then signs its RPMs with the Apex RPM key, and its
+`manifest.txt` records it ([Signing](#signing)). Exit 3 means degraded: the image ships
+Fedora's stock libfprint with `io.github.sekirokenjii.apex.degraded=fingerprint`, so OS
+updates never wait for this package.
 
 ## Kernel and NVIDIA (S1c)
 

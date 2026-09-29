@@ -141,7 +141,7 @@ jobs:
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
           git-core python3 bubblewrap dash bash coreutils diffutils findutils gawk grep sed
-          systemd systemd-udev openssl glib2
+          systemd systemd-udev openssl glib2 gnupg2
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
