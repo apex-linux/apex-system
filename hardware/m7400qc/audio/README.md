@@ -18,9 +18,9 @@ Quick path:
 
 ```sh
 sudo ./coef-dump.sh A        # cold boot, no fix
-sudo ./coef-dump.sh B        # warm reboot from Windows, no fix
+sudo ./coef-dump.sh B        # the failing state of AUDIO.md §2, no fix
 # paste the fragments into ../profile.toml, then: just render
-sudo ./try-fix.sh install    # then phases C, D and E, see AUDIO.md §3
+sudo ./try-fix.sh install    # then phases C, D and E, see AUDIO.md §5
 sudo ./try-fix.sh revert     # when done testing
 ```
 
