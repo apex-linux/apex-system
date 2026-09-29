@@ -34,12 +34,6 @@ die() {
 group() { if in_github_actions; then printf '::group::%s\n' "$*" >&2; else printf '== %s\n' "$*" >&2; fi; }
 endgroup() { if in_github_actions; then printf '::endgroup::\n' >&2; fi; }
 
-# A script's usage text is its header comment below the shebang and SPDX lines.
-usage() {
-    awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0" >&2
-    exit 2
-}
-
 require() {
     local missing=() c
     for c in "$@"; do

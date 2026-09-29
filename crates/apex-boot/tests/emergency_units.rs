@@ -1,6 +1,5 @@
-//! The watchdog's systemd side, checked with this host's `systemd-analyze` and
-//! `systemd-run`. The `systemd-run` test is skipped as root, because root's `systemd-run`
-//! ignores `DBUS_SYSTEM_BUS_ADDRESS` and talks to the real systemd.
+//! The watchdog's systemd side, against this host's `systemd-analyze` and `systemd-run`; as root
+//! the latter ignores `DBUS_SYSTEM_BUS_ADDRESS` and talks to the real systemd, so its test skips.
 
 #![allow(
     clippy::unwrap_used,
@@ -214,7 +213,6 @@ fn the_transient_units_are_valid_unit_settings() {
     assert!(output.contains("ExecConditionTypo"), "{output}");
 }
 
-/// Killed on drop.
 struct PrivateBus {
     daemon: Child,
     address: String,

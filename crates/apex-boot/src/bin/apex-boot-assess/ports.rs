@@ -1,6 +1,3 @@
-//! The I/O boundaries of the assessment. Every method is synchronous: the glue and the
-//! checks run on plain threads, and the production implementations bridge to tokio.
-
 use std::time::{Duration, Instant};
 
 use apex_boot::{Digest, HealthFailure, Verdict};
@@ -11,14 +8,12 @@ pub(crate) struct SessionInfo {
     pub(crate) id: String,
     pub(crate) class: String,
     pub(crate) state: String,
-    /// Empty for sessions without one (SSH, cron).
     pub(crate) seat: String,
     pub(crate) age: Option<Duration>,
 }
 
 pub(crate) trait Sessions: Send + Sync {
-    /// A session whose properties cannot be read is still listed, with an empty `class`
-    /// and `state`.
+    /// A session whose properties cannot be read is still listed, with empty `class` and `state`.
     fn list(&self) -> Result<Vec<SessionInfo>, String>;
 }
 

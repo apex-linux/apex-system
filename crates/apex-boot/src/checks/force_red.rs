@@ -1,6 +1,4 @@
-//! The qualification hook: a boot whose digest `/var/lib/apex/force-red` names fails the
-//! required check [`names::FORCED_RED`], so the KVM qualification can watch a counted
-//! rollback. The file names one digest, so it cannot outlive the deployment it targets.
+//! The file names one digest, so the qualification hook cannot outlive the deployment it targets.
 
 use std::fs;
 use std::io::Read as _;

@@ -1,15 +1,11 @@
-//! The grubenv variables Apex owns, and the operations that arm and disarm the boot counter.
-//!
-//! The names are Apex's own: Fedora's `grub2-set-bootflag` sets `boot_success=1` after a
-//! login and greenboot uses `boot_counter`, so sharing either would let a login confirm a
-//! failed armed boot.
+//! Apex-owned names: Fedora sets `boot_success=1` after a login, which must not confirm an armed
+//! boot, and greenboot owns `boot_counter`.
 
 use std::fmt;
 
 use crate::digest::{Digest, DigestError};
 use crate::grubenv::{EditError, GrubEnv, NotUtf8};
 
-/// The value `Apply` writes to `apex_counter`.
 pub const BOOT_ATTEMPTS: i32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -55,8 +51,7 @@ impl BootVar {
             })
     }
 
-    /// The production writer refuses every other value, so no other text ever reaches the
-    /// `grub2-editenv` command line.
+    /// The writer's gate: no other text ever reaches the `grub2-editenv` command line.
     pub fn check_value(self, value: &str) -> Result<(), ValueError> {
         let (valid, expected) = match self {
             BootVar::ApexTarget => (Digest::parse(value).is_ok(), "an image digest"),
@@ -114,11 +109,8 @@ impl fmt::Display for EnvOp {
     }
 }
 
-/// All `Set`s, so [`crate::writer::apply_ops`] writes them in one `grub2-editenv` call and
-/// GRUB never sees a half-armed block.
-///
-/// The caller must first pass [`check_arming`], and must wait until this boot's assessment
-/// has finished, which could otherwise clear the fresh arming.
+/// All `Set`s, so one `grub2-editenv` call writes them and GRUB never sees a half-armed block.
+/// Callers first pass [`check_arming`] and wait for this boot's assessment, which would clear it.
 pub fn arm_ops(target: &Digest) -> Vec<EnvOp> {
     vec![
         EnvOp::Set(BootVar::ApexTarget, target.as_str().to_owned()),
@@ -143,9 +135,8 @@ pub enum ArmingRefused {
     BootedFailed { booted: Digest },
 }
 
-/// Finalizing the stage keeps only the new deployment and the booted one, so arming on top
-/// of an unconfirmed or failed booted deployment would leave it as the only fallback. The
-/// caller also checks that the booted deployment comes from an image.
+/// Finalizing keeps only the new and the booted deployment, so an unconfirmed or failed booted one
+/// must not become the only fallback. The caller checks that the booted one comes from an image.
 pub fn check_arming(
     vars: &BootVars,
     booted: &Digest,
@@ -205,7 +196,6 @@ pub enum BootVarsError {
     InvalidCounter { value: String },
 }
 
-/// What GRUB did with `apex_counter`, as `data/08_apex-bootcount.cfg` counts it down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CounterState {
     Unset,

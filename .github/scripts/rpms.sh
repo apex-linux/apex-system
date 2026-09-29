@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Content keys and build of the apex and apex-desktop RPMs, inside
-# registry.fedoraproject.org/fedora:45 as root.
-#
-#   rpms.sh key                  print the content key of the apex RPM for git HEAD
-#   rpms.sh build OUTDIR [KEY]   install build deps, `make rpm` and `make rpm-desktop`,
-#                                copy the binary RPMs to OUTDIR with their keys (KEY,
-#                                KEY_DESKTOP); with KEY, fail if the apex key changed
-#                                meanwhile
-#   rpms.sh toolchain            install Fedora's rust, cargo, clippy, rustfmt and gcc
-#                                from the image compose's repositories
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+usage() {
+    cat >&2 <<'EOF'
+
+Content keys and build of the apex and apex-desktop RPMs, inside
+registry.fedoraproject.org/fedora:45 as root.
+
+  rpms.sh key                  print the content key of the apex RPM for git HEAD
+  rpms.sh build OUTDIR [KEY]   install build deps, `make rpm` and `make rpm-desktop`,
+                               copy the binary RPMs to OUTDIR with their keys (KEY,
+                               KEY_DESKTOP); with KEY, fail if the apex key changed
+                               meanwhile
+  rpms.sh toolchain            install Fedora's rust, cargo, clippy, rustfmt and gcc
+                               from the image compose's repositories
+EOF
+    exit 2
+}
 
 # Bump a schema when the inputs or the format of its key change.
 readonly KEY_SCHEMA=3
@@ -90,8 +96,7 @@ compute_key() {
         git_ cat-file -e "HEAD:$p" 2>/dev/null ||
             die "$p is not committed at HEAD; the RPM key covers committed files only"
     done
-    # One assignment each, so that a failure inside $(...) stops the script instead of
-    # silently shortening the key's input.
+    # One assignment each, so a failing $(...) stops the script instead of shortening the key's input.
     tree=$(apex_tree)
     pin=$(auditable_pin)
     rec=$(recipe)

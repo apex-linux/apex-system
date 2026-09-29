@@ -1,11 +1,3 @@
-//! Writing grubenv. `bootc install` mounts `/boot` read-only, so [`Editenv::system`] runs
-//! `grub2-editenv` in a private mount namespace in which `/boot` is remounted read-write;
-//! the host never sees a writable `/boot`.
-//!
-//! That namespace comes from `unshare(1)` rather than `unshare(CLONE_NEWNS)` here: in a
-//! multi-threaded process only the calling pool thread would move, and doing it between
-//! `fork` and `exec` needs unsafe code.
-
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,6 +11,8 @@ pub const GRUBENV_PATH: &str = "/boot/grub2/grubenv";
 
 pub const GRUB2_EDITENV: &str = "/usr/bin/grub2-editenv";
 
+/// Not `unshare(CLONE_NEWNS)` in-process: it would move only the calling pool thread, and doing
+/// it between `fork` and `exec` needs unsafe code.
 pub const UNSHARE: &str = "/usr/bin/unshare";
 
 pub const SH: &str = "/usr/bin/sh";
@@ -27,9 +21,8 @@ pub const MOUNT: &str = "/usr/bin/mount";
 
 pub const BOOT_MOUNT: &str = "/boot";
 
-/// A constant, so the grubenv path and the arguments reach it only as positional
-/// parameters, never as script text. `-n` skips `/run/mount/utab`, which is read-only under
-/// `ProtectSystem=strict`.
+/// Constant, so the grubenv path and the arguments reach it only as positional parameters.
+/// `-n` skips `/run/mount/utab`, which is read-only under `ProtectSystem=strict`.
 pub const REMOUNT_SCRIPT: &str = concat!(
     "/usr/bin/mount -n -o remount,rw /boot",
     " && exec /usr/bin/grub2-editenv \"$0\" \"$@\""

@@ -1,6 +1,3 @@
-//! Health checks: the [`Check`] trait, a runner with per-check timeouts, and the checks
-//! that need nothing but local files and `systemctl`.
-
 pub mod force_red;
 pub mod grub_cfg;
 pub mod units;
@@ -167,10 +164,8 @@ where
     }
 }
 
-/// Runs every check concurrently and returns one result per check, in the order given.
-///
-/// std threads cannot be cancelled, so a check that times out is abandoned and its late
-/// result discarded; checks that start subprocesses must bound them themselves.
+/// std threads cannot be cancelled: a check that times out is abandoned and its late result
+/// discarded, so checks that start subprocesses must bound them themselves.
 pub fn run_checks(checks: Vec<Box<dyn Check>>) -> Vec<CheckResult> {
     let start = Instant::now();
     let (sender, receiver) = mpsc::channel::<(usize, Result<(), String>)>();

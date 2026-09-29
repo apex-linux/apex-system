@@ -13,13 +13,11 @@ repository = "https://github.com/SekiroKenjii/apex-fedora"
 publish = false
 
 [workspace.dependencies]
-# Internal crates
 apex-boot = { path = "crates/apex-boot" }
 apex-bootc = { path = "crates/apex-bootc" }
 apex-dbus = { path = "crates/apex-dbus" }
 apex-update = { path = "crates/apex-update" }
 
-# Core
 anyhow = "1.0.104"
 camino = "1.2.6"
 clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
@@ -30,16 +28,16 @@ toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 
-# System services (tokio current_thread + zbus on tokio: no hidden executor threads)
 libc = "0.2"
 nix = { version = "0.31.3", features = ["ioctl", "fs"] }
 sd-notify = "0.5.0"
 tokio = { version = "1.53.1", features = ["rt", "macros", "process", "signal", "io-util", "time", "sync", "fs"] }
 tracing-journald = "0.3.2"
+# On tokio instead of its own executor: no hidden threads beside the current_thread runtime.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 zbus_polkit = "5.1.0"
 
-# GNOME (release target is GNOME 51: gtk v4_24, adw v1_10, glib v2_90 via crate features)
+# GNOME 51 is the release target: gtk v4_24, adw v1_10 and glib v2_90 through crate features.
 adw = { package = "libadwaita", version = "0.9.2" }
 async-channel = "2.5.0"
 gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
@@ -48,7 +46,6 @@ glib = "0.22.10"
 glib-build-tools = "0.22.8"
 gtk = { package = "gtk4", version = "0.11.5" }
 
-# Testing
 insta = { version = "1.48.0", features = ["json"] }
 proptest = "1.11.0"
 tempfile = "3.27.0"
@@ -71,7 +68,7 @@ cast_possible_truncation = "allow"
 cast_precision_loss = "allow"
 cast_sign_loss = "allow"
 cast_possible_wrap = "allow"
-# Correctness-adjacent lints we want as hard errors in CI (-D warnings covers the rest).
+
 unwrap_used = "warn"
 expect_used = "warn"
 dbg_macro = "warn"

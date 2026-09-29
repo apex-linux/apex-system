@@ -34,29 +34,27 @@ impl Scripted {
         }
     }
 
-    /// Replaces a scripted error with an exit.
     #[must_use]
     pub fn stdout(mut self, stdout: impl Into<Vec<u8>>) -> Self {
-        self.exit_output().stdout = stdout.into();
+        self.output_replacing_error().stdout = stdout.into();
         self
     }
 
-    /// Replaces a scripted error with an exit.
     #[must_use]
     pub fn stderr(mut self, stderr: impl Into<Vec<u8>>) -> Self {
-        self.exit_output().stderr = stderr.into();
+        self.output_replacing_error().stderr = stderr.into();
         self
     }
 
     #[must_use]
     pub fn exit_code(mut self, code: i32) -> Self {
-        self.exit_output().exit = ExitState::Code(code);
+        self.output_replacing_error().exit = ExitState::Code(code);
         self
     }
 
     #[must_use]
     pub fn killed_by(mut self, signal: i32) -> Self {
-        self.exit_output().exit = ExitState::Signal(signal);
+        self.output_replacing_error().exit = ExitState::Signal(signal);
         self
     }
 
@@ -86,7 +84,7 @@ impl Scripted {
         ))
     }
 
-    fn exit_output(&mut self) -> &mut CommandOutput {
+    fn output_replacing_error(&mut self) -> &mut CommandOutput {
         self.error = None;
         &mut self.output
     }
@@ -101,21 +99,6 @@ struct FakeState {
 
 /// Replays [`Scripted`] commands in order. A run that does not match the head of the queue
 /// consumes nothing, fails, and is reported by [`FakeRunner::assert_finished`].
-///
-/// ```
-/// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-/// use apex_bootc::{Bootc, BootcCommand, CancelToken, FakeRunner, Scripted};
-///
-/// let fake = FakeRunner::new();
-/// fake.push(Scripted::new(BootcCommand::UpgradeCheck).stdout("No changes in: x\n"));
-/// let bootc = Bootc::new(&fake);
-/// assert_eq!(
-///     bootc.check(&CancelToken::new()).await.unwrap(),
-///     apex_bootc::CheckOutcome::UpToDate
-/// );
-/// fake.assert_finished();
-/// # });
-/// ```
 #[derive(Debug, Default)]
 pub struct FakeRunner {
     state: Mutex<FakeState>,

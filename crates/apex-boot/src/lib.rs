@@ -1,6 +1,3 @@
-//! Apex boot assessment: after every boot, decide whether the running deployment is
-//! healthy, and drive the GRUB boot counter that rolls a broken update back.
-
 pub mod checks;
 pub mod decide;
 pub mod digest;
@@ -40,22 +37,19 @@ pub const SESSION_WAIT: Duration = Duration::from_secs(120);
 /// Includes the D-Bus activation of `apex-updated`.
 pub const REPORT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// For `ListSessions` plus every session's properties.
 pub const LOGIND_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const DAEMON_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub const REBOOT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A helper in uninterruptible sleep (a stalled `/boot`) does not die on `SIGKILL`, so a
-/// killed helper is abandoned after this instead of stalling the assessment.
+/// A helper in uninterruptible sleep (a stalled `/boot`) survives `SIGKILL`: abandon it after this.
 pub const KILL_REAP_GRACE: Duration = Duration::from_secs(5);
 
 pub const RECORD_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// apex-bootc's own status timeout and kill grace (30 + 5 s) come first, but it may then
-/// wait for the killed process to be reaped, so the binary enforces this bound itself. The
-/// library must not depend on apex-bootc; the binary's tests keep the two in step.
+/// apex-bootc's 30 s status timeout plus 5 s kill grace. apex-bootc may then still wait for the
+/// reap, so the binary enforces this bound, and its tests keep it in step with apex-bootc.
 pub const BOOTC_STATUS_BOUND: Duration = Duration::from_secs(35);
 
 const fn max_secs(a: Duration, b: Duration) -> u64 {
@@ -94,9 +88,8 @@ const SLOWEST_DECISION_STEPS_SECS: u64 = {
     max
 };
 
-/// Every bounded wait of the binary must be counted here. The unit's `TimeoutStartSec=`
-/// must cover it, or systemd could kill the assessment between its grubenv write and its
-/// report.
+/// Counts every bounded wait of the binary. The unit's `TimeoutStartSec=` must cover it, or
+/// systemd could kill the assessment between its grubenv write and its report.
 pub const ASSESS_TIME_BUDGET: Duration = Duration::from_secs(
     SESSION_WAIT.as_secs()
         + LOGIND_TIMEOUT.as_secs()

@@ -1,6 +1,5 @@
-//! Everything is in one test function: every fake script is written before anything runs,
-//! so no other test thread can fork while a script is open for writing, or its exec fails
-//! with ETXTBSY.
+//! One test function writes every fake script before anything runs: a test thread forking while
+//! a script is open for writing would make its exec fail with ETXTBSY.
 
 #![allow(
     clippy::unwrap_used,
@@ -95,7 +94,6 @@ fn watch(host: &Host, dry_run: bool) -> (Outcome, String, Duration) {
 fn the_watchdog_against_fake_programs() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
-    // Every script is written before the first one runs.
     let fakes = Fakes {
         run_ok: write_fake(d, "systemd-run-ok", "", Some(0)),
         run_taken: write_fake(

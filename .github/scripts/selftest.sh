@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Tests of .github/scripts and of the tree facts they rely on, against fakes: no network,
-# no root, no KVM.
+# Against fakes only: no network, no root, no KVM.
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -127,8 +125,7 @@ if [[ -f $committed ]]; then
 fi
 
 # --- trust mapping: policy.json and image/checks/keys.sh agree exactly ---------------------
-# Changing trust means changing this, keys.sh's TRUST_MAP and policy.json in one reviewed
-# change.
+# Trust changes only in one reviewed change of this, keys.sh's TRUST_MAP and policy.json.
 EXPECTED_TRUST_MAP=$'ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release-backup.pub
 ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release.pub
 ghcr.io/sekirokenjii/apex-testing\t/usr/share/apex/keys/ci.pub'
@@ -315,14 +312,14 @@ chmod +x "$Q/bin/qemu-system-x86_64" "$Q/bin/ssh"
 : >"$Q/vars.fd"
 : >"$Q/out/red.raw"
 
-# run_armed_attempts PLAN... TIMEOUT: in a fresh bash, since this shell already holds
-# lib.sh's readonly names.
+# qualify.sh runs in a fresh bash: this shell already holds lib.sh's readonly names.
 run_armed_attempts() {
+    local attempt_timeout=${*: -1}
     printf '%s\n' "$@" | head -n -1 >"$Q/plan"
     : >"$Q/qemu.log"
     rm -f "$Q/ssh.log" "$Q/out/results.md" "$Q/out/logs/"*
     local rc=0
-    PATH="$Q/bin:$PATH" QUALIFY_OUT="$Q/out" QUALIFY_POLL=0.1 QUALIFY_ATTEMPT_TIMEOUT="${*: -1}" \
+    PATH="$Q/bin:$PATH" QUALIFY_OUT="$Q/out" QUALIFY_POLL=0.1 QUALIFY_ATTEMPT_TIMEOUT="$attempt_timeout" \
         OVMF_CODE="$Q/code.fd" OVMF_VARS="$Q/vars.fd" GITHUB_ACTIONS='' \
         FAKE_QEMU_LOG="$Q/qemu.log" FAKE_QEMU_PLAN="$Q/plan" FAKE_SSH_LOG="$Q/ssh.log" \
         bash -c '. "$1"; require_kvm() { :; }; armed_attempts red "$APEX_BOOT_ATTEMPTS"' \
@@ -486,10 +483,10 @@ PY
 fi
 
 # --- repositories: the compose's set, never all of updates-testing ---------------------
-# repo_args_with GA LIST: dnf_repo_args with GA_REACHED=GA and the allowlist LIST.
 repo_args_with() {
-    APEX_GA_REACHED=$1 bash -c '. "$1"; fake_allowlist=$2; testing_includepkgs() { printf "%s\n" "$fake_allowlist"; }; dnf_repo_args | paste -sd" " -' \
-        _ "$APEX_ROOT/.github/scripts/lib.sh" "$2"
+    local ga_reached=$1 allowlist=$2
+    APEX_GA_REACHED=$ga_reached bash -c '. "$1"; fake_allowlist=$2; testing_includepkgs() { printf "%s\n" "$fake_allowlist"; }; dnf_repo_args | paste -sd" " -' \
+        _ "$APEX_ROOT/.github/scripts/lib.sh" "$allowlist"
 }
 check "pre-GA with an allowlist: only those builds from updates-testing" \
     "--repo=fedora --repo=updates --repo=updates-testing --setopt=updates-testing.includepkgs=gtk4-4.24.0-1.fc45,glib2-2.90.0-1.fc45" \
@@ -497,7 +494,6 @@ check "pre-GA with an allowlist: only those builds from updates-testing" \
 check "pre-GA with an empty allowlist: no updates-testing" "--repo=fedora --repo=updates" "$(repo_args_with 0 '')"
 check "after GA: no updates-testing" "--repo=fedora --repo=updates" "$(repo_args_with 1 gtk4-4.24.0-1.fc45)"
 
-# packaging/libfprint/build.sh key, against a fake rpm and dnf5.
 F="$TMP/fprint"
 mkdir -p "$F/bin"
 cat >"$F/bin/rpm" <<'EOF'
@@ -514,7 +510,6 @@ printf '%s\n' "$*" >>"$FAKE_DNF_LOG"
 echo 'libfprint 0 1.94.100 1.fc45 libfprint-1.94.100-1.fc45.src.rpm'
 EOF
 chmod +x "$F/bin/rpm" "$F/bin/dnf5"
-# fprint_key GA_REACHED TESTING_INCLUDEPKGS: the dnf5 arguments land in $F/dnf.log.
 fprint_key() {
     : >"$F/dnf.log"
     PATH="$F/bin:$PATH" FAKE_DNF_LOG="$F/dnf.log" GA_REACHED=$1 TESTING_INCLUDEPKGS=$2 \
@@ -561,12 +556,12 @@ check "lane lock: no held family" "" "$(image_sh "lane_lock_states '$IL/rpms.loc
 if [[ -f $APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env ]]; then
     check "lane families: the committed pkg.env files" gnome-shell "$(image_sh lane_families | paste -sd' ' -)"
 fi
-# bad_lane NAME SED [FAMILY...]: the lock edited by SED is refused.
 bad_lane() {
-    local name=$1 script=$2
+    local name=$1 sed_script=$2
     shift 2
-    sed -e "$script" "$IL/rpms.lock" >"$IL/bad.lock"
-    check "lane lock refuses $name" 1 "$(rc_of image_sh "lane_lock_check '$IL/bad.lock' ${*:-gnome-shell}")"
+    local families=${*:-gnome-shell}
+    sed -e "$sed_script" "$IL/rpms.lock" >"$IL/bad.lock"
+    check "lane lock refuses $name" 1 "$(rc_of image_sh "lane_lock_check '$IL/bad.lock' $families")"
 }
 # shellcheck disable=SC2016 # sed scripts: $a appends a line
 {
@@ -587,7 +582,6 @@ bad_lane() {
     bad_lane "an unknown record" '$a pin mutter 51.0'
 }
 check "lane lock refuses a missing file" 1 "$(rc_of image_sh "lane_lock_check '$IL/nope.lock' gnome-shell")"
-# What apex-lane writes (its golden locks), image.sh must accept.
 GOLDEN=$APEX_ROOT/crates/apex-lane/tests/golden
 golden_locks=0
 for g in "$GOLDEN"/lock/b-*.lock "$GOLDEN"/lock/store-rpms.lock.next "$GOLDEN"/hold/*/expect/rpms.lock.next; do
@@ -652,8 +646,6 @@ if [[ -f $APEX_CONTAINERFILE ]]; then
             is_fedora_pin "$(containerfile_arg "$arg")"
     done
 fi
-# A copy of the scripts next to an edited Containerfile; the fake podman and git report
-# any call.
 IB="$TMP/image-build"
 mkdir -p "$IB/bin" "$IB/work" "$IB/tree/.github" "$IB/tree/image"
 cp -R "$APEX_ROOT/.github/scripts" "$IB/tree/.github/"
@@ -665,9 +657,9 @@ EOF
 cp "$IB/bin/podman" "$IB/bin/git"
 chmod +x "$IB/bin/podman" "$IB/bin/git"
 : >"$IB/work/inputs.env"
-# image_build_with SED: image.sh build of the committed Containerfile edited by SED.
 image_build_with() {
-    sed "$1" "$APEX_CONTAINERFILE" >"$IB/tree/image/Containerfile"
+    local sed_script=$1
+    sed "$sed_script" "$APEX_CONTAINERFILE" >"$IB/tree/image/Containerfile"
     ib_rc=0
     ib_log=$(PATH="$IB/bin:$PATH" APEX_WORK="$IB/work" GITHUB_ACTIONS='' \
         "$IB/tree/.github/scripts/image.sh" build 2>&1) || ib_rc=$?
@@ -856,8 +848,6 @@ check "a sibling branch does not" 1 "$(desc_rc "$C_B" "$C_S")"
 check "an unknown commit is unknown, not older" 2 "$(desc_rc "$C_X" "$C_B")"
 check "an empty revision is unknown" 2 "$(desc_rc "" "$C_B")"
 
-# The fake registry answers `skopeo inspect` from <tag>.json, `skopeo list-tags` from
-# tags.json.
 P="$TMP/publish"
 mkdir -p "$P/bin" "$P/reg"
 cat >"$P/bin/skopeo" <<'EOF'
@@ -879,7 +869,6 @@ label_json() { # DIGEST_CHAR VERSION REVISION
     jq -n --arg d "sha256:$(printf "$1%.0s" {1..64})" --arg v "$2" --arg r "$3" \
         '{Digest: $d, Labels: {"org.opencontainers.image.version": $v, "org.opencontainers.image.revision": $r}}'
 }
-# increases REF DIGEST VERSION REVISION: check_increases' exit status.
 increases() {
     # shellcheck disable=SC2016 # expanded by the inner bash
     PATH="$P/bin:$PATH" FAKE_REG="$P/reg" APEX_GIT_ROOT="$G" APEX_RETRY_DELAY=0 GITHUB_ACTIONS='' \
@@ -928,11 +917,11 @@ printf '%s\n' "$*" >"$FAKE_GH_LOG"
 [[ $FAKE_GH_OK == 1 ]]
 EOF
 chmod +x "$O/bin/skopeo" "$O/bin/gh"
-# lookup_rc KEY LABEL GH_OK [REPO]: oci-artifact.sh lookup's exit status.
 lookup_rc() {
-    PATH="$O/bin:$PATH" FAKE_MANIFEST="$O/manifest" FAKE_DIGEST="$O_DIGEST" FAKE_LABEL=$2 \
-        FAKE_GH_OK=$3 FAKE_GH_LOG="$O/gh.log" APEX_RETRY_DELAY=0 GITHUB_ACTIONS='' \
-        rc_of "$APEX_ROOT/.github/scripts/oci-artifact.sh" lookup "${4:-ghcr.io/x/apex-rpms}" "$1" rpms.yml
+    local key=$1 label=$2 gh_ok=$3 repo=${4:-ghcr.io/x/apex-rpms}
+    PATH="$O/bin:$PATH" FAKE_MANIFEST="$O/manifest" FAKE_DIGEST="$O_DIGEST" FAKE_LABEL=$label \
+        FAKE_GH_OK=$gh_ok FAKE_GH_LOG="$O/gh.log" APEX_RETRY_DELAY=0 GITHUB_ACTIONS='' \
+        rc_of "$APEX_ROOT/.github/scripts/oci-artifact.sh" lookup "$repo" "$key" rpms.yml
 }
 : >"$O/gh.log"
 check "an attested artifact with its key is a hit" 0 "$(lookup_rc k1 k1 1)"
@@ -954,21 +943,21 @@ guard_findings() {
     GITHUB_ACTIONS='' "$APEX_ROOT/.github/scripts/privacy-guard.sh" --dir "$V" 2>&1 |
         grep -c '^privacy guard: [^0-9]' || true
 }
-# tracked_fails NAME PATH CONTENT: one finding while tracked; untracked again afterwards.
 tracked_fails() {
-    mkdir -p "$V/$(dirname "$2")"
-    printf '%s\n' "$3" >"$V/$2"
-    git -C "$V" add -f "$2"
-    check "$1" "1:1" "$(guard_rc):$(guard_findings)"
-    git -C "$V" rm -q --cached "$2"
-    rm -f "$V/$2"
+    local name=$1 path=$2 content=$3
+    mkdir -p "$V/$(dirname "$path")"
+    printf '%s\n' "$content" >"$V/$path"
+    git -C "$V" add -f "$path"
+    check "$name" "1:1" "$(guard_rc):$(guard_findings)"
+    git -C "$V" rm -q --cached "$path"
+    rm -f "$V/$path"
 }
-# tracked_passes NAME PATH CONTENT: passes, and stays tracked.
 tracked_passes() {
-    mkdir -p "$V/$(dirname "$2")"
-    printf '%s\n' "$3" >"$V/$2"
-    git -C "$V" add -f "$2"
-    check "$1" 0 "$(guard_rc)"
+    local name=$1 path=$2 content=$3
+    mkdir -p "$V/$(dirname "$path")"
+    printf '%s\n' "$content" >"$V/$path"
+    git -C "$V" add -f "$path"
+    check "$name" 0 "$(guard_rc)"
 }
 x_times() { printf "${2:-x}%.0s" $(seq "$1"); }
 table_row() { printf '| %s |' "$(printf 'word %.0s' $(seq "$1"))"; }

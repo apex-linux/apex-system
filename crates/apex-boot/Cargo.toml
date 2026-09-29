@@ -24,7 +24,6 @@ anyhow.workspace = true
 apex-bootc.workspace = true
 apex-dbus.workspace = true
 clap.workspace = true
-# `time`: clock_gettime(CLOCK_MONOTONIC), the clock logind's TimestampMonotonic uses.
 nix = { workspace = true, features = ["time"] }
 serde_json.workspace = true
 tokio.workspace = true

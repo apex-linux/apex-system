@@ -1,7 +1,3 @@
-//! `--grubenv` and `--root` require `--dry-run`: they only redirect files, while
-//! `ReportBoot`, the reboot and the watchdog's `systemd-run` would still reach the real
-//! `apex-updated` and systemd, so a fixture could roll back a real deployment.
-
 use std::path::{Path, PathBuf};
 
 use apex_boot::checks::force_red::FORCE_RED_PATH;
@@ -35,33 +31,51 @@ rescue.service drop-ins before the shell starts):
   from one line when grubenv cannot be read. It only reads grubenv, never writes it,
   and finishes within 35 s.";
 
-/// Judges this boot once (ADR 0009) and acts on the verdict: confirms the boot or clears the
-/// boot counter in grubenv, records a failed update, reports to apex-updated, and reboots
-/// only for a failed update while nobody is logged in.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "apex-boot-assess", version, after_help = AFTER_HELP)]
+#[command(
+    name = "apex-boot-assess",
+    version,
+    about = "Judges this boot once (ADR 0009) and acts on the verdict: confirms the boot or clears \
+             the boot counter in grubenv, records a failed update, reports to apex-updated, and \
+             reboots only for a failed update while nobody is logged in",
+    after_help = AFTER_HELP
+)]
 pub(crate) struct Args {
-    /// Instead of the assessment, run the early-boot watchdog for an emergency or rescue
-    /// shell: schedule a reboot in 60 s only while GRUB is counting an update on trial.
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Instead of the assessment, run the early-boot watchdog for an emergency or rescue \
+                shell: schedule a reboot in 60 s only while GRUB is counting an update on trial"
+    )]
     pub(crate) emergency_watchdog: bool,
 
-    /// Run the checks and print the decision as JSON (with --emergency-watchdog: print
-    /// the watchdog's decision and the command it would run); change nothing, report
-    /// nothing and never reboot.
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Run the checks and print the decision as JSON (with --emergency-watchdog: print \
+                the watchdog's decision and the command it would run); change nothing, report \
+                nothing and never reboot"
+    )]
     pub(crate) dry_run: bool,
 
-    /// The GRUB environment block to read [default: boot/grub2/grubenv below --root].
-    /// Only with --dry-run.
-    #[arg(long, value_name = "PATH", requires = "dry_run")]
+    // --grubenv and --root need --dry-run: ReportBoot, the reboot and systemd-run would still reach
+    // the real apex-updated and systemd, so a fixture could roll back a real deployment.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "dry_run",
+        help = "The GRUB environment block to read [default: boot/grub2/grubenv below --root]. \
+                Only with --dry-run"
+    )]
     pub(crate) grubenv: Option<PathBuf>,
 
-    /// Directory that stands for / for the files the assessment reads (grub.cfg,
-    /// /var/lib/apex, /sys, /usr/lib/firmware; for the watchdog grubenv and
-    /// /etc/initrd-release) [default: /]. systemctl, logind, bootc and apex-updated are
-    /// always the running system's. Only with --dry-run.
-    #[arg(long, value_name = "PATH", requires = "dry_run")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "dry_run",
+        help = "Directory that stands for / for the files the assessment reads (grub.cfg, \
+                /var/lib/apex, /sys, /usr/lib/firmware; for the watchdog grubenv and \
+                /etc/initrd-release) [default: /]. systemctl, logind, bootc and apex-updated are \
+                always the running system's. Only with --dry-run"
+    )]
     pub(crate) root: Option<PathBuf>,
 }
 
@@ -218,16 +232,20 @@ mod tests {
             "{AFTER_HELP}"
         );
         assert!(AFTER_HELP.contains(&format!("units {REBOOT_UNIT}.timer")));
-        // The cancel command is wrapped over two lines in the help text.
-        let words: Vec<&str> = AFTER_HELP.split_whitespace().collect();
-        let cancel: Vec<&str> = CANCEL_COMMAND.split_whitespace().collect();
         assert!(
-            words.windows(cancel.len()).any(|w| w
-                .iter()
-                .map(|s| s.trim_matches(['`', ';']))
-                .eq(cancel.iter().copied())),
+            contains_across_line_breaks(AFTER_HELP, CANCEL_COMMAND),
             "{AFTER_HELP}"
         );
+    }
+
+    fn contains_across_line_breaks(text: &str, phrase: &str) -> bool {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let phrase: Vec<&str> = phrase.split_whitespace().collect();
+        words.windows(phrase.len()).any(|w| {
+            w.iter()
+                .map(|s| s.trim_matches(['`', ';']))
+                .eq(phrase.iter().copied())
+        })
     }
 
     #[test]

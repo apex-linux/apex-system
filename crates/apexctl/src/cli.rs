@@ -14,9 +14,14 @@ update gate (power, network, space, ...), 3 nothing to do.
 apexctl never reboots the computer. The update commands talk to apex-updated on the
 system bus; polkit may ask for a password.";
 
-/// Control and inspect Apex: OS updates, hardware state and build-time helpers.
 #[derive(Debug, Parser)]
-#[command(name = "apexctl", version, after_help = AFTER_HELP, propagate_version = false)]
+#[command(
+    name = "apexctl",
+    version,
+    about = "Control and inspect Apex: OS updates, hardware state and build-time helpers",
+    after_help = AFTER_HELP,
+    propagate_version = false
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -24,87 +29,137 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Show the update state: booted, staged and rollback images, degraded parts, staleness.
-    #[command(after_long_help = STATUS_JSON_HELP)]
+    #[command(
+        about = concat!(
+            "Show the update state: booted, staged and rollback images, degraded parts, ",
+            "staleness"
+        ),
+        after_long_help = STATUS_JSON_HELP
+    )]
     Status {
-        /// Print JSON with a stable schema (apexctl status --help describes it).
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Print JSON with a stable schema (apexctl status --help describes it)"
+        )]
         json: bool,
     },
-    /// Check for, download, apply or undo OS updates.
-    #[command(subcommand)]
+    #[command(subcommand, about = "Check for, download, apply or undo OS updates")]
     Update(UpdateCommand),
-    /// Read-only hardware diagnostics for this laptop.
-    #[command(subcommand)]
+    #[command(subcommand, about = "Read-only hardware diagnostics for this laptop")]
     Hw(HwCommand),
-    /// Render the files derived from the hardware profile.
-    #[command(subcommand)]
+    #[command(
+        subcommand,
+        about = "Render the files derived from the hardware profile"
+    )]
     Profile(ProfileCommand),
-    /// Helpers used while building the image.
-    #[command(subcommand)]
+    #[command(subcommand, about = "Helpers used while building the image")]
     Build(BuildCommand),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum UpdateCommand {
-    /// Check whether a newer version of Apex is available on the followed channel.
-    ///
-    /// Exits 0 without checking when the update service is busy, for example while an
-    /// update is being downloaded (the download fetches from the channel itself); the
-    /// output starts with "Not checked:" and says why.
+    #[command(
+        about = "Check whether a newer version of Apex is available on the followed channel",
+        long_about = concat!(
+            "Check whether a newer version of Apex is available on the followed channel.\n\n",
+            "Exits 0 without checking when the update service is busy, for example while an ",
+            "update is being downloaded (the download fetches from the channel itself); the ",
+            "output starts with \"Not checked:\" and says why."
+        )
+    )]
     Check,
-    /// Download the available update and keep it locked until it is applied.
+    #[command(about = "Download the available update and keep it locked until it is applied")]
     Download {
-        /// Download even on battery or on a metered network (never overrides the space,
-        /// denylist or bootc-state gates).
-        #[arg(long)]
+        #[arg(
+            long,
+            help = concat!(
+                "Download even on battery or on a metered network (never overrides the space, ",
+                "denylist or bootc-state gates)"
+            )
+        )]
         force: bool,
     },
-    /// Use the downloaded update at the next boot. Reboot to finish; apexctl never reboots.
+    #[command(about = concat!(
+        "Use the downloaded update at the next boot. Reboot to finish; apexctl never ",
+        "reboots"
+    ))]
     Apply {
-        /// Digest to apply (sha256:…); defaults to the staged digest that `status` shows.
-        /// The daemon refuses if the staged update is not this digest.
-        #[arg(long, value_name = "DIGEST", value_parser = digest_arg)]
+        #[arg(
+            long,
+            value_name = "DIGEST",
+            value_parser = digest_arg,
+            help = concat!(
+                "Digest to apply (sha256:…); defaults to the staged digest that `status` shows. ",
+                "The daemon refuses if the staged update is not this digest"
+            )
+        )]
         digest: Option<String>,
     },
-    /// Lock an applied update again so the next boot keeps the current version.
-    ///
-    /// Locking again downloads from the update channel, so it needs the network. When the
-    /// channel has a newer build by then, that build is downloaded and locked in place of
-    /// the applied one; the output names the build that is locked now.
+    #[command(
+        about = "Lock an applied update again so the next boot keeps the current version",
+        long_about = concat!(
+            "Lock an applied update again so the next boot keeps the current version.\n\n",
+            "Locking again downloads from the update channel, so it needs the network. When the ",
+            "channel has a newer build by then, that build is downloaded and locked in place of ",
+            "the applied one; the output names the build that is locked now."
+        )
+    )]
     Discard,
-    /// Boot the previous version next time (asks for an administrator password).
+    #[command(about = "Boot the previous version next time (asks for an administrator password)")]
     Rollback {
-        /// Also mark the running version as bad so it is never offered again.
-        #[arg(long)]
+        #[arg(
+            long,
+            help = "Also mark the running version as bad so it is never offered again"
+        )]
         mark_bad: bool,
     },
-    /// List the package changes from the running image to the downloaded one.
-    ///
-    /// Fails (exit 1) while the update service does not know the system's state yet, for
-    /// example right after it started; try again in a moment.
+    #[command(
+        about = "List the package changes from the running image to the downloaded one",
+        long_about = concat!(
+            "List the package changes from the running image to the downloaded one.\n\n",
+            "Fails (exit 1) while the update service does not know the system's state yet, for ",
+            "example right after it started; try again in a moment."
+        )
+    )]
     Changes,
-    /// Clear the notice that an update failed its health checks, after reading it.
-    ///
-    /// Only the notice goes away: nothing is rolled back. Exits 3 when no update has failed
-    /// its health checks.
+    #[command(
+        about = "Clear the notice that an update failed its health checks, after reading it",
+        long_about = concat!(
+            "Clear the notice that an update failed its health checks, after reading it.\n\n",
+            "Only the notice goes away: nothing is rolled back. Exits 3 when no update has failed ",
+            "its health checks."
+        )
+    )]
     Acknowledge,
-    /// Follow another update channel (asks for an administrator password).
-    ///
-    /// The channel's image is downloaded and kept locked, like `update download`. To finish
-    /// the switch, run `apexctl update apply` and restart. The image is installed even when
-    /// it is older than the running one; when it is the same build, only the channel
-    /// changes and no boot check is armed. Exits 3 when the channel is already followed.
+    #[command(
+        about = "Follow another update channel (asks for an administrator password)",
+        long_about = concat!(
+            "Follow another update channel (asks for an administrator password).\n\n",
+            "The channel's image is downloaded and kept locked, like `update download`. To finish ",
+            "the switch, run `apexctl update apply` and restart. The image is installed even when ",
+            "it is older than the running one; when it is the same build, only the channel ",
+            "changes and no boot check is armed. Exits 3 when the channel is already followed."
+        )
+    )]
     Channel {
-        /// stable: qualified builds signed with the release key; testing: every CI build,
-        /// signed with the CI key.
-        #[arg(value_name = "CHANNEL", value_parser = channel_parser())]
+        #[arg(
+            value_name = "CHANNEL",
+            value_parser = channel_parser(),
+            help = concat!(
+                "stable: qualified builds signed with the release key; testing: every CI build, ",
+                "signed with the CI key"
+            )
+        )]
         channel: Channel,
     },
-    /// Automatic run for the systemd timer: check, then download if allowed (root only).
-    ///
-    /// Exits 0 when the run only has to wait for the next one: another update operation
-    /// is running, or the image registry cannot be reached.
+    #[command(
+        about = "Automatic run for the systemd timer: check, then download if allowed (root only)",
+        long_about = concat!(
+            "Automatic run for the systemd timer: check, then download if allowed (root only).\n\n",
+            "Exits 0 when the run only has to wait for the next one: another update operation ",
+            "is running, or the image registry cannot be reached."
+        )
+    )]
     Automatic,
 }
 
@@ -121,30 +176,34 @@ fn channel_parser() -> impl TypedValueParser<Value = Channel> {
 
 #[derive(Debug, Subcommand)]
 pub enum HwCommand {
-    /// Check audio init verbs, charge limit, dGPU power state, fingerprint reader and Secure
-    /// Boot. Read-only.
+    #[command(about = concat!(
+        "Check audio init verbs, charge limit, dGPU power state, fingerprint reader and Secure ",
+        "Boot. Read-only"
+    ))]
     Report {
-        /// Print JSON.
-        #[arg(long)]
+        #[arg(long, help = "Print JSON")]
         json: bool,
         #[command(flatten)]
         root: RootArg,
     },
-    /// Audio codec diagnostics.
-    #[command(subcommand)]
+    #[command(subcommand, about = "Audio codec diagnostics")]
     Audio(AudioCommand),
 }
 
 #[derive(Debug, Subcommand)]
 pub enum AudioCommand {
-    /// Parse the ALC294's /proc/asound codec dump: pins, COEFs (when the kernel's COEF
-    /// dump option is on) and the loaded init verbs. Read-only.
+    #[command(about = concat!(
+        "Parse the ALC294's /proc/asound codec dump: pins, COEFs (when the kernel's COEF dump ",
+        "option is on) and the loaded init verbs. Read-only"
+    ))]
     Snapshot {
-        /// Parse this codec dump instead of finding the ALC294 under /proc/asound.
-        #[arg(long = "proc", value_name = "FILE")]
+        #[arg(
+            long = "proc",
+            value_name = "FILE",
+            help = "Parse this codec dump instead of finding the ALC294 under /proc/asound"
+        )]
         proc_file: Option<PathBuf>,
-        /// Print JSON.
-        #[arg(long)]
+        #[arg(long, help = "Print JSON")]
         json: bool,
         #[command(flatten)]
         root: RootArg,
@@ -153,51 +212,92 @@ pub enum AudioCommand {
 
 #[derive(Debug, Args)]
 pub struct RootArg {
-    /// Read /sys, /proc and /usr under this directory instead of /.
-    #[arg(long = "sysroot", value_name = "DIR", default_value = "/", hide = true)]
+    #[arg(
+        long = "sysroot",
+        value_name = "DIR",
+        default_value = "/",
+        hide = true,
+        help = "Read /sys, /proc and /usr under this directory instead of /"
+    )]
     pub sysroot: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum ProfileCommand {
-    /// Render monitors.xml (always) and the ALC294 patch firmware and modprobe file (once
-    /// the COEFs are measured) from the hardware profile.
+    #[command(about = concat!(
+        "Render monitors.xml (always) and the ALC294 patch firmware and modprobe file (once the ",
+        "COEFs are measured) from the hardware profile"
+    ))]
     Render {
-        /// The hardware profile.
-        #[arg(long, value_name = "FILE", default_value = DEFAULT_PROFILE)]
+        #[arg(
+            long,
+            value_name = "FILE",
+            default_value = DEFAULT_PROFILE,
+            help = "The hardware profile"
+        )]
         profile: PathBuf,
-        /// Output directory [default: generated/ next to the profile].
-        #[arg(long, value_name = "DIR")]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Output directory [default: generated/ next to the profile]"
+        )]
         out: Option<PathBuf>,
-        /// Change nothing; exit 1 and print a diff when the files in the output directory
-        /// differ from the rendering (or the firmware list differs from the profile).
-        #[arg(long)]
+        #[arg(
+            long,
+            help = concat!(
+                "Change nothing; exit 1 and print a diff when the files in the output directory ",
+                "differ from the rendering (or the firmware list differs from the profile)"
+            )
+        )]
         check: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum BuildCommand {
-    /// Write DIR/usr/share/apex/manifest.json from the rpm database under DIR.
+    #[command(about = "Write DIR/usr/share/apex/manifest.json from the rpm database under DIR")]
     Manifest {
-        /// Root of the image being built (`/` inside the Containerfile).
-        #[arg(long, value_name = "DIR")]
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = "Root of the image being built (`/` inside the Containerfile)"
+        )]
         root: PathBuf,
-        /// Image version FEDORA.YYYYMMDD.RUN, e.g. 45.20260924.117.
-        #[arg(long, value_name = "V")]
+        #[arg(
+            long,
+            value_name = "V",
+            help = "Image version FEDORA.YYYYMMDD.RUN, e.g. 45.20260924.117"
+        )]
         version: String,
-        /// Git commit of the Apex repository (40 hex digits).
-        #[arg(long, value_name = "R")]
+        #[arg(
+            long,
+            value_name = "R",
+            help = "Git commit of the Apex repository (40 hex digits)"
+        )]
         revision: String,
-        /// Base image, pinned by digest (REPOSITORY@sha256:…).
-        #[arg(long, value_name = "B")]
+        #[arg(
+            long,
+            value_name = "B",
+            help = "Base image, pinned by digest (REPOSITORY@sha256:…)"
+        )]
         base: String,
-        /// A component shipped degraded (audio, fingerprint, nvidia, shell); repeat for several.
-        #[arg(long = "degraded", value_name = "X")]
+        #[arg(
+            long = "degraded",
+            value_name = "X",
+            help = concat!(
+                "A component shipped degraded (audio, fingerprint, nvidia, shell); repeat for ",
+                "several"
+            )
+        )]
         degraded: Vec<String>,
-        /// A rebuild-lane family held at its last good build (gnome-shell, ...); repeat
-        /// for several.
-        #[arg(long = "held", value_name = "FAMILY")]
+        #[arg(
+            long = "held",
+            value_name = "FAMILY",
+            help = concat!(
+                "A rebuild-lane family held at its last good build (gnome-shell, ...); repeat ",
+                "for several"
+            )
+        )]
         held: Vec<String>,
     },
 }

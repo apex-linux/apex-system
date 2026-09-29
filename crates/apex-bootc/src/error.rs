@@ -140,9 +140,7 @@ const BUSY: &[&str] = &[
 ];
 
 const NO_SPACE: &[&str] = &[
-    // strerror(ENOSPC), glibc
     "no space left on device",
-    // strerror(EDQUOT), glibc
     "disk quota exceeded",
     // bootc crates/lib/src/deploy.rs, check_disk_space_inner()
     "insufficient free space",
@@ -153,18 +151,13 @@ const NO_SPACE: &[&str] = &[
 
 /// From containers/image `image/signature/*` through the image proxy's `OpenImage`, unless noted.
 const SIGNATURE: &[&str] = &[
-    // policy_eval_sigstore.go
     "a signature was required, but no signature exists",
     "none of the signatures were accepted",
     "signature for identity",
     "signature for digest",
-    // policy_eval_simple.go
     "is rejected by policy",
-    // policy_eval.go
     "no signature verification policy found",
-    // internal/sigstore_payload.go
     "cryptographic signature verification failed",
-    // policy_eval_sigstore.go
     "no public key verified against the rekorset",
     // ostree-ext crates/ostree-ext/src/container/store.rs
     "specifies a default of `insecureacceptanything`",
@@ -175,18 +168,14 @@ const NETWORK: &[&str] = &[
     "pinging container registry",
     // containers/image image/docker/errors.go: ErrTooManyRequests
     "too many requests to registry",
-    // Go net: *net.OpError for dials
+    // Go net, net/http and context errors, glibc's resolver and errno strings
     "dial tcp",
-    // Go net: DNSError
     "no such host",
     "server misbehaving",
-    // glibc gai_strerror(EAI_AGAIN)
     "temporary failure in name resolution",
-    // Go net/os, net/http and context timeouts
     "i/o timeout",
     "tls handshake timeout",
     "context deadline exceeded",
-    // strerror(ECONNREFUSED / ECONNRESET / ENETUNREACH / EHOSTUNREACH), glibc
     "connection refused",
     "connection reset by peer",
     "network is unreachable",

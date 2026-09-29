@@ -16,9 +16,8 @@ StateDirectoryMode=0700
 # reader runs as root.
 UMask=0077
 
-# ProtectSystem=, SystemCallFilter=, CapabilityBoundingSet=, NoNewPrivileges= and the other
-# settings tests/data_files.rs keeps out break bootc or the grubenv writer, which runs
-# `unshare --mount` and then `mount -o remount,rw /boot`.
+# ProtectSystem=, SystemCallFilter=, NoNewPrivileges= and the rest tests/data_files.rs keeps out
+# break bootc or the grubenv writer (`unshare --mount`, then `mount -o remount,rw /boot`).
 ProtectHome=yes
 PrivateTmp=yes
 ProtectControlGroups=yes

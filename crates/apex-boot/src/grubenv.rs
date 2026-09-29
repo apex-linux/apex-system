@@ -1,6 +1,5 @@
-//! The GRUB environment block, read and edited byte for byte as Fedora's GRUB does
-//! (`grub-core/lib/envblk.c`, rhboot/grub2 `fedora-45`). Unlike Ubuntu's GRUB, Fedora's
-//! skips only lines starting with `#`, so an empty line starts a variable name.
+//! Byte for byte as Fedora's `grub-core/lib/envblk.c` (rhboot/grub2 `fedora-45`), which unlike
+//! Ubuntu's skips only lines starting with `#`, so an empty line starts a variable name.
 
 use std::fmt;
 use std::path::Path;
@@ -25,8 +24,8 @@ pub struct GrubEnv {
 #[derive(Clone, PartialEq, Eq)]
 enum Line {
     Var(Var),
-    /// A `#` line. Only the last one may lack its `\n`, when it runs into the padding.
-    Other(Vec<u8>),
+    /// Only the last one may lack its `\n`, when it runs into the padding.
+    Comment(Vec<u8>),
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -95,7 +94,7 @@ impl GrubEnv {
     pub fn new() -> Self {
         Self {
             size: BLOCK_SIZE,
-            lines: vec![Line::Other(CREATE_WARNING.to_vec())],
+            lines: vec![Line::Comment(CREATE_WARNING.to_vec())],
         }
     }
 
@@ -125,11 +124,11 @@ impl GrubEnv {
                 if next > end {
                     let content = trim_padding(&bytes[p..]);
                     if !content.is_empty() {
-                        lines.push(Line::Other(content.to_vec()));
+                        lines.push(Line::Comment(content.to_vec()));
                     }
                     break;
                 }
-                lines.push(Line::Other(bytes[p..next].to_vec()));
+                lines.push(Line::Comment(bytes[p..next].to_vec()));
                 p = next;
             } else {
                 let (var, next) = parse_var(bytes, p)?;
@@ -184,7 +183,7 @@ impl GrubEnv {
     pub fn vars(&self) -> impl Iterator<Item = (&[u8], &[u8])> {
         self.lines.iter().filter_map(|line| match line {
             Line::Var(var) => Some((var.name.as_slice(), var.value.as_slice())),
-            Line::Other(_) => None,
+            Line::Comment(_) => None,
         })
     }
 
@@ -241,7 +240,7 @@ impl GrubEnv {
     fn position(&self, name: &str) -> Option<usize> {
         self.lines.iter().position(|line| match line {
             Line::Var(var) => &var.raw[..var.stored_name_len] == name.as_bytes(),
-            Line::Other(_) => false,
+            Line::Comment(_) => false,
         })
     }
 }
@@ -307,7 +306,7 @@ impl Line {
     fn raw(&self) -> &[u8] {
         match self {
             Line::Var(var) => &var.raw,
-            Line::Other(raw) => raw,
+            Line::Comment(raw) => raw,
         }
     }
 }
@@ -346,7 +345,7 @@ fn find_next_line(bytes: &[u8], mut p: usize) -> usize {
     p + 1
 }
 
-/// The body of `grub_envblk_iterate`; also returns the offset of the next line.
+/// The body of `grub_envblk_iterate`.
 fn parse_var(bytes: &[u8], start: usize) -> Result<(Var, usize), ParseError> {
     let stored_name_len = bytes[start..]
         .iter()
@@ -384,7 +383,6 @@ fn parse_var(bytes: &[u8], start: usize) -> Result<(Var, usize), ParseError> {
     Ok((var, p + 1))
 }
 
-/// What a C string holding these bytes contains.
 fn until_nul(bytes: &[u8]) -> &[u8] {
     bytes
         .iter()

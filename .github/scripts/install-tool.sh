@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Install a pinned, prebuilt release binary after checking its SHA-256.
-#
-#   install-tool.sh TOOL DESTDIR   download, verify and install DESTDIR/TOOL
-#   install-tool.sh --pin TOOL     print TOOL's pin, "<version> <sha256>" (no download)
-#
-# TOOL is one of: cargo-deny, cargo-auditable, cosign, actionlint, shellcheck.
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# Pinned here instead of third-party installer actions, so a secret-bearing job runs only
-# first-party actions and this reviewed script. Renovate bumps each pair together.
+usage() {
+    cat >&2 <<'EOF'
+
+Install a pinned, prebuilt release binary after checking its SHA-256.
+
+  install-tool.sh TOOL DESTDIR   download, verify and install DESTDIR/TOOL
+  install-tool.sh --pin TOOL     print TOOL's pin, "<version> <sha256>" (no download)
+
+TOOL is one of: cargo-deny, cargo-auditable, cosign, actionlint, shellcheck.
+EOF
+    exit 2
+}
+
+# Pinned here, not by third-party installer actions: secret-bearing jobs run first-party actions only.
 # renovate: datasource=github-release-attachments depName=EmbarkStudios/cargo-deny
 CARGO_DENY_VERSION=0.20.2
 CARGO_DENY_SHA256=9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
@@ -33,39 +38,37 @@ ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3
 SHELLCHECK_VERSION=v0.11.0
 SHELLCHECK_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
 
-# tool_pin TOOL: sets the caller's version, url, sha and member (the path inside the
-# archive; empty for a bare binary).
 tool_pin() {
     case $1 in
         cargo-deny)
             version=$CARGO_DENY_VERSION
             url="https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl.tar.gz"
             sha=$CARGO_DENY_SHA256
-            member="cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
+            archive_member="cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl/cargo-deny"
             ;;
         cargo-auditable)
             version=$CARGO_AUDITABLE_VERSION
             url="https://github.com/rust-secure-code/cargo-auditable/releases/download/$CARGO_AUDITABLE_VERSION/cargo-auditable-x86_64-unknown-linux-musl.tar.xz"
             sha=$CARGO_AUDITABLE_SHA256
-            member="cargo-auditable-x86_64-unknown-linux-musl/cargo-auditable"
+            archive_member="cargo-auditable-x86_64-unknown-linux-musl/cargo-auditable"
             ;;
         cosign)
             version=$COSIGN_VERSION
             url="https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux-amd64"
             sha=$COSIGN_SHA256
-            member=
+            archive_member=
             ;;
         actionlint)
             version=$ACTIONLINT_VERSION
             url="https://github.com/rhysd/actionlint/releases/download/$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz"
             sha=$ACTIONLINT_SHA256
-            member=actionlint
+            archive_member=actionlint
             ;;
         shellcheck)
             version=$SHELLCHECK_VERSION
             url="https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
             sha=$SHELLCHECK_SHA256
-            member="shellcheck-$SHELLCHECK_VERSION/shellcheck"
+            archive_member="shellcheck-$SHELLCHECK_VERSION/shellcheck"
             ;;
         *) usage ;;
     esac
@@ -73,7 +76,7 @@ tool_pin() {
 
 main() {
     (($# == 2)) || usage
-    local version url sha member
+    local version url sha archive_member
     if [[ $1 == --pin ]]; then
         tool_pin "$2"
         printf '%s %s\n' "$version" "$sha"
@@ -95,9 +98,9 @@ main() {
         die "$tool: SHA-256 mismatch for $url (expected $sha)"
 
     mkdir -p "$dest"
-    if [[ -n $member ]]; then
-        tar -xf "$file" -C "$tmp" "$member"
-        install -m 0755 "$tmp/$member" "$dest/$tool"
+    if [[ -n $archive_member ]]; then
+        tar -xf "$file" -C "$tmp" "$archive_member"
+        install -m 0755 "$tmp/$archive_member" "$dest/$tool"
     else
         install -m 0755 "$file" "$dest/$tool"
     fi

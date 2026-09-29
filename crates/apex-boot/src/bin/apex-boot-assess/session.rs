@@ -9,9 +9,8 @@ use crate::ports::{Clock, SessionInfo, Sessions};
 
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// With a last [`apex_boot::LOGIND_TIMEOUT`] still inside [`apex_boot::CHECK_TIMEOUT`]. The
-/// check polls because logging in closes the greeter the wait found, and the new user
-/// session needs [`SESSION_MIN_ACTIVE`] of its own.
+/// The check polls because logging in closes the greeter the wait found, and the new user session
+/// needs [`SESSION_MIN_ACTIVE`] of its own.
 pub(crate) const SESSION_CHECK_BUDGET: Duration = Duration::from_secs(24);
 
 const DESKTOP_CLASSES: [&str; 2] = ["greeter", "user"];

@@ -1,11 +1,3 @@
-//! The early-boot watchdog. The assessment judges a boot only after `graphical.target`, so a
-//! boot of an update on trial that stops in emergency or rescue mode would wait at `sulogin`
-//! and GRUB's counter would move only on a forced power-off. The drop-ins run this before the
-//! shell starts; it schedules a reboot when GRUB counted this boot.
-//!
-//! As root, `systemd-run` and `systemctl` reach systemd over its private socket, which works
-//! without the system bus that emergency mode lacks.
-
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
@@ -37,6 +29,7 @@ pub const REBOOT_TIMER: &str = "apex-emergency-reboot.timer";
 
 pub const CANCEL_COMMAND: &str = "systemctl stop apex-emergency-reboot.timer";
 
+/// As root, it and `systemctl` reach systemd over its private socket, as emergency mode has no bus.
 pub const SYSTEMD_RUN: &str = "/usr/bin/systemd-run";
 
 pub const HEAD: &str = "/usr/bin/head";
@@ -103,9 +96,8 @@ impl fmt::Display for Action {
     }
 }
 
-/// Reboots only a boot GRUB counted, so one arming leads to at most
-/// [`BOOT_ATTEMPTS`](crate::BOOT_ATTEMPTS) reboots. It cannot run `bootc status` in its
-/// budget, so unlike the assessment it does not check that the target is booted.
+/// Reboots only a boot GRUB counted, so one arming leads to at most [`crate::BOOT_ATTEMPTS`]
+/// reboots. `bootc status` does not fit the budget, so it cannot check that the target is booted.
 pub fn action_for(vars: &BootVars) -> Action {
     if !vars.is_armed() {
         return Action::Stay(Stay::NotArmed);
@@ -120,11 +112,8 @@ pub fn action_for(vars: &BootVars) -> Action {
     }
 }
 
-/// Only compile-time constants: nothing read from the system reaches this command line.
-///
-/// `DefaultDependencies=no`: the defaults would start `sysinit.target` again, which is
-/// typically what failed. `ExecCondition=` drops the reboot once the shell has been left and
-/// the boot continues, so a user's session is never rebooted.
+/// No default dependencies: they would start `sysinit.target`, typically what failed, again.
+/// `ExecCondition=` drops the reboot once the shell is left, so a user's session is never rebooted.
 pub fn schedule_args() -> Vec<String> {
     let condition = format!(
         "--property=ExecCondition={SYSTEMCTL} --quiet is-active {}",
@@ -184,9 +173,8 @@ impl Host {
         self.initrd_release.exists()
     }
 
-    /// Reads through a child process: a read from a stalled `/boot` can sleep
-    /// uninterruptibly, and this process could then never exit, while a child can be
-    /// abandoned.
+    /// Reads through a child process: a read from a stalled `/boot` can sleep uninterruptibly,
+    /// and only a child can then be abandoned.
     pub fn read_vars(&self) -> Result<BootVars, String> {
         let mut command = Command::new(&self.head);
         command

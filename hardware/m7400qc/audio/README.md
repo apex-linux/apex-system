@@ -24,6 +24,20 @@ sudo ./try-fix.sh install    # then phases C, D and E, see AUDIO.md §5
 sudo ./try-fix.sh revert     # when done testing
 ```
 
-Both scripts have test hooks (environment variables documented in their headers) that
-point them at a fake sysfs tree and a fake `hda-verb`, so they can be tested without
-touching the sound hardware.
+Both scripts have test hooks, environment variables never needed on the laptop, that
+point them at a fake sysfs tree (and, through `PATH`, a fake `hda-verb`), so they can be
+tested without touching the sound hardware:
+
+| Variable | Script | Effect |
+|---|---|---|
+| `APEX_AUDIO_SYSROOT` | `coef-dump.sh` | prefixes `/sys`, `/proc` and `/dev` |
+| `APEX_AUDIO_ALLOW_NONROOT=1` | `coef-dump.sh` | skips the root check; only together with `APEX_AUDIO_SYSROOT` |
+| `APEX_AUDIO_OUTDIR` | `coef-dump.sh` | replaces `/var/tmp/apex-audio` |
+| `APEX_AUDIO_GENERATED` | `coef-dump.sh` | replaces `../generated` |
+| `APEX_TRYFIX_ROOT` | `try-fix.sh` | prefixes every host path |
+| `APEX_TRYFIX_ALLOW_NONROOT=1` | `try-fix.sh` | skips the root check; only together with `APEX_TRYFIX_ROOT` |
+| `APEX_TRYFIX_GENERATED` | `try-fix.sh` | replaces `../generated` |
+
+Exit status of both: 0 ok, 1 usage, 2 refused (a precondition or a file check failed);
+`coef-dump.sh` also exits 3 when `hda-verb` fails or gives no stable, parsable read, and
+70 on an internal error.

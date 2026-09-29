@@ -151,8 +151,7 @@ vm-qualify:
     tools/builder-vm/builder-vm.sh run env QUALIFY_MEM=3G QUALIFY_SMP=4 .github/scripts/qualify.sh local localhost/apex:build
 
 # ---- Rebuild lane: Fedora packages with Apex patches (packaging/README.md) -------------
-# snapshot.sh commits a dirty tree in the VM copy first: the lane and lane.sh build from
-# git HEAD.
+# snapshot.sh first commits a dirty tree in the VM copy: the lane and lane.sh build from git HEAD.
 
 # Rebuild PKG (or all) from Fedora's SRPM with its series and Source1, in the builder VM.
 pkg-build pkg="all":

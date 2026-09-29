@@ -1,7 +1,5 @@
-//! Whether `/boot/grub2/grub.cfg` carries the boot counting snippet. bootupd writes it
-//! only at `bootc install`, so any version this image can drive passes the required check
-//! and an older one is only reported: otherwise the first image that ships a new version
-//! would be rolled back on every machine installed earlier.
+//! bootupd writes the snippet only at `bootc install`, so any version this image can drive passes
+//! the required check and an older one is only reported; else a new one rolls back older installs.
 
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};

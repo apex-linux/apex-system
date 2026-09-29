@@ -33,8 +33,7 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - name: Tools for checkout, the cache and the tests
-        # dbus-daemon runs the D-Bus tests' private buses; git, tar and diffutils run for
-        # real in apex-lane's tests/shell_fakes.rs.
+        # dbus-daemon: the D-Bus tests' private buses; git, tar and diffutils: apex-lane's shell_fakes.rs.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
           git-core tar gzip zstd xz findutils curl python3 dbus-daemon diffutils
@@ -67,8 +66,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
-        # The private-bus tests must run, not skip: apexctl's skip under
-        # APEXCTL_TEST_SKIP_BUS, apex-boot's without /usr/bin/dbus-daemon.
+        # The bus tests must run: apexctl's skip under APEXCTL_TEST_SKIP_BUS, apex-boot's without dbus-daemon.
         run: |
           unset APEXCTL_TEST_SKIP_BUS
           test -x /usr/bin/dbus-daemon || { echo "::error::/usr/bin/dbus-daemon is missing: the D-Bus tests would not run"; exit 1; }
@@ -130,8 +128,7 @@ jobs:
       contents: read
     container:
       image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-      # bubblewrap in t-repos.sh needs mount namespaces. The hosted runner is disposable
-      # and this job holds no secrets.
+      # Mount namespaces for bubblewrap in t-repos.sh; the runner is disposable and this job holds no secrets.
       options: --privileged
     env:
       APEX_IMAGE_TESTS_NO_SKIP: "1"
@@ -171,8 +168,7 @@ jobs:
       contents: read
     container:
       image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-      # bubblewrap binds a fixture over /proc/cmdline, which needs mount namespaces. The
-      # hosted runner is disposable and this job holds no secrets.
+      # Mount namespaces for bubblewrap's /proc/cmdline fixture; the runner is disposable and this job holds no secrets.
       options: --privileged
     env:
       APEX_LAYER_TESTS_NO_SKIP: "1"

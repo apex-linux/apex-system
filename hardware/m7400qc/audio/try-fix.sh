@@ -1,21 +1,12 @@
 #!/usr/bin/env bash
-# try-fix.sh: install or remove the rendered ALC294 HDA patch firmware on the CURRENT
-# host (the Ubuntu dev install of the M7400QC), to test it before Apex ships it.
-#
-# Idempotent: running an action twice changes nothing the second time. Nothing here
-# writes to the codec, reloads a module or rebuilds an initramfs.
-#
-# Exit codes: 0 ok; 1 usage; 2 refused (not root, missing or invalid files).
-#
-# Test hooks (never needed on the laptop): APEX_TRYFIX_ROOT prefixes every host path;
-# APEX_TRYFIX_ALLOW_NONROOT=1 skips the root check and only works together with
-# APEX_TRYFIX_ROOT; APEX_TRYFIX_GENERATED replaces the generated/ directory.
+# Idempotent, and never writes to the codec, reloads a module or rebuilds an initramfs.
 
 set -euo pipefail
 shopt -s inherit_errexit nullglob
 # Bytes, not locale characters: the kernel's 127-character line limit counts bytes.
 export LC_ALL=C
 
+readonly EXIT_USAGE=1 EXIT_REFUSED=2
 readonly CODEC_LINE="0x10ec0294 0x10431ab2 0"
 readonly FW_NAME=alc294-m7400qc.fw
 readonly FW_REF=apex/$FW_NAME
@@ -60,44 +51,39 @@ say() { printf '%s\n' "$*"; }
 require_root() {
     if ((EUID != 0)); then
         if [[ -z $ROOT || ${APEX_TRYFIX_ALLOW_NONROOT:-} != 1 ]]; then
-            die 2 "must run as root: sudo $0 $ACTION"
+            die "$EXIT_REFUSED" "must run as root: sudo $0 $ACTION"
         fi
     fi
 }
 
-# --- validation --------------------------------------------------------------------
-
 EXPECTED_INIT_VERBS=()
 
-# validate_fw FILE: accepts only what the Apex renderer (apexctl profile render)
-# produces: comments, one [codec] section whose only line is exactly "$CODEC_LINE", and
-# [verb] lines that select and write Realtek COEFs on NID 0x20 in the canonical
-# 0x500/0x400 form, written exactly like the kernel's init_verbs ("0x20 0x500 0x001b").
+# Accepts only what apexctl profile render writes, in the kernel's init_verbs form.
 validate_fw() {
     local file=$1 line n=0 section='' codec_seen=0 codec_lines=0 verbs=0 pending_index=0
     local nid verb param canonical
-    [[ -f $file && ! -L $file ]] || die 2 "$file is missing or not a regular file; render it first (just render)"
-    (($(stat -c %s -- "$file") <= 65536)) || die 2 "$file is larger than 64 KiB; that is not a rendered patch file"
+    [[ -f $file && ! -L $file ]] || die "$EXIT_REFUSED" "$file is missing or not a regular file; render it first (just render)"
+    (($(stat -c %s -- "$file") <= 65536)) || die "$EXIT_REFUSED" "$file is larger than 64 KiB; that is not a rendered patch file"
     EXPECTED_INIT_VERBS=()
     while IFS= read -r line || [[ -n $line ]]; do
         n=$((n + 1))
-        [[ $line != *$'\r'* ]] || die 2 "$file:$n: carriage return found; the file must use LF line endings"
-        ((${#line} <= 127)) || die 2 "$file:$n: line longer than 127 bytes; the kernel's patch loader stops reading the file there"
+        [[ $line != *$'\r'* ]] || die "$EXIT_REFUSED" "$file:$n: carriage return found; the file must use LF line endings"
+        ((${#line} <= 127)) || die "$EXIT_REFUSED" "$file:$n: line longer than 127 bytes; the kernel's patch loader stops reading the file there"
         [[ -n $line && $line != \#* ]] || continue
-        [[ $line != [[:space:]]* ]] || die 2 "$file:$n: leading whitespace; apexctl profile render never writes it (render again)"
+        [[ $line != [[:space:]]* ]] || die "$EXIT_REFUSED" "$file:$n: leading whitespace; apexctl profile render never writes it (render again)"
         if [[ $line == \[* ]]; then
             case $line in
             "[codec]")
-                ((codec_seen == 0)) || die 2 "$file:$n: a second [codec] section"
+                ((codec_seen == 0)) || die "$EXIT_REFUSED" "$file:$n: a second [codec] section"
                 codec_seen=1
                 section=codec
                 ;;
             "[verb]" | "[init_verbs]")
-                ((codec_seen == 1)) || die 2 "$file:$n: [verb] before [codec]; the kernel would ignore it"
+                ((codec_seen == 1)) || die "$EXIT_REFUSED" "$file:$n: [verb] before [codec]; the kernel would ignore it"
                 section=verb
                 ;;
             *)
-                die 2 "$file:$n: section '$line' is not allowed; ADR 0004 files have only [codec] and [verb]"
+                die "$EXIT_REFUSED" "$file:$n: section '$line' is not allowed; ADR 0004 files have only [codec] and [verb]"
                 ;;
             esac
             continue
@@ -105,67 +91,65 @@ validate_fw() {
         case $section in
         codec)
             [[ $line == "$CODEC_LINE" ]] ||
-                die 2 "$file:$n: the [codec] line must be exactly '$CODEC_LINE', found '$line'"
+                die "$EXIT_REFUSED" "$file:$n: the [codec] line must be exactly '$CODEC_LINE', found '$line'"
             codec_lines=$((codec_lines + 1))
             ;;
         verb)
             [[ $line =~ ^(0[xX][0-9a-fA-F]+)\ (0[xX][0-9a-fA-F]+)\ (0[xX][0-9a-fA-F]+)$ ]] ||
-                die 2 "$file:$n: expected '0xNID 0xVERB 0xPARAM', found '$line'"
+                die "$EXIT_REFUSED" "$file:$n: expected '0xNID 0xVERB 0xPARAM', found '$line'"
             nid=$((BASH_REMATCH[1]))
             verb=$((BASH_REMATCH[2]))
             param=$((BASH_REMATCH[3]))
-            ((nid == 0x20)) || die 2 "$file:$n: only NID 0x20 (the COEF widget) is allowed"
-            ((param <= 0xffff)) || die 2 "$file:$n: parameter larger than 16 bits"
+            ((nid == 0x20)) || die "$EXIT_REFUSED" "$file:$n: only NID 0x20 (the COEF widget) is allowed"
+            ((param <= 0xffff)) || die "$EXIT_REFUSED" "$file:$n: parameter larger than 16 bits"
             canonical=$(printf '0x%02x 0x%03x 0x%04x' "$nid" "$verb" "$param")
             [[ $line == "$canonical" ]] ||
-                die 2 "$file:$n: '$line' is not in the renderer's init_verbs form '$canonical'; render the file again (just render)"
+                die "$EXIT_REFUSED" "$file:$n: '$line' is not in the renderer's init_verbs form '$canonical'; render the file again (just render)"
             case $verb in
             $((0x500)))
                 pending_index=1
                 ;;
             $((0x400)))
-                ((pending_index == 1)) || die 2 "$file:$n: a COEF write (0x400) without a preceding index (0x500)"
+                ((pending_index == 1)) || die "$EXIT_REFUSED" "$file:$n: a COEF write (0x400) without a preceding index (0x500)"
                 pending_index=0
                 ;;
             *)
                 # 0x477-style verbs corrupt the value (docs/hardware/AUDIO.md).
-                die 2 "$file:$n: verb $(printf '0x%x' "$verb") is not allowed; use 0x500 (index) and 0x400 (value)"
+                die "$EXIT_REFUSED" "$file:$n: verb $(printf '0x%x' "$verb") is not allowed; use 0x500 (index) and 0x400 (value)"
                 ;;
             esac
             verbs=$((verbs + 1))
             EXPECTED_INIT_VERBS+=("$canonical")
             ;;
         *)
-            die 2 "$file:$n: data line outside a section"
+            die "$EXIT_REFUSED" "$file:$n: data line outside a section"
             ;;
         esac
     done <"$file"
-    ((codec_lines == 1)) || die 2 "$file: expected exactly one [codec] line '$CODEC_LINE', found $codec_lines"
-    ((verbs > 0)) || die 2 "$file: no [verb] lines; nothing to apply"
-    ((pending_index == 0)) || die 2 "$file: ends with a COEF index but no value"
+    ((codec_lines == 1)) || die "$EXIT_REFUSED" "$file: expected exactly one [codec] line '$CODEC_LINE', found $codec_lines"
+    ((verbs > 0)) || die "$EXIT_REFUSED" "$file: no [verb] lines; nothing to apply"
+    ((pending_index == 0)) || die "$EXIT_REFUSED" "$file: ends with a COEF index but no value"
 }
 
-# validate_conf FILE: exactly one options line giving snd-hda-intel $PATCH_SLOTS
-# identical patch= entries that name the Apex firmware file.
 validate_conf() {
     local file=$1 line n=0 options=0 entries entry count
-    [[ -f $file && ! -L $file ]] || die 2 "$file is missing or not a regular file; render it first (just render)"
+    [[ -f $file && ! -L $file ]] || die "$EXIT_REFUSED" "$file is missing or not a regular file; render it first (just render)"
     while IFS= read -r line || [[ -n $line ]]; do
         n=$((n + 1))
         [[ -n ${line//[[:space:]]/} && $line != \#* ]] || continue
         [[ $line =~ ^options[[:space:]]+snd[-_]hda[-_]intel[[:space:]]+patch=([^[:space:]]+)[[:space:]]*$ ]] ||
-            die 2 "$file:$n: expected 'options snd-hda-intel patch=...', found '$line'"
+            die "$EXIT_REFUSED" "$file:$n: expected 'options snd-hda-intel patch=...', found '$line'"
         options=$((options + 1))
         entries=${BASH_REMATCH[1]}
         IFS=, read -r -a parts <<<"$entries"
         count=${#parts[@]}
         ((count == PATCH_SLOTS)) ||
-            die 2 "$file:$n: $count patch= entries; the contract (ADR 0004) says $PATCH_SLOTS identical entries"
+            die "$EXIT_REFUSED" "$file:$n: $count patch= entries; the contract (ADR 0004) says $PATCH_SLOTS identical entries"
         for entry in "${parts[@]}"; do
-            [[ $entry == "$FW_REF" ]] || die 2 "$file:$n: patch= entry '$entry' is not '$FW_REF'"
+            [[ $entry == "$FW_REF" ]] || die "$EXIT_REFUSED" "$file:$n: patch= entry '$entry' is not '$FW_REF'"
         done
     done <"$file"
-    ((options == 1)) || die 2 "$file: expected exactly one options line, found $options"
+    ((options == 1)) || die "$EXIT_REFUSED" "$file: expected exactly one options line, found $options"
 }
 
 check_patch_loader() {
@@ -175,13 +159,11 @@ check_patch_loader() {
     elif [[ -r $ROOT/proc/config.gz ]]; then
         value=$(zcat -- "$ROOT/proc/config.gz" | grep -E '^CONFIG_SND_HDA_PATCH_LOADER=' || true)
     else
-        die 2 "cannot find the kernel config for $KVER (/boot/config-$KVER or /proc/config.gz)"
+        die "$EXIT_REFUSED" "cannot find the kernel config for $KVER (/boot/config-$KVER or /proc/config.gz)"
     fi
     [[ $value == CONFIG_SND_HDA_PATCH_LOADER=y ]] ||
-        die 2 "kernel $KVER does not have CONFIG_SND_HDA_PATCH_LOADER=y ('${value:-unset}'); the patch file would be ignored"
+        die "$EXIT_REFUSED" "kernel $KVER does not have CONFIG_SND_HDA_PATCH_LOADER=y ('${value:-unset}'); the patch file would be ignored"
 }
-
-# --- host checks and helpers --------------------------------------------------------
 
 # Other modprobe.d files that also set snd-hda-intel patch= would fight with ours.
 other_patch_options() {
@@ -198,7 +180,7 @@ other_patch_options() {
 initramfs_note() {
     local initrd=$ROOT/boot/initrd.img-$KVER listing
     if command -v lsinitramfs >/dev/null && [[ -r $initrd ]]; then
-        listing=$(lsinitramfs "$initrd") || die 2 "lsinitramfs $initrd failed"
+        listing=$(lsinitramfs "$initrd") || die "$EXIT_REFUSED" "lsinitramfs $initrd failed"
         if grep -Eq '(^|/)snd-hda-intel\.ko(\.[a-z0-9]+)?$' <<<"$listing"; then
             say ""
             say "NOTE: snd-hda-intel is inside the initramfs ${initrd#"$ROOT"}."
@@ -217,7 +199,7 @@ initramfs_note() {
 
 copy_atomic() {
     local src=$1 dst=$2 tmp
-    [[ ! -L $dst ]] || die 2 "$dst is a symlink; refusing to replace it"
+    [[ ! -L $dst ]] || die "$EXIT_REFUSED" "$dst is a symlink; refusing to replace it"
     if [[ -f $dst ]] && cmp -s -- "$src" "$dst"; then
         say "unchanged  ${dst#"$ROOT"}"
         return 0
@@ -235,8 +217,7 @@ copy_atomic() {
     fi
 }
 
-# rendered_verbs FILE: the [verb] data lines of a rendered patch file, which apexctl
-# writes in the kernel's init_verbs format, so they compare as text.
+# apexctl writes [verb] lines in the kernel's init_verbs format, so they compare as text.
 rendered_verbs() {
     sed -n '/^\[verb\]$/,/^\[/{/^0x/p}' -- "$1"
 }
@@ -264,8 +245,6 @@ print_verify() {
     say "Then record the COEFs with coef-dump.sh for the phase (C, D or E)."
 }
 
-# --- actions -----------------------------------------------------------------------
-
 do_install() {
     require_root
     validate_fw "$FW_SRC"
@@ -273,7 +252,7 @@ do_install() {
     check_patch_loader
     local others
     others=$(other_patch_options)
-    [[ -z $others ]] || die 2 "other modprobe.d files already set snd-hda-intel patch=: ${others//$'\n'/, }; remove that first"
+    [[ -z $others ]] || die "$EXIT_REFUSED" "other modprobe.d files already set snd-hda-intel patch=: ${others//$'\n'/, }; remove that first"
     install -d -m 0755 -- "$FW_DIR" "$(dirname -- "$CONF_DST")"
     copy_atomic "$FW_SRC" "$FW_DST"
     copy_atomic "$CONF_SRC" "$CONF_DST"
@@ -342,7 +321,7 @@ do_status() {
 }
 
 ACTION=${1:-}
-(($# <= 1)) || die 1 "exactly one action expected (see --help)"
+(($# <= 1)) || die "$EXIT_USAGE" "exactly one action expected (see --help)"
 case $ACTION in
 install) do_install ;;
 revert) do_revert ;;
@@ -352,6 +331,6 @@ status) do_status ;;
     ;;
 *)
     usage >&2
-    exit 1
+    exit "$EXIT_USAGE"
     ;;
 esac

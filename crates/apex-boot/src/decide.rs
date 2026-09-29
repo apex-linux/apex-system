@@ -1,9 +1,3 @@
-//! The decision table: a pure function from what is known after boot to what
-//! `apex-boot-assess` must do.
-//!
-//! `apex-updated` must refuse `Apply` until this boot's assessment has finished: every
-//! decision that clears the variables would clear a fresh arming too.
-
 use std::fmt;
 
 use crate::checks::{CheckResult, names};
@@ -33,7 +27,6 @@ impl DefaultDeployment {
         }
     }
 
-    /// `None` when that cannot be known.
     pub fn is_target(&self, target: &Digest, booted: Option<&Digest>) -> Option<bool> {
         match self {
             Self::Unknown => None,
@@ -122,7 +115,6 @@ pub enum Decision {
         failed_target: Digest,
         booted: Digest,
         hedge: Vec<EnvOp>,
-        /// The disarm, only after the report succeeded.
         ops: Vec<EnvOp>,
     },
     /// The arming no longer matches the boot order (a manual `bootc rollback`, a lost disarm,
@@ -133,9 +125,8 @@ pub enum Decision {
         failed_checks: Vec<String>,
         ops: Vec<EnvOp>,
     },
-    /// Another deployment runs while the target may still be the default (GRUB could not
-    /// load it, or the entry was picked by hand). Clearing the arming would leave a broken
-    /// default without counter or `fallback`, so GRUB goes on counting.
+    /// Another deployment runs while the target may still be the default (not loadable, or picked
+    /// by hand). Clearing would leave a broken default without counter or `fallback`.
     TargetSkipped {
         target: Digest,
         booted: Digest,
@@ -150,9 +141,6 @@ pub enum Decision {
     },
 }
 
-/// A failed grubenv write cancels later writes, the reboot and a required report (never
-/// reboot or ask for a rollback while grubenv cannot follow), but the record and best-effort
-/// reports still happen. A failed required report cancels everything but the reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     ApplyEnv(Vec<EnvOp>),
@@ -179,6 +167,7 @@ pub enum Step {
 }
 
 impl Step {
+    /// Never reboot or ask for a rollback while grubenv cannot follow.
     pub fn skipped_after_failure_of(&self, failed: &Step) -> bool {
         match failed {
             Step::ApplyEnv(_) => matches!(
@@ -224,9 +213,8 @@ pub fn reconcile_fallback(target: &Digest, booted: &Digest, now: &DefaultDeploym
     }
 }
 
-/// Which deployment runs and which one is the default is decided first, whatever the
-/// checks say: after a fallback a green previous deployment must still be made the default
-/// before the variables are cleared.
+/// The boot order comes before the checks: after a fallback, a green previous deployment must
+/// still be made the default before the variables are cleared.
 pub fn decide(input: &AssessInput) -> Decision {
     let vars = &input.vars;
     let mut failed_checks: Vec<String> = input

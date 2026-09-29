@@ -2,14 +2,6 @@
 #
 # GNU make. packaging/apex.spec's %install runs `make install`, so this file alone
 # defines the installed layout.
-#
-#   make build                   release binaries (cargo auditable when it is installed)
-#   make install DESTDIR=DIR     install the layout; never builds
-#   make check-data              validate D-Bus, polkit, desktop and systemd data files
-#   make rpm                     SRPM and RPMs from git HEAD with rpmbuild (packaging/README.md)
-#   make rpm-desktop             the apex-desktop SRPM and RPM from git HEAD (desktop/, without
-#                                desktop/shell/, which ships in the rebuilt gnome-shell)
-#   make clean
 
 PREFIX      ?= /usr
 BINDIR      ?= $(PREFIX)/bin
@@ -26,17 +18,13 @@ CARGO       ?= cargo
 INSTALL     ?= install
 RPMBUILD    ?= rpmbuild
 
-# auto: use `cargo auditable` when it is installed, else plain cargo with a warning.
-# yes:  fail when it is missing (the RPM build passes this, see packaging/apex.spec).
-# no:   never use it.
 AUDITABLE        ?= auto
 CARGO_BUILD_ARGS ?= --release --locked
 # Cargo honours CARGO_TARGET_DIR too, so both agree on where the binaries land.
 CARGO_TARGET_DIR ?= target
 RELEASE_DIR      := $(CARGO_TARGET_DIR)/release
 
-# Selected with --bin, not --workspace or --bins, to keep GUI crates and their GTK
-# dependency out of this build.
+# --bin, not --workspace or --bins: keeps the GUI crates and their GTK dependency out.
 APEX_BINS := apexctl apex-updated apex-boot-assess
 
 DBUS_IFACE_XML := crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml
@@ -48,13 +36,10 @@ XML_DATA := $(DBUS_IFACE_XML) \
 	$(UPDATED_DATA)/io.github.sekirokenjii.apex.update.policy
 UNITS := apex-updated.service apex-update-auto.service apex-update-auto.timer \
 	apex-boot-assess.service
-# systemd's own units that get an Apex drop-in. check-data verifies them with a stub of
-# the unit itself, since the check root holds only Apex files.
-DROPIN_UNITS := emergency.service rescue.service
+SYSTEMD_UNITS_WITH_APEX_DROPIN := emergency.service rescue.service
 CHECK_ROOT := $(abspath $(CARGO_TARGET_DIR))/check-data/root
 
-# RPM build from git HEAD. These are recursively expanded (=) on purpose, so git runs
-# only when `make rpm` actually needs the values.
+# The = variables expand lazily, so git and sed run only when a target needs them.
 SPEC          := packaging/apex.spec
 RPM_TOPDIR    := $(abspath $(CARGO_TARGET_DIR))/rpm
 SPEC_VERSION   = $(shell sed -n 's/^Version:[[:space:]]*//p' $(SPEC))
@@ -71,8 +56,17 @@ DESKTOP_VERSION   = $(shell sed -n 's/^Version:[[:space:]]*//p' $(DESKTOP_SPEC))
 all: build
 
 help:
-	@echo 'Targets: build install check-data rpm rpm-desktop clean'
+	@echo 'make build                release binaries (cargo auditable when it is installed)'
+	@echo 'make install DESTDIR=DIR  install the layout; never builds'
+	@echo 'make check-data           validate D-Bus, polkit, desktop and systemd data files'
+	@echo 'make rpm                  SRPM and RPMs from git HEAD with rpmbuild (packaging/README.md)'
+	@echo 'make rpm-desktop          the apex-desktop SRPM and RPM from git HEAD (desktop/, without'
+	@echo '                          desktop/shell/, which ships in the rebuilt gnome-shell)'
+	@echo 'make clean'
 	@echo 'Common variables: DESTDIR PREFIX LIBEXECDIR CARGO AUDITABLE=auto|yes|no RPMBUILD_FLAGS'
+	@echo 'AUDITABLE=auto            cargo auditable when installed, else plain cargo with a warning'
+	@echo 'AUDITABLE=yes             fail when cargo auditable is missing (the RPM build)'
+	@echo 'AUDITABLE=no              never use cargo auditable'
 
 build:
 	@set -e; \
@@ -108,7 +102,6 @@ install-bin:
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-updated '$(DESTDIR)$(LIBEXECDIR)/apex-updated'
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-boot-assess '$(DESTDIR)$(LIBEXECDIR)/apex-boot-assess'
 
-# $(call install_data,ROOT): the data files, below ROOT.
 define install_data
 	$(INSTALL) -Dm0644 $(DBUS_IFACE_XML) \
 		'$(1)$(DBUSDIR)/interfaces/io.github.sekirokenjii.Apex.Update1.xml'
@@ -139,11 +132,8 @@ endef
 install-data:
 	$(call install_data,$(DESTDIR))
 
-# Each tool is optional on a development host; a missing one is reported and skipped.
-# The RPM %check and CI install all of them. systemd-analyze verifies the units inside
-# a staged root that holds the data files plus stub binaries (and stubs of the systemd
-# units that get Apex drop-ins), so the check needs no cargo build and never looks at
-# the host's /usr. The units name /usr paths, so this check assumes the default PREFIX.
+# Validators missing on a dev host are skipped; the RPM %check and CI install all of them.
+# The units name /usr paths: the staged root (stub binaries, no cargo build) needs PREFIX=/usr.
 check-data:
 	@if command -v xmllint >/dev/null 2>&1; then \
 		echo "xmllint --noout --nonet $(XML_DATA)"; \
@@ -182,15 +172,14 @@ check-data:
 		printf '#!/bin/sh\nexit 0\n' > '$(CHECK_ROOT)'"$$f"; \
 		chmod 0755 '$(CHECK_ROOT)'"$$f"; \
 	done; \
-	for u in $(DROPIN_UNITS); do \
+	for u in $(SYSTEMD_UNITS_WITH_APEX_DROPIN); do \
 		printf '[Unit]\nDescription=stub of %s\nDefaultDependencies=no\n\n[Service]\nType=idle\nExecStart=/usr/bin/true\n' \
 			"$$u" > '$(CHECK_ROOT)$(UNITDIR)/'"$$u"; \
 	done; \
-	echo "systemd-analyze verify --root=$(CHECK_ROOT) $(UNITS) $(DROPIN_UNITS)"; \
+	echo "systemd-analyze verify --root=$(CHECK_ROOT) $(UNITS) $(SYSTEMD_UNITS_WITH_APEX_DROPIN)"; \
 	systemd-analyze verify --man=no --recursive-errors=no \
-		--root='$(CHECK_ROOT)' $(UNITS) $(DROPIN_UNITS)
+		--root='$(CHECK_ROOT)' $(UNITS) $(SYSTEMD_UNITS_WITH_APEX_DROPIN)
 
-# Packages the committed tree (git archive HEAD): uncommitted changes are not in the RPM.
 rpm:
 	@if [ -z '$(SHORTCOMMIT)' ]; then \
 		echo "error: 'make rpm' packages git HEAD, and this checkout has no commit" >&2; \
@@ -212,7 +201,6 @@ rpm:
 		--define 'shortcommit $(SHORTCOMMIT)' \
 		$(RPMBUILD_FLAGS)
 
-# Packages the committed tree, like rpm.
 rpm-desktop:
 	@if [ -z '$(SHORTCOMMIT)' ]; then \
 		echo "error: 'make rpm-desktop' packages git HEAD, and this checkout has no commit" >&2; \

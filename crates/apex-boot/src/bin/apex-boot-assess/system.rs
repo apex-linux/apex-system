@@ -1,6 +1,5 @@
-//! The production ports. zbus and apex-bootc are async on the tokio runtime, so each call
-//! here is `Handle::block_on` from a non-runtime thread; this works because the main thread
-//! drives the runtime for the whole assessment.
+//! The checks run on plain threads and zbus and apex-bootc on tokio: each call here is
+//! `Handle::block_on` from a non-runtime thread, while the main thread drives the runtime.
 
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -121,7 +120,6 @@ impl Sessions for Logind {
                     .cache_properties(CacheProperties::No)
                     .build()
                     .await?;
-                // An empty class counts as possibly somebody's session: never reboot on a guess.
                 let (Ok(class), Ok(state), Ok(created)) = (
                     session.class().await,
                     session.state().await,
@@ -217,9 +215,6 @@ impl Updater for Daemon {
     }
 }
 
-/// After `SIGKILL` apex-bootc may wait another 10 s for the process to be reaped, which the
-/// time budget does not cover, so the call is abandoned at [`BOOTC_STATUS_BOUND`].
-///
 /// bootc takes the ostree sysroot lock even for `status`, remounting `/sysroot` and `/boot`
 /// read-write in the unit's private mount namespace, never the host's.
 #[derive(Debug, Clone)]

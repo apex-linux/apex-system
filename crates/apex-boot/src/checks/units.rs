@@ -12,11 +12,8 @@ pub const SYSTEMCTL: &str = "/usr/bin/systemctl";
 /// before the runner gives up on it.
 pub const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(25);
 
-/// Only units whose failure makes the desktop, logging in, or updating and rolling back
-/// unusable. Deliberately absent: `ostree-boot-complete` (fails for a failed stage, not for
-/// this deployment), anything that needs the network to be reachable,
-/// `systemd-tmpfiles-setup` (fails for any bad package line), the D-Bus-activated
-/// `apex-updated` (the `Ping` check covers it) and hardware services (reported checks).
+/// Units whose failure breaks the desktop, logging in, or updating and rolling back. Left out on
+/// purpose: ostree-boot-complete, systemd-tmpfiles-setup, network and hardware units, apex-updated.
 pub const REQUIRED_UNITS: &[&str] = &[
     "boot.mount",
     "ostree-remount.service",

@@ -1,23 +1,5 @@
 //! Tokio clients build the [`zbus::Connection`] inside the runtime. `GLib` main-loop clients
 //! enable the `async-io` feature: zbus 5.19 then drives connections built outside tokio itself.
-//!
-//! ```no_run
-//! # async fn example() -> Result<(), apex_dbus::ApexError> {
-//! use apex_dbus::{ApexError, State, Update1Proxy};
-//!
-//! let connection = zbus::Connection::system().await?;
-//! let proxy = Update1Proxy::new(&connection).await?;
-//! if proxy.state().await? == State::Staged {
-//!     let staged = proxy.staged().await?;
-//!     match proxy.apply(staged.digest.as_deref().unwrap_or_default()).await {
-//!         Ok(()) => println!("reboot to finish"),
-//!         Err(ApexError::DigestMismatch(message)) => eprintln!("the stage changed: {message}"),
-//!         Err(other) => return Err(other),
-//!     }
-//! }
-//! # Ok(())
-//! # }
-//! ```
 
 mod deployment;
 mod error;

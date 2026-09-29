@@ -26,7 +26,6 @@ apex-boot.workspace = true
 apex-bootc.workspace = true
 apex-dbus.workspace = true
 apex-update.workspace = true
-# `fs` (workspace) provides statvfs and O_NOFOLLOW.
 nix.workspace = true
 sd-notify.workspace = true
 thiserror.workspace = true
@@ -38,7 +37,6 @@ zbus.workspace = true
 zbus_polkit.workspace = true
 
 [dev-dependencies]
-# Self dev-dependency so the integration tests can use the `testing` feature.
 apex-updated = { path = ".", features = ["testing"] }
 apex-bootc = { workspace = true, features = ["testing"] }
 insta.workspace = true

@@ -86,9 +86,8 @@ fn known_image<'h>(host: &'h Host, digest: &str) -> Option<&'h ImageStatus> {
         .or_else(|| host.cached_update_for(digest))
 }
 
-/// bootc compares the tag with the image pulled last and prints a digest only when they
-/// differ, so "no changes" means the image `last` records. `cachedUpdate` is never cleared,
-/// so it describes the remote only when its digest matches.
+/// bootc prints a digest only when the tag differs from the image pulled last, so "no changes"
+/// means the image `last` records. `cachedUpdate` is never cleared: only a matching digest counts.
 pub fn remote_after_check(
     outcome: &CheckOutcome,
     host: &Host,

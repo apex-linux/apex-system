@@ -1,6 +1,5 @@
-//! Runs the real `data/08_apex-bootcount.cfg` through an interpreter for the GRUB script
-//! subset it uses. The interpreter panics on anything else, so the snippet cannot silently
-//! grow beyond what is tested here.
+//! Runs the real `data/08_apex-bootcount.cfg` through an interpreter of just the GRUB script it
+//! uses; anything else panics, so the snippet cannot silently outgrow what is tested here.
 
 #![allow(
     clippy::unwrap_used,

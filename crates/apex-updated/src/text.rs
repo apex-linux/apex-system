@@ -1,8 +1,12 @@
+use std::ops::RangeInclusive;
+
 pub const MAX_CHARS: usize = 2048;
 
-/// A NUL in a D-Bus string makes zbus clients fail to decode the reply, and control and
-/// bidi characters from a registry would rewrite the line `apexctl` prints. U+FFFD keeps
-/// visible that something was there.
+const BIDI_EMBEDDINGS_AND_OVERRIDES: RangeInclusive<char> = '\u{202a}'..='\u{202e}';
+const BIDI_ISOLATES: RangeInclusive<char> = '\u{2066}'..='\u{2069}';
+
+/// A NUL in a D-Bus string breaks zbus clients' decoding, and control and bidi characters from a
+/// registry would rewrite the line `apexctl` prints. U+FFFD keeps visible that something was there.
 pub fn display_text(text: &str) -> String {
     let clean = !text.chars().any(unsafe_char) && text.chars().nth(MAX_CHARS).is_none();
     if clean {
@@ -24,9 +28,8 @@ pub fn display_text(text: &str) -> String {
     out
 }
 
-/// Bidi embeddings and overrides are U+202A–U+202E, isolates U+2066–U+2069.
 fn unsafe_char(c: char) -> bool {
-    c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    c.is_control() || BIDI_EMBEDDINGS_AND_OVERRIDES.contains(&c) || BIDI_ISOLATES.contains(&c)
 }
 
 #[cfg(test)]

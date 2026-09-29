@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-#
-# Assert that the rustc on PATH is the release pinned in rust-toolchain.toml.
-#
-#   rust-toolchain-check.sh              fail on a mismatch (ci.yml)
-#   rust-toolchain-check.sh --warn-only  report a mismatch as a warning (rpms.sh build)
 
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+usage() {
+    cat >&2 <<'EOF'
+
+Assert that the rustc on PATH is the release pinned in rust-toolchain.toml.
+
+  rust-toolchain-check.sh              fail on a mismatch (ci.yml)
+  rust-toolchain-check.sh --warn-only  report a mismatch as a warning (rpms.sh build)
+EOF
+    exit 2
+}
 
 warn_only=0
 case ${1:-} in

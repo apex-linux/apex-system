@@ -1,6 +1,5 @@
 //! Whole boot sequences under injected faults: GRUB's snippet model, the assessment with the
-//! binary's failure policy, and a fake `apex-updated` whose fallback swaps the boot entries
-//! as `bootc rollback` does.
+//! binary's failure policy, and a fake `apex-updated` swapping entries as `bootc rollback` does.
 
 #![allow(
     clippy::unwrap_used,
@@ -858,9 +857,8 @@ fn arb_conditions() -> impl Strategy<Value = BootConditions> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(4000))]
 
-    /// Stops at the first boot after the rollback whose assessment may not have written
-    /// grubenv or whose entry was picked by hand: from there, `HEDGE_COUNTER` such boots can
-    /// use up the hedge (`a_lost_fallback_reply_survives_quick_shutdowns` shows the margin).
+    /// Stops at the first `faulty` boot after the rollback: from there `HEDGE_COUNTER` such boots
+    /// can use up the hedge; `a_lost_fallback_reply_survives_quick_shutdowns` shows the margin.
     #[test]
     fn nothing_loops_and_a_rolled_back_target_stays_away(
         boots in prop::collection::vec(arb_conditions(), 1..20),

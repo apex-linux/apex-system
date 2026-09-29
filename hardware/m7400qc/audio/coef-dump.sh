@@ -1,36 +1,18 @@
 #!/usr/bin/env bash
-# coef-dump.sh: read-only snapshot of the Realtek ALC294 processing coefficients
-# (COEFs) on the ASUS Vivobook Pro 14X OLED M7400QC.
-#
-# The script only READS COEFs: it uses the hda-verb verbs SET_COEF_INDEX (selects a
-# slot, like the kernel's own dump_coef proc code does), GET_PROC_COEF and
-# GET_COEF_INDEX. It never writes a coefficient value. At the end it restores the
-# coefficient index it found, as the kernel's proc dumper does.
-#
-# Exit codes: 0 ok; 1 usage; 2 refused (precondition not met); 3 hda-verb failed or
-# its output could not be parsed; 70 internal error.
-#
-# Test hooks (never needed on the laptop): APEX_AUDIO_SYSROOT prefixes /sys, /proc and
-# /dev; APEX_AUDIO_ALLOW_NONROOT=1 skips the root check, and only works together with
-# APEX_AUDIO_SYSROOT; APEX_AUDIO_OUTDIR replaces /var/tmp/apex-audio;
-# APEX_AUDIO_GENERATED replaces the generated/ directory next to this one.
 
 set -euo pipefail
-# Command substitutions must fail the script too (bash disables errexit in them
-# otherwise, and a failed read would then look like a value of 0).
+# Without inherit_errexit a failed read inside $(...) would pass as a value of 0.
 shopt -s inherit_errexit nullglob
-# Bytes, not locale characters: string lengths, [[:print:]] and sort order must mean
-# what apexctl and the kernel mean.
+# Bytes: lengths, [[:print:]] and sort order must mean what apexctl and the kernel mean.
 export LC_ALL=C
 
+readonly EXIT_USAGE=1 EXIT_REFUSED=2 EXIT_READ_FAILED=3 EXIT_INTERNAL=70
 readonly VENDOR_ID=0x10ec0294
 readonly SUBSYSTEM_ID=0x10431ab2
 readonly COEF_NID=0x20
 readonly DEFAULT_INDEXES=(0x0f 0x1b 0x40)
-# The candidate fix sets this bit of COEF 0x1b (profile.toml [audio.fix]).
-readonly BIT10=0x0400
-# apexctl's profile schema: [audio.measurements] bios and kernel are 1 to 64 printable
-# ASCII characters (crates/apexctl/src/profile.rs, MAX_PROVENANCE_LEN).
+readonly COEF_1B_FIX_BIT=0x0400
+# apexctl's limit for [audio.measurements] bios and kernel (profile.rs MAX_PROVENANCE_LEN).
 readonly MAX_PROVENANCE_LEN=64
 readonly FW_NAME=alc294-m7400qc.fw
 
@@ -95,8 +77,6 @@ die() {
     exit "$code"
 }
 
-# --- argument parsing -------------------------------------------------------------
-
 PHASE=
 FORCE=0
 EXTRA=()
@@ -111,7 +91,7 @@ while (($# > 0)); do
         shift
         ;;
     --extra)
-        (($# >= 2)) || die 1 "--extra needs a value"
+        (($# >= 2)) || die "$EXIT_USAGE" "--extra needs a value"
         IFS=, read -r -a parts <<<"$2"
         EXTRA+=("${parts[@]}")
         shift 2
@@ -122,10 +102,10 @@ while (($# > 0)); do
         shift
         ;;
     -*)
-        die 1 "unknown option: $1 (see --help)"
+        die "$EXIT_USAGE" "unknown option: $1 (see --help)"
         ;;
     *)
-        [[ -z $PHASE ]] || die 1 "only one PHASE may be given"
+        [[ -z $PHASE ]] || die "$EXIT_USAGE" "only one PHASE may be given"
         PHASE=$1
         shift
         ;;
@@ -133,7 +113,7 @@ while (($# > 0)); do
 done
 [[ -n $PHASE ]] || {
     usage >&2
-    exit 1
+    exit "$EXIT_USAGE"
 }
 
 case $PHASE in
@@ -168,7 +148,7 @@ E)
     FIX_EXPECTED=yes
     ;;
 *)
-    die 1 "PHASE must be one of A B C D E, not '$PHASE' (see --help)"
+    die "$EXIT_USAGE" "PHASE must be one of A B C D E, not '$PHASE' (see --help)"
     ;;
 esac
 
@@ -177,7 +157,7 @@ INDEXES=()
 for raw in "${DEFAULT_INDEXES[@]}" "${EXTRA[@]}"; do
     raw=${raw//[[:space:]]/}
     [[ -n $raw ]] || continue
-    [[ $raw =~ ^0[xX][0-9a-fA-F]{1,2}$ ]] || die 1 "COEF index '$raw' is not a hex value 0x00-0xff"
+    [[ $raw =~ ^0[xX][0-9a-fA-F]{1,2}$ ]] || die "$EXIT_USAGE" "COEF index '$raw' is not a hex value 0x00-0xff"
     norm=$(printf '0x%02x' "$((raw))")
     [[ -z ${SEEN[$norm]:-} ]] || continue
     SEEN[$norm]=1
@@ -185,15 +165,13 @@ for raw in "${DEFAULT_INDEXES[@]}" "${EXTRA[@]}"; do
 done
 mapfile -t INDEXES < <(printf '%s\n' "${INDEXES[@]}" | sort)
 
-# --- preconditions ---------------------------------------------------------------
-
 if ((EUID != 0)); then
     if [[ -z $SYSROOT || ${APEX_AUDIO_ALLOW_NONROOT:-} != 1 ]]; then
-        die 2 "must run as root (the hwdep interface needs CAP_SYS_RAWIO): sudo $0 $PHASE"
+        die "$EXIT_REFUSED" "must run as root (the hwdep interface needs CAP_SYS_RAWIO): sudo $0 $PHASE"
     fi
 fi
 
-HDA_VERB=$(command -v hda-verb) || die 2 "hda-verb not found; install alsa-tools"
+HDA_VERB=$(command -v hda-verb) || die "$EXIT_REFUSED" "hda-verb not found; install alsa-tools"
 
 read_file() {
     local content
@@ -231,8 +209,7 @@ provenance_ok() {
 }
 
 rendered_verbs() {
-    # Prints the [verb] data lines of a rendered patch file. apexctl writes them in the
-    # kernel's init_verbs format ("0x20 0x500 0x001b"), so they compare as text.
+    # apexctl writes [verb] lines in the kernel's init_verbs format, so they compare as text.
     sed -n '/^\[verb\]$/,/^\[/{/^0x/p}' -- "$1"
 }
 
@@ -249,28 +226,28 @@ for dir in "$SYSROOT"/sys/class/sound/hwC*D*; do
         MATCHES+=("$dir")
     fi
 done
-((${#MATCHES[@]} > 0)) || die 2 "no HDA codec with vendor_id $VENDOR_ID and subsystem_id $SUBSYSTEM_ID under /sys/class/sound; is this the M7400QC with snd-hda-intel loaded?"
-((${#MATCHES[@]} == 1)) || die 2 "more than one matching codec (${MATCHES[*]##*/}); refusing to guess"
+((${#MATCHES[@]} > 0)) || die "$EXIT_REFUSED" "no HDA codec with vendor_id $VENDOR_ID and subsystem_id $SUBSYSTEM_ID under /sys/class/sound; is this the M7400QC with snd-hda-intel loaded?"
+((${#MATCHES[@]} == 1)) || die "$EXIT_REFUSED" "more than one matching codec (${MATCHES[*]##*/}); refusing to guess"
 CODEC_SYSFS=${MATCHES[0]}
 HWDEP=${CODEC_SYSFS##*/}
 [[ $HWDEP =~ ^hwC([0-9]+)D([0-9]+)$ ]]
 CARD=${BASH_REMATCH[1]}
 ADDR=${BASH_REMATCH[2]}
 DEV=$SYSROOT/dev/snd/$HWDEP
-[[ -c $DEV ]] || die 2 "$DEV is not a character device"
+[[ -c $DEV ]] || die "$EXIT_REFUSED" "$DEV is not a character device"
 
 # Refuse while audio is streaming on this card: selecting a COEF slot could race with
 # the driver, and the result would not describe an idle codec anyway.
 BUSY=()
 STATUS_FILES=("$SYSROOT"/proc/asound/card"$CARD"/pcm*/sub*/status)
 ((${#STATUS_FILES[@]} > 0)) ||
-    die 2 "no /proc/asound/card$CARD/pcm*/sub*/status files (CONFIG_SND_VERBOSE_PROCFS?); cannot confirm the card is idle"
+    die "$EXIT_REFUSED" "no /proc/asound/card$CARD/pcm*/sub*/status files (CONFIG_SND_VERBOSE_PROCFS?); cannot confirm the card is idle"
 for status in "${STATUS_FILES[@]}"; do
     if grep -Eq '^state:[[:space:]]*(RUNNING|DRAINING)' "$status"; then
         BUSY+=("${status#"$SYSROOT"}")
     fi
 done
-((${#BUSY[@]} == 0)) || die 2 "PCM streams are running on card $CARD (${BUSY[*]}); stop playback and recording (or stop PipeWire) and retry"
+((${#BUSY[@]} == 0)) || die "$EXIT_REFUSED" "PCM streams are running on card $CARD (${BUSY[*]}); stop playback and recording (or stop PipeWire) and retry"
 
 CHIP=$(read_file "$CODEC_SYSFS/chip_name")
 REVISION=$(read_file "$CODEC_SYSFS/revision_id")
@@ -304,8 +281,6 @@ else
     FIX_LOADED=no
 fi
 
-# Is the loaded fix the rendered one? The kernel prints init_verbs as
-# "0x%02x 0x%03x 0x%04x", the format apexctl renders [verb] lines in.
 if [[ $FIX_LOADED == no ]]; then
     FIX_MATCH="n/a (no fix loaded)"
 elif [[ ! -f $RENDERED_FW ]]; then
@@ -316,53 +291,47 @@ else
     FIX_MATCH="DIFFERENT: init_verbs are not the [verb] lines of $RENDERED_FW"
 fi
 
-# Phase consistency: a "without fix" measurement with the fix loaded (or the reverse)
-# would put wrong numbers into profile.toml.
+# A measurement taken in the wrong fix state would put wrong numbers into profile.toml.
 if ((FORCE == 0)); then
     if [[ $FIX_EXPECTED == no && $FIX_LOADED == yes ]]; then
-        die 2 "phase $PHASE is measured WITHOUT the fix, but init_verbs is not empty (fix loaded). Run 'sudo try-fix.sh revert', redo the phase preparation, or pass --force"
+        die "$EXIT_REFUSED" "phase $PHASE is measured WITHOUT the fix, but init_verbs is not empty (fix loaded). Run 'sudo try-fix.sh revert', redo the phase preparation, or pass --force"
     fi
     if [[ $FIX_EXPECTED == yes && $FIX_LOADED == no ]]; then
-        die 2 "phase $PHASE needs the fix loaded, but init_verbs is empty. Run 'sudo try-fix.sh install' and redo the phase preparation, or pass --force"
+        die "$EXIT_REFUSED" "phase $PHASE needs the fix loaded, but init_verbs is empty. Run 'sudo try-fix.sh install' and redo the phase preparation, or pass --force"
     fi
     if [[ $FIX_EXPECTED == yes && $FIX_MATCH == DIFFERENT* ]]; then
-        die 2 "phase $PHASE measures the rendered fix, but the loaded init_verbs differ from the [verb] lines of $RENDERED_FW (rendered again after installing?). Run 'sudo try-fix.sh install', redo the phase preparation, or pass --force"
+        die "$EXIT_REFUSED" "phase $PHASE measures the rendered fix, but the loaded init_verbs differ from the [verb] lines of $RENDERED_FW (rendered again after installing?). Run 'sudo try-fix.sh install', redo the phase preparation, or pass --force"
     fi
     if [[ $PHASE == D ]] && ! [[ $SUSPENDS =~ ^[0-9]+$ && $SUSPENDS -ge 1 ]]; then
-        die 2 "phase D needs a completed suspend in this boot, but /sys/power/suspend_stats/success is '${SUSPENDS:-missing}'. Suspend and resume first, or pass --force"
+        die "$EXIT_REFUSED" "phase D needs a completed suspend in this boot, but /sys/power/suspend_stats/success is '${SUSPENDS:-missing}'. Suspend and resume first, or pass --force"
     fi
 fi
-
-# --- hda-verb wrapper --------------------------------------------------------------
 
 TMP=$(mktemp -d)
 cleanup() { rm -rf -- "$TMP"; }
 trap cleanup EXIT
 
-# run_verb VERB PARAM: runs one read-only verb and prints the 32-bit response in
-# decimal. Only the three verbs below can ever be sent.
+# Read-only: SET_COEF_INDEX only selects a slot, as the kernel's dump_coef does.
 run_verb() {
     local verb=$1 param=$2 expect rc=0 out err line value=
     case $verb in
     SET_COEF_INDEX) expect=0x500 ;;
     GET_PROC_COEF) expect=0xc00 ;;
     GET_COEF_INDEX) expect=0xd00 ;;
-    *) die 70 "internal error: verb '$verb' is not allowed" ;;
+    *) die "$EXIT_INTERNAL" "internal error: verb '$verb' is not allowed" ;;
     esac
     out=$("$HDA_VERB" "$DEV" "$COEF_NID" "$verb" "$param" 2>"$TMP/stderr") || rc=$?
     err=$(<"$TMP/stderr")
-    ((rc == 0)) || die 3 "hda-verb $verb $param exited with $rc: ${err//$'\n'/ }"
+    ((rc == 0)) || die "$EXIT_READ_FAILED" "hda-verb $verb $param exited with $rc: ${err//$'\n'/ }"
     # hda-verb reports a failed ioctl with perror("ioctl") but still prints
     # "value = 0x0" and exits 0, so stderr must be checked.
     [[ $err != *ioctl* && $err != *"Looks like an invalid hwdep"* ]] ||
-        die 3 "hda-verb $verb $param failed: ${err//$'\n'/ }"
-    # hda-verb echoes "nid = 0x20, verb = 0x500, param = 0x1b" on stderr; make sure
-    # the symbolic name resolved to the verb we expect before trusting the value.
+        die "$EXIT_READ_FAILED" "hda-verb $verb $param failed: ${err//$'\n'/ }"
+    # Trust the value only if hda-verb resolved the symbolic name to the expected verb.
     [[ $err =~ nid\ =\ (0x[0-9a-fA-F]+),\ verb\ =\ (0x[0-9a-fA-F]+),\ param\ =\ (0x[0-9a-fA-F]+) ]] ||
-        die 3 "unexpected hda-verb stderr for $verb: ${err//$'\n'/ }"
+        die "$EXIT_READ_FAILED" "unexpected hda-verb stderr for $verb: ${err//$'\n'/ }"
     ((BASH_REMATCH[1] == COEF_NID && BASH_REMATCH[2] == expect && BASH_REMATCH[3] == param)) ||
-        die 3 "hda-verb sent nid ${BASH_REMATCH[1]} verb ${BASH_REMATCH[2]} param ${BASH_REMATCH[3]}, expected $COEF_NID $expect $param"
-    # stdout must contain exactly one "value = 0x..." line (printf "value = 0x%x\n").
+        die "$EXIT_READ_FAILED" "hda-verb sent nid ${BASH_REMATCH[1]} verb ${BASH_REMATCH[2]} param ${BASH_REMATCH[3]}, expected $COEF_NID $expect $param"
     local count=0
     while IFS= read -r line; do
         line=${line%$'\r'}
@@ -370,15 +339,13 @@ run_verb() {
             value=$((16#${BASH_REMATCH[1]}))
             count=$((count + 1))
         elif [[ -n ${line//[[:space:]]/} ]]; then
-            die 3 "unexpected hda-verb output for $verb: $line"
+            die "$EXIT_READ_FAILED" "unexpected hda-verb output for $verb: $line"
         fi
     done <<<"$out"
-    ((count == 1)) || die 3 "expected one 'value = 0x...' line from hda-verb $verb, got $count"
+    ((count == 1)) || die "$EXIT_READ_FAILED" "expected one 'value = 0x...' line from hda-verb $verb, got $count"
     printf '%d' "$value"
 }
 
-# read_coef IDX: selects the slot, confirms the codec reports that slot, reads the
-# value, and repeats; two identical reads are required (at most 3 tries).
 read_coef() {
     local idx=$1 attempt first second index
     for attempt in 1 2 3; do
@@ -394,28 +361,25 @@ read_coef() {
         second=$(run_verb GET_PROC_COEF 0)
         if ((first == second)); then
             if ((first > 0xffff)); then
-                die 3 "COEF $idx read back as $(printf '0x%x' "$first"): the codec did not answer"
+                die "$EXIT_READ_FAILED" "COEF $idx read back as $(printf '0x%x' "$first"): the codec did not answer"
             fi
             printf '%d' "$first"
             return 0
         fi
         printf '%s: COEF %s changed between two reads (attempt %d), retrying\n' "$PROG" "$idx" "$attempt" >&2
     done
-    die 3 "could not get a stable read of COEF $idx after 3 attempts"
+    die "$EXIT_READ_FAILED" "could not get a stable read of COEF $idx after 3 attempts"
 }
-
-# --- measurement -------------------------------------------------------------------
 
 OLD_INDEX=$(run_verb GET_COEF_INDEX 0)
 declare -A VALUE=()
 for idx in "${INDEXES[@]}"; do
     VALUE[$idx]=$(read_coef "$idx")
 done
+# Leave the COEF index as found, as the kernel's proc dumper does.
 if ((OLD_INDEX <= 0xffff)); then
     run_verb SET_COEF_INDEX "$(printf '0x%x' "$OLD_INDEX")" >/dev/null
 fi
-
-# --- report ------------------------------------------------------------------------
 
 hex4() { printf '0x%04x' "$1"; }
 
@@ -427,7 +391,7 @@ bits_of() {
     printf '%s' "${out[*]}"
 }
 
-# The newest phase-A report, if any, is the reference for B-E.
+# The newest phase-A report (names sort by UTC stamp) is the reference for B-E.
 REF_FILE=
 declare -A REF=()
 if [[ $PHASE != A ]]; then
@@ -486,15 +450,15 @@ report() {
         v=${VALUE[$idx]}
         note=
         if [[ $idx == 0x1b ]]; then
-            if ((v & BIT10)); then note="   bit 10 (0x0400) SET"; else note="   bit 10 (0x0400) CLEAR"; fi
+            if ((v & COEF_1B_FIX_BIT)); then note="   bit 10 (0x0400) SET"; else note="   bit 10 (0x0400) CLEAR"; fi
         fi
         printf '#   %s = %s%s\n' "$idx" "$(hex4 "$v")" "$note"
     done
     if [[ $PHASE == A && -n ${VALUE[0x1b]:-} ]]; then
         printf '#\n# With the current [audio.fix] rule (set 0x0400 on 0x1b) the renderer would\n'
         printf '# write COEF 0x1b = %s (cold value | 0x0400) as the [verb] lines\n' \
-            "$(hex4 $((VALUE[0x1b] | BIT10)))"
-        printf '#   %s 0x500 0x001b\n#   %s 0x400 %s\n' "$COEF_NID" "$COEF_NID" "$(hex4 $((VALUE[0x1b] | BIT10)))"
+            "$(hex4 $((VALUE[0x1b] | COEF_1B_FIX_BIT)))"
+        printf '#   %s 0x500 0x001b\n#   %s 0x400 %s\n' "$COEF_NID" "$COEF_NID" "$(hex4 $((VALUE[0x1b] | COEF_1B_FIX_BIT)))"
         printf '# The renderer (apexctl profile render) is authoritative.\n'
     fi
     if [[ $PHASE != A ]]; then
@@ -552,13 +516,13 @@ report() {
 
 # Refuse a symlinked or foreign-owned output directory (/var/tmp is world-writable).
 if [[ -L $OUTDIR ]]; then
-    die 2 "$OUTDIR is a symlink; refusing to write there"
+    die "$EXIT_REFUSED" "$OUTDIR is a symlink; refusing to write there"
 fi
 if [[ -e $OUTDIR ]]; then
-    [[ -d $OUTDIR ]] || die 2 "$OUTDIR exists and is not a directory"
+    [[ -d $OUTDIR ]] || die "$EXIT_REFUSED" "$OUTDIR exists and is not a directory"
     read -r owner mode < <(stat -c '%u %a' -- "$OUTDIR")
-    ((owner == EUID)) || die 2 "$OUTDIR is owned by uid $owner, not $EUID; refusing to write there"
-    ((8#$mode & 8#022)) && die 2 "$OUTDIR is group- or world-writable (mode $mode); refusing to write there"
+    ((owner == EUID)) || die "$EXIT_REFUSED" "$OUTDIR is owned by uid $owner, not $EUID; refusing to write there"
+    ((8#$mode & 8#022)) && die "$EXIT_REFUSED" "$OUTDIR is group- or world-writable (mode $mode); refusing to write there"
 else
     install -d -m 0755 -- "$OUTDIR"
 fi

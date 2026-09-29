@@ -1,6 +1,3 @@
-//! `health-failure.json`, written for a red armed boot so the failure survives even if
-//! `apex-updated` cannot be reached.
-
 use serde::{Deserialize, Serialize};
 
 use crate::digest::Digest;

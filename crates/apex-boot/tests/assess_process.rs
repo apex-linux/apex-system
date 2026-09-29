@@ -1,6 +1,5 @@
-//! Runs the built binary. `bootc` points at a missing program, so the booted digest comes
-//! from the fake daemon; the unit checks ask this host's real systemd, so the qualification
-//! hook makes the decision deterministic.
+//! Runs the built binary with `bootc` missing, so the booted digest comes from the fake daemon;
+//! the unit checks ask this host's real systemd, so the qualification hook fixes the decision.
 
 #![allow(
     clippy::unwrap_used,
@@ -137,7 +136,6 @@ fn an_unusable_grubenv_fails_before_any_dbus_call() {
     }
 }
 
-/// Killed on drop.
 struct PrivateBus {
     daemon: Child,
     address: String,
