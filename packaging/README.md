@@ -375,8 +375,11 @@ stock on its own (ADR 0014).
   locked NEVRAs, `.apexN` and the Apex RPM signature, the mutter pin and its Fedora
   signature, the theme markers (`grep -a` on `gnome-shell-theme.gresource`), `rpm -V`,
   the Apex schema and the crash guard (ARCHITECTURE 11).
-- Nothing promotes the lock by itself: after the image passed its gates (G2, and G4 for
-  a new gnome-shell, mutter or gdm NVR), `just pkg-promote`.
+- Nothing promotes the lock by itself: after the image passed its gates (G2, and G4
+  when its key changed, a new gnome-shell, mutter or gdm NVR among others, or its last
+  pass is a week old; `just vm-image` runs it when it is due), `just pkg-promote`. It
+  refuses unless `_build/gates-passed.txt`, which `just vm-image` writes after those
+  gates from the lock the image carries, names `rpms.lock.next` as it is now.
 
 ### Signing
 

@@ -43,6 +43,14 @@ image-test:
 layer-test:
     tests/layer/run.sh
 
+# The dev loop's host side against a fake ssh, also run by ci.yml: the throwaway guard, desktop-update, shell-dev fetch.
+devloop-test:
+    tests/devloop/run.sh
+
+# G2's own logic without the VM, also run by ci.yml: the capture comparison, the token file, the top-bar assertions.
+shots-test:
+    tests/shots/selftest.sh
+
 # Render hardware/m7400qc/generated from the hardware profile.
 render:
     cargo run --locked -p apexctl -- profile render --profile {{ profile }} --out {{ generated }}
@@ -80,6 +88,9 @@ image:
     @echo '  .github/scripts/image.sh context --rpms-dir _build/rpms --libfprint-dir _build/libfprint --lane-lock ~/apex-store/rpms.lock.next'
     @echo '  .github/scripts/image.sh build'
     @echo '  .github/scripts/image.sh inspect'
+    @echo '  tests/shots/run.sh                  # G2, the headless shell, twice (tests/shots/README.md)'
+    @echo '  .github/scripts/qualify.sh g4-key localhost/apex:build >_build/image/g4-key.txt'
+    @echo '  .github/scripts/qualify.sh g4-due _build/image/g4-key.txt && .github/scripts/qualify.sh local localhost/apex:build   # G4 when due'
     @echo '  .github/scripts/image.sh rechunk      # optional locally; output in _build/image/oci'
     @echo ''
     @echo 'Nothing publishes yet: `just publish` (push, sign, tag) comes in roadmap S1d. GitHub runs only ci.yml.'
@@ -144,7 +155,7 @@ vm-ssh *args:
 vm-sync:
     tools/builder-vm/builder-vm.sh sync
 
-# Build the apex and apex-desktop RPMs, libfprint, the rebuild lane and the image in the builder VM (nothing is pushed).
+# Build the RPMs, libfprint, the rebuild lane and the image in the builder VM (nothing is pushed), then G2 twice, and G4 when qualify.sh g4-due says it is due.
 vm-image:
     tools/builder-vm/builder-vm.sh image
 
@@ -152,9 +163,13 @@ vm-image:
 vm-image-only:
     tools/builder-vm/builder-vm.sh image --image-only
 
-# Install and boot the last built image in the builder VM; require a green assessment.
+# G4 on the last built image in the builder VM: install, counted rollback, GDM, login, lock and unlock (tools/builder-vm/README.md).
 vm-qualify:
     tools/builder-vm/builder-vm.sh run env QUALIFY_MEM=3G QUALIFY_SMP=4 .github/scripts/qualify.sh local localhost/apex:build
+
+# G2 in the builder VM: the headless shell of IMAGE (the last vm-image build), run twice and asserted (tests/shots/README.md).
+vm-g2 image="localhost/apex:build":
+    tools/builder-vm/builder-vm.sh run tests/shots/run.sh {{ image }}
 
 # ---- Rebuild lane: Fedora packages with Apex patches (packaging/README.md) -------------
 # snapshot.sh first commits a dirty tree in the VM copy: the lane and lane.sh build from git HEAD.
@@ -215,6 +230,45 @@ desktop-status:
 [positional-arguments]
 desktop-ssh *args:
     tools/builder-vm/desktop-vm.sh ssh "$@"
+
+# Stage the last vm-image build in the running desktop VM (podman save | load, bootc switch); keeps /var/home and /etc.
+[positional-arguments]
+desktop-update *args:
+    tools/builder-vm/desktop-vm.sh update "$@"
+
+# ---- Dev loop: the shell in the desktop VM (desktop/README.md) --------------------------
+
+# JS and SCSS edits in a nested devkit shell in the desktop VM within seconds (first: just shell-dev fetch).
+[positional-arguments]
+shell-dev *args:
+    tools/builder-vm/shell-dev.sh "$@"
+
+# How to rebuild gnome-shell's C incrementally in an F45 toolbox in the desktop VM and run it through bootc usroverlay.
+shell-c:
+    @echo 'The C loop runs in the desktop VM: gnome-shell from the Apex SRPM of the build the VM runs, compiled'
+    @echo 'with ninja in an F45 toolbox, then unpacked over a transient /usr (desktop/README.md, "The C loop").'
+    @echo 'On this host:'
+    @echo ''
+    @echo '  just shell-dev fetch && just shell-dev push     # the SRPM lands in /var/lib/apex-shell-dev/inputs/rpms/'
+    @echo ''
+    @echo 'In a terminal in the VM window, as your user, once per shell build (about 15 minutes the first time, mostly downloads):'
+    @echo ''
+    @echo '  mkdir -p ~/apex-shell-c && cp /var/lib/apex-shell-dev/inputs/rpms/gnome-shell-*.src.rpm ~/apex-shell-c/'
+    @echo '  srpm=$(ls ~/apex-shell-c/gnome-shell-*.src.rpm)    # the toolbox sees your home, not /var/lib'
+    @echo '  toolbox create --distro fedora --release 45 apex-shell'
+    @echo '  toolbox run -c apex-shell sudo dnf -y install rpm-build'
+    @echo '  toolbox run -c apex-shell sudo dnf -y builddep "$srpm"'
+    @echo '  toolbox run -c apex-shell rpmbuild -rc --noclean --define "_topdir $HOME/apex-shell-c" --define "_package_note_status 0" "$srpm"'
+    @echo '  cd ~/apex-shell-c/BUILD/gnome-shell-*-build/gnome-shell-*/    # the tree: edit src/ here'
+    @echo ''
+    @echo 'Each round, from the tree (seconds to build and install):'
+    @echo ''
+    @echo '  toolbox run -c apex-shell ninja -C redhat-linux-build'
+    @echo '  toolbox run -c apex-shell meson install -C redhat-linux-build --no-rebuild --destdir "$HOME/apex-shell-c/root"'
+    @echo '  sudo bootc usroverlay    # once per boot: /usr stays writable until the next reboot, which drops the build'
+    @echo '  tar -C ~/apex-shell-c/root -cf - usr | sudo tar -C / --no-same-owner --no-overwrite-dir -xf -'
+    @echo ''
+    @echo 'Then just shell-dev on this host (the nested shell), or log out and in (the session shell), runs it.'
 
 # ---- Design reference (design/SPEC.md) --------------------------------------------------
 

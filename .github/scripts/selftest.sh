@@ -350,6 +350,596 @@ rc=0
 PATH="$Q/bin:$PATH" bash -c '. "$1"' _ "$APEX_ROOT/.github/scripts/qualify.sh" >"$Q/stderr.log" 2>&1 || rc=$?
 check "sourcing qualify.sh runs nothing" "0:" "$rc:$(cat "$Q/stderr.log")"
 
+# --- qualify.sh: G4 is due when its key changes or its last pass is a week old ------------
+G4_DIR="$TMP/g4"
+mkdir -p "$G4_DIR"
+key_script=$(bash -c '. "$1"; g4_key_script' _ "$APEX_ROOT/.github/scripts/qualify.sh")
+check_true "the key names the NEVRAs of what G4's install, login and lock run on" \
+    grep -qF "rpm -q --qf 'package %{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' gdm gnome-shell mutter gjs gnome-session accountsservice pam systemd kernel shim-x64 grub2-efi-x64 bootupd" <<<"$key_script"
+check_true "every file of apex and apex-desktop by its digest, not their commit-stamped releases" \
+    grep -qF "rpm -q --qf '[file %{FILEDIGESTS} %{FILENAMES}\n]' apex apex-desktop" <<<"$key_script"
+overlay_line=$(grep '^sha256sum ' <<<"$key_script")
+overlay_line=${overlay_line%%|*}
+for overlay_file in /usr/lib/bootc/install/10-apex.toml /usr/share/glib-2.0/schemas/90_apex.gschema.override \
+    /usr/lib/systemd/system-preset/80-apex.preset /usr/share/polkit-1/rules.d/50-apex-no-layering.rules \
+    /usr/lib/systemd/journald.conf.d/10-apex-persistent.conf \
+    /usr/lib/systemd/system/bootloader-update.service.d/10-apex-after-green-boot.conf; do
+    check_true "the key hashes the overlay's $overlay_file" grep -qF " $overlay_file" <<<"$overlay_line"
+done
+check "and every /usr file of the overlay, none of /etc" \
+    "$(cd "$APEX_ROOT/image/system_files" && find usr -type f | wc -l)" "$(wc -w <<<"${overlay_line#sha256sum }")"
+key_lines() {
+    local shell_release=$1 apexctl_digest=$2
+    printf '%s\n' "package gdm-1:51.0-1.fc45.x86_64" "package gnome-shell-0:51.0-$shell_release.x86_64" \
+        "package mutter-0:51.0-1.fc45.x86_64" "file $apexctl_digest /usr/bin/apexctl"
+}
+key_lines 1.fc45.apex1 aaaa >"$G4_DIR/base.key"
+key_lines 1.fc45.apex2 aaaa >"$G4_DIR/shell.key"
+key_lines 1.fc45.apex1 bbbb >"$G4_DIR/apexctl.key"
+sort -r "$G4_DIR/base.key" >"$G4_DIR/unsorted.key"
+g4_due() {
+    local key=$1 record=${2:-$G4_DIR/record} rc=0
+    QUALIFY_G4_RECORD="$record" "$APEX_ROOT/.github/scripts/qualify.sh" g4-due "$key" \
+        >"$G4_DIR/stdout" 2>"$G4_DIR/out" || rc=$?
+    printf '%s\n' "$rc"
+}
+record_pass() {
+    local key=$1 passed_at=$2
+    { cat "$key"; printf 'passed-at %s\nimage-id feed\n' "$passed_at"; } >"$G4_DIR/record"
+}
+check "due when no pass is recorded" 0 "$(g4_due "$G4_DIR/base.key")"
+check_true "and says so" grep -q 'G4 is due: no local pass is recorded' "$G4_DIR/out"
+record_pass "$G4_DIR/base.key" "$(date -u -d '-1 day' +%FT%TZ)"
+check "not due for the key of the last pass" 3 "$(g4_due "$G4_DIR/base.key")"
+check "and prints when it passed, and on which image" "passed-at $(sed -n 's/^passed-at //p' "$G4_DIR/record")|image-id feed" \
+    "$(paste -sd'|' "$G4_DIR/stdout")"
+check "whatever the order of its lines" 3 "$(g4_due "$G4_DIR/unsorted.key")"
+check "due when gnome-shell moves" 0 "$(g4_due "$G4_DIR/shell.key")"
+check_true "and names the change" grep -qF 'package gnome-shell-0:51.0-1.fc45.apex2.x86_64' "$G4_DIR/out"
+check "due when a file of apex changes" 0 "$(g4_due "$G4_DIR/apexctl.key")"
+record_pass "$G4_DIR/base.key" "$(date -u -d '-8 days' +%FT%TZ)"
+check "due a week after the last pass, with the key unchanged" 0 "$(g4_due "$G4_DIR/base.key")"
+check_true "and says how old it is" grep -q 'G4 is due: this key passed on .*, 8 days ago' "$G4_DIR/out"
+cp "$G4_DIR/base.key" "$G4_DIR/record"
+check "due when the last pass records no time" 0 "$(g4_due "$G4_DIR/base.key")"
+: >"$G4_DIR/empty.key"
+check "an empty key is an error, not a verdict" 1 "$(g4_due "$G4_DIR/empty.key")"
+check "a missing key too" 1 "$(g4_due "$G4_DIR/absent.key")"
+
+# --- build-image.sh: G2 twice, G4 when due, and the gates record ---------------------------
+BUILD_DIR="$TMP/build-image"
+mkdir -p "$BUILD_DIR/work/tests/shots" "$BUILD_DIR/work/.github/scripts" "$BUILD_DIR/work/_build/image" \
+    "$BUILD_DIR/work/_build/g2/latest" "$BUILD_DIR/store"
+printf 'lock\n' >"$BUILD_DIR/store/rpms.lock.next"
+LANE_LOCK_SHA=$(sha256sum <"$BUILD_DIR/store/rpms.lock.next" | cut -d' ' -f1)
+cat >"$BUILD_DIR/work/tests/shots/run.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "$G2_RUNS" >"$FAKE/g2-runs"
+exit "$(cat "$FAKE/g2-rc" 2>/dev/null || echo 0)"
+EOF
+cat >"$BUILD_DIR/work/.github/scripts/qualify.sh" <<'EOF'
+#!/usr/bin/env bash
+case $1 in
+    g4-key) echo "package gdm-1:51.0-1.fc45.x86_64" ;;
+    g4-due) cat "$FAKE/g4-due-stdout" 2>/dev/null; exit "$(cat "$FAKE/g4-due-rc")" ;;
+    local) echo local >>"$FAKE/g4-ran"; exit "$(cat "$FAKE/g4-rc" 2>/dev/null || echo 0)" ;;
+esac
+EOF
+chmod +x "$BUILD_DIR/work/tests/shots/run.sh" "$BUILD_DIR/work/.github/scripts/qualify.sh"
+build_gates() {
+    local image_only=${1:-0} rc=0
+    rm -f "$BUILD_DIR/work/_build/gates-passed.txt" "$BUILD_DIR/g4-ran"
+    (cd "$BUILD_DIR/work" && FAKE=$BUILD_DIR APEX_STORE=$BUILD_DIR/store bash -c '
+        . "$1"
+        image_id() { echo cafe; }
+        gate_g2 && gate_g4 "$2" && { [[ $G4_VERDICT == due ]] || record_gates; }' \
+        _ "$APEX_ROOT/tools/builder-vm/build-image.sh" "$image_only") >"$BUILD_DIR/out" 2>&1 || rc=$?
+    printf '%s\n' "$rc"
+}
+g2_result() {
+    local image_id=$1 lock_sha256=$2
+    printf 'image-id %s\nruns 2\nlock-sha256 %s\nstatus passed\n' "$image_id" "$lock_sha256" \
+        >"$BUILD_DIR/work/_build/g2/latest/result.txt"
+}
+g2_result cafe "$LANE_LOCK_SHA"
+echo 0 >"$BUILD_DIR/g4-due-rc"
+check "G2, then G4 when due, then the record" 0 "$(G2_RUNS=1 build_gates)"
+check "G2 runs twice, whatever G2_RUNS says" 2 "$(cat "$BUILD_DIR/g2-runs")"
+check "G4 ran" local "$(cat "$BUILD_DIR/g4-ran")"
+check "the record names the lane lock the image carries, the image and G4's pass" \
+    "lock-sha256 $LANE_LOCK_SHA|image-id cafe|g2 passed|g4 passed for image cafe" \
+    "$(paste -sd'|' "$BUILD_DIR/work/_build/gates-passed.txt")"
+echo 3 >"$BUILD_DIR/g4-due-rc"
+printf 'passed-at 2026-09-29T17:10:00Z\nimage-id beef\n' >"$BUILD_DIR/g4-due-stdout"
+check "G4 not due: the record" 0 "$(build_gates)"
+check_false "without running G4" test -e "$BUILD_DIR/g4-ran"
+check "names the pass G4 was not due for, not this image" "g4 not due: its key passed on 2026-09-29T17:10:00Z for image beef" \
+    "$(grep '^g4 ' "$BUILD_DIR/work/_build/gates-passed.txt")"
+check_false "and claims no G4 pass for this image" grep -q 'G4 passed\|and G4 passed' "$BUILD_DIR/out"
+echo 0 >"$BUILD_DIR/g4-due-rc"
+check "--image-only with G4 due records nothing" "0:no record" \
+    "$(build_gates 1):$([[ -e $BUILD_DIR/work/_build/gates-passed.txt ]] && echo record || echo 'no record')"
+echo 1 >"$BUILD_DIR/g4-rc"
+check "a G4 failure records nothing" "1:no record" \
+    "$(build_gates):$([[ -e $BUILD_DIR/work/_build/gates-passed.txt ]] && echo record || echo 'no record')"
+rm -f "$BUILD_DIR/g4-rc"
+g2_result cafe "$(printf 'older lock\n' | sha256sum | cut -d' ' -f1)"
+check "a lane lock that moved during the gates records nothing" "1:no record" \
+    "$(build_gates):$([[ -e $BUILD_DIR/work/_build/gates-passed.txt ]] && echo record || echo 'no record')"
+check_true "and says so" grep -q 'the lane lock moved while the gates ran' "$BUILD_DIR/out"
+g2_result beef "$LANE_LOCK_SHA"
+check "a G2 result of another image records nothing" "1:no record" \
+    "$(build_gates):$([[ -e $BUILD_DIR/work/_build/gates-passed.txt ]] && echo record || echo 'no record')"
+g2_result cafe "$LANE_LOCK_SHA"
+echo 1 >"$BUILD_DIR/g2-rc"
+check "a G2 failure records nothing" "1:no record" \
+    "$(build_gates):$([[ -e $BUILD_DIR/work/_build/gates-passed.txt ]] && echo record || echo 'no record')"
+rm -f "$BUILD_DIR/g2-rc"
+
+# --- qualify.sh: QMP over a unix socket ----------------------------------------------------
+QMP_DIR="$TMP/qmp"
+mkdir -p "$QMP_DIR"
+cat >"$QMP_DIR/server.py" <<'EOF'
+import json, os, socket, sys
+path, log, error_on = sys.argv[1], sys.argv[2], sys.argv[3]
+server = socket.socket(socket.AF_UNIX)
+server.bind(path)
+server.listen(1)
+open(path + ".ready", "w").close()
+conn, _ = server.accept()
+stream = conn.makefile("rw")
+stream.write(json.dumps({"QMP": {"version": {}}}) + "\n")
+stream.flush()
+with open(log, "w") as out:
+    for line in stream:
+        command = json.loads(line)
+        out.write(line)
+        out.flush()
+        stream.write(json.dumps({"event": "X"}) + "\n")
+        reply = {"error": {"class": "GenericError"}} if command["execute"] == error_on else {"return": {}}
+        stream.write(json.dumps(reply) + "\n")
+        stream.flush()
+EOF
+qmp_run() {
+    local error_on=$1 rc=0
+    shift
+    rm -f "$QMP_DIR/sock" "$QMP_DIR/sock.ready"
+    python3 "$QMP_DIR/server.py" "$QMP_DIR/sock" "$QMP_DIR/received" "$error_on" &
+    local server=$!
+    for _ in $(seq 50); do [[ -e $QMP_DIR/sock.ready ]] && break; sleep 0.1; done
+    bash -c '. "$1"; QMP_SOCKET=$2; shift 2; qmp "$@"' _ "$APEX_ROOT/.github/scripts/qualify.sh" "$QMP_DIR/sock" "$@" >/dev/null 2>&1 || rc=$?
+    wait "$server" 2>/dev/null || true
+    printf '%s\n' "$rc"
+}
+check "qmp: commands over the socket" 0 "$(qmp_run none '{"execute":"send-key","arguments":{"keys":[]}}' '{"execute":"screendump"}')"
+check "qmp: capabilities first, then each command in order" "qmp_capabilities send-key screendump" \
+    "$(jq -r .execute "$QMP_DIR/received" | paste -sd' ')"
+check "qmp: an error reply fails" 1 "$(qmp_run screendump '{"execute":"screendump"}')"
+
+# --- qualify.sh: the guest-side session and GDM scripts, with a fake logind ---------------
+LOGIND_DIR="$TMP/logind"
+mkdir -p "$LOGIND_DIR/bin"
+cat >"$LOGIND_DIR/bin/loginctl" <<'EOF'
+#!/usr/bin/env bash
+# As loginctl does, show-session prints the properties in its own order, not the order asked for.
+case $1 in
+    list-sessions) awk '{print $1, $6, $5, $3}' "$FAKE_SESSIONS" ;;
+    show-session)
+        read -r id class seat state name uid type < <(awk -v id="$2" '$1 == id' "$FAKE_SESSIONS")
+        [[ -n ${id:-} ]] || exit 1
+        printf 'Name=%s\nUser=%s\nType=%s\nClass=%s\nState=%s\nSeat=%s\n' \
+            "$name" "$uid" "$type" "$class" "$state" "${seat#-}" ;;
+    *) exit 2 ;;
+esac
+EOF
+chmod +x "$LOGIND_DIR/bin/loginctl"
+find_session() {
+    PATH="$LOGIND_DIR/bin:$PATH" FAKE_SESSIONS="$LOGIND_DIR/sessions" bash -s -- "$@" \
+        < <(bash -c '. "$1"; find_session_script' _ "$APEX_ROOT/.github/scripts/qualify.sh")
+}
+printf '%s\n' "2 user - active root 0 tty" "c1 greeter seat0 active gdm-greeter 60578 wayland" >"$LOGIND_DIR/sessions"
+check "the greeter, not root's SSH session" "c1 60578 wayland" "$(find_session greeter)"
+check_false "no user logged in yet" find_session user apexqa
+printf '%s\n' "2 user - active root 0 tty" "5 user seat0 active bob 1001 wayland" \
+    "3 user seat0 online apexqa 1000 wayland" "c1 greeter seat0 closing gdm-greeter 60578 wayland" >"$LOGIND_DIR/sessions"
+check_false "an online session is not the active one" find_session user apexqa
+check_false "a closing greeter is not GDM's greeter" find_session greeter
+printf '4 user seat0 active apexqa 1000 wayland\n' >>"$LOGIND_DIR/sessions"
+check "the test user's session, not another user's" "4 1000 wayland" "$(find_session user apexqa)"
+
+# --- qualify.sh: bootloader-update, greeter login, lock and unlock against a fake guest ---
+GUEST_DIR="$TMP/guest"
+mkdir -p "$GUEST_DIR/out/logs"
+cat >"$TMP/qualify-fake-guest.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+qualify_sh=$1
+. "$qualify_sh"
+STATE=$2
+shift 2
+from() { cat "$STATE/$1" 2>/dev/null || true; }
+as_root() { [[ "$*" == "podman image inspect --format {{.Id}} localhost/apex:build" ]] && echo cafe; }
+TEST_PASSWORD=$(from password)
+conversations() { echo "${1:-$(from conversations)}" >"$STATE/conversations"; }
+password_typed() {
+    [[ "$TEST_USER:$(from typed)" == "$(from chpasswd)" ]] || return 0
+    if [[ $(from locked) == yes ]]; then
+        echo no >"$STATE/locked"
+        echo false >"$STATE/active"
+        if [[ -e $STATE/js-error ]]; then echo 'gnome-shell[1234]: JS ERROR: TypeError: x is null' >>"$STATE/journal"; fi
+    elif [[ -e $STATE/fault-file ]]; then
+        if [[ ! -e $STATE/guard-broken ]]; then
+            : >"$STATE/tripped"
+            printf '%s\n' 'Apex: APEX_SHELL_TEST_FAULT=abort-after-enable: aborting the shell' \
+                'Finished apex-shell-safe.service - Turn the Apex desktop layer off' >>"$STATE/journal"
+        fi
+    else
+        cp "$STATE/session-after-login" "$STATE/session"
+        : >"$STATE/manager-active"
+        if [[ -e $STATE/tripped ]]; then echo 'Apex: safe mode (layer-enabled is false)' >>"$STATE/journal"; fi
+        if [[ -e $STATE/safe-js-error ]]; then echo 'gnome-shell[1236]: JS ERROR: TypeError: y is null' >>"$STATE/journal"; fi
+    fi
+    conversations "$(($(from conversations) - 1))"
+}
+qmp() {
+    local cmd keys
+    [[ ! -e $STATE/qmp-down ]] || return 1
+    for cmd in "$@"; do
+        printf '%s\n' "$cmd" >>"$STATE/qmp"
+        keys=$(jq -r 'select(.execute == "send-key") | [.arguments.keys[].data] | join("+")' <<<"$cmd")
+        case $keys in
+            "") ;;
+            ret)
+                if [[ -s $STATE/typed ]]; then
+                    password_typed
+                    : >"$STATE/typed"
+                elif [[ -e $STATE/takes-keys && ! -e $STATE/asking ]]; then
+                    : >"$STATE/asking"
+                    conversations "$(($(from conversations) + 1))"
+                fi ;;
+            *) printf '%s' "$keys" >>"$STATE/typed" ;;
+        esac
+    done
+}
+login_only() { wait_session "$1-login" user "$TEST_USER"; assert_apex_login "$1-login" 1000; }
+user_cmd() { printf 'runuser -u %s -- env XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus %s' "$TEST_USER" "$1"; }
+vm_ssh() {
+    local cmd="$*"
+    case $cmd in
+        "test -f $BOOTLOADER_GATE") [[ -e $STATE/gated ]] ;;
+        "systemctl show -p Job --value $BOOTLOADER_UNIT") from job ;;
+        "systemctl show $BOOTLOADER_UNIT -p "*) from bootloader.props ;;
+        "systemctl show $ASSESS_UNIT -p ExecMainExitTimestampMonotonic") from assess.props ;;
+        "journalctl --list-boots --no-pager 2>/dev/null") from boots ;;
+        "journalctl -b "*" SYSLOG_IDENTIFIER=bootupctl "*) b=${cmd#journalctl -b }; from "bootupctl.${b%% *}" ;;
+        "journalctl -b 0 _SYSTEMD_UNIT=$BOOTLOADER_UNIT SYSLOG_IDENTIFIER=sh "*) from condition ;;
+        "journalctl -b 0 UNIT=$BOOTLOADER_UNIT UNIT_RESULT=exec-condition "*) from skipped ;;
+        "journalctl -b 0 _PID=1 "*"ordering cycle"*) from cycle ;;
+        "journalctl -b -u "*) ;;
+        "bash -s -- user $TEST_USER") from session | grep . ;;
+        "chpasswd") cat >"$STATE/chpasswd" ;;
+        "pgrep -c -f 'pam/gdm-passwor[d]'") echo "$(from conversations)"; (($(from conversations) > 0)) ;;
+        "bash -s -- greeter"*) from greeter | grep . ;;
+        "systemctl is-active --quiet gdm.service") [[ ! -e $STATE/gdm-down ]] ;;
+        "pgrep -u 60578 -x gnome-shell") from greeter-pid | grep . ;;
+        "rm -rf $GUEST_TMP/candidate && mkdir -p $GUEST_TMP/candidate") ;;
+        "cat > $GUEST_TMP/candidate/manifest.json && chmod 0644 $GUEST_TMP/candidate/manifest.json") cat >"$STATE/built-manifest" ;;
+        "cat > $GUEST_TMP/candidate/Containerfile") cat >"$STATE/built-containerfile" ;;
+        "timeout 1800 bootc image copy-to-storage") ;;
+        "timeout 1800 podman build --pull=never --tag $LOCAL_CANDIDATE $GUEST_TMP/candidate") ;;
+        "timeout 3600 bootc switch --transport containers-storage --download-only $LOCAL_CANDIDATE") ;;
+        "podman rmi $LOCAL_CANDIDATE localhost/bootc >/dev/null") ;;
+        "bootc status --format=json --format-version=1") from status ;;
+        "grub2-editenv /boot/grub2/grubenv list") echo apex_ok=0 ;;
+        *"org.gnome.ScreenSaver.GetActive"*) printf '(%s,)\n' "$(from active)" ;;
+        "pgrep -u 1000 -x gnome-shell") from pid ;;
+        "date +%s") echo 1000 ;;
+        "journalctl -b _UID=1000 --since @999 -o short-monotonic --no-pager") from journal ;;
+        "test -e /run/user/1000/$CRASH_GUARD_MARKER") [[ -e $STATE/marker ]] ;;
+        "$(user_cmd 'gsettings get org.gnome.desktop.interface color-scheme')") from scheme ;;
+        "$(user_cmd "gsettings get $APEX_SCHEMA layer-enabled")") if [[ -e $STATE/tripped ]]; then echo false; else echo true; fi ;;
+        "$(user_cmd "systemctl --user list-units --state=active --plain --no-legend --no-pager 'apex*'")") from agents ;;
+        "loginctl show-session 4 -p LockedHint --value") from locked ;;
+        "loginctl lock-session 4")
+            [[ -e $STATE/never-locks ]] || { echo yes >"$STATE/locked"; echo true >"$STATE/active"; rm -f "$STATE/asking"; } ;;
+        "loginctl unlock-session 4")
+            echo no >"$STATE/locked"
+            echo false >"$STATE/active"
+            if [[ -e $STATE/crash ]]; then echo 1235 >"$STATE/pid"; fi
+            if [[ -e $STATE/js-error ]]; then echo 'gnome-shell[1234]: JS ERROR: TypeError: x is null' >>"$STATE/journal"; fi ;;
+        "loginctl terminate-user $TEST_USER")
+            rm -f "$STATE/session" "$STATE/manager-active" "$STATE/asking"
+            conversations 0 ;;
+        "systemctl -q is-active user@1000.service") [[ -e $STATE/manager-active ]] ;;
+        "id -u $TEST_USER") echo 1000 ;;
+        "runuser -u $TEST_USER -- sh -c 'mkdir -p ~$TEST_USER/.config/environment.d && echo APEX_SHELL_TEST_FAULT=abort-after-enable >~$TEST_USER/$TEST_FAULT_FILE'")
+            : >"$STATE/fault-file" ;;
+        "test -e ~$TEST_USER/$CRASH_GUARD_TRIPPED") [[ -e $STATE/tripped ]] ;;
+        "rm -f ~$TEST_USER/$TEST_FAULT_FILE") rm -f "$STATE/fault-file" ;;
+        *"systemctl --user list-units --state=failed"*) from failed-user-units ;;
+        "cat $MANIFEST") from manifest ;;
+        "sh -s") cat >/dev/null; from key ;;
+        *) printf 'unexpected vm_ssh: %s\n' "$cmd" >&2; return 99 ;;
+    esac
+}
+"$@"
+EOF
+guest() {
+    local rc=0
+    : >"$GUEST_DIR/out/results.md"
+    QUALIFY_OUT="$GUEST_DIR/out" QUALIFY_POLL=0.01 QUALIFY_LOGIN_TIMEOUT=1 QUALIFY_LOCK_TIMEOUT=1 \
+        QUALIFY_G4_RECORD="$GUEST_DIR/record" GITHUB_ACTIONS='' \
+        bash "$TMP/qualify-fake-guest.sh" "$APEX_ROOT/.github/scripts/qualify.sh" "$GUEST_DIR/state" "$@" \
+        >"$GUEST_DIR/stderr" 2>&1 || rc=$?
+    printf '%s\n' "$rc"
+}
+row() {
+    local test=$1 verdict=$2
+    grep -c "^| $test | $verdict |" "$GUEST_DIR/out/results.md" || true
+}
+green_boot() {
+    rm -rf "$GUEST_DIR/state"
+    mkdir -p "$GUEST_DIR/state"
+    : >"$GUEST_DIR/state/gated"
+    printf '%s\n' ActiveState=active Result=success ExecMainStatus=0 ExecMainStartTimestampMonotonic=200000000 \
+        >"$GUEST_DIR/state/bootloader.props"
+    echo ExecMainExitTimestampMonotonic=150000000 >"$GUEST_DIR/state/assess.props"
+    echo 'No update available for any component.' >"$GUEST_DIR/state/bootupctl.0"
+}
+
+green_boot
+check "green boot: bootupctl ran after the assessment" 0 "$(guest assert_bootloader_updated t)"
+check_true "and the row says so" grep -q '^| t-bootloader | PASS | bootupctl ran 50000 ms after the green assessment and succeeded: No update available' "$GUEST_DIR/out/results.md"
+green_boot
+sed -i 's/=200000000/=100000000/' "$GUEST_DIR/state/bootloader.props"
+check "green boot: bootupctl before the assessment fails" 1 "$(guest assert_bootloader_updated t)"
+check "with a FAIL row" 1 "$(row t-bootloader FAIL)"
+green_boot
+printf '%s\n' ActiveState=inactive Result=exec-condition ExecMainStatus=0 ExecMainStartTimestampMonotonic=0 \
+    >"$GUEST_DIR/state/bootloader.props"
+check "green boot: a skipped update fails" 1 "$(guest assert_bootloader_updated t)"
+green_boot
+sed -i 's/Result=success/Result=exit-code/; s/ExecMainStatus=0/ExecMainStatus=1/' "$GUEST_DIR/state/bootloader.props"
+check "green boot: a failed bootupctl fails" 1 "$(guest assert_bootloader_updated t)"
+green_boot
+rm "$GUEST_DIR/state/gated"
+check "green boot: an image without the drop-in fails" 1 "$(guest assert_bootloader_updated t)"
+green_boot
+rm "$GUEST_DIR/state/bootupctl.0"
+check "green boot: no bootupctl line in the journal fails (the red check would prove nothing)" 1 \
+    "$(guest assert_bootloader_updated t)"
+green_boot
+echo 'bootloader-update.service: Job apex-boot-assess.service/start deleted to break ordering cycle starting with bootloader-update.service/start' \
+    >"$GUEST_DIR/state/cycle"
+check "green boot: an ordering cycle at boot fails" 1 "$(guest assert_bootloader_updated t)"
+check_true "and the row quotes systemd" grep -q '^| t-bootloader | FAIL | systemd broke an ordering cycle at boot: bootloader-update' "$GUEST_DIR/out/results.md"
+
+red_boot() {
+    green_boot
+    rm "$GUEST_DIR/state/bootupctl.0"
+    printf '%s\n' ActiveState=inactive Result=exec-condition ExecMainStartTimestampMonotonic=0 >"$GUEST_DIR/state/bootloader.props"
+    echo 'apex-boot-assess.service did not judge this boot green ( INFO decision: fallback (report fallback)): the ESP is left alone' \
+        >"$GUEST_DIR/state/condition"
+}
+red_boot
+check "red boot: skipped by its condition" 0 "$(guest assert_bootloader_skipped t)"
+check_true "and the row quotes the condition" grep -q '^| t-bootloader | PASS | skipped by its condition: apex-boot-assess.service did not judge' "$GUEST_DIR/out/results.md"
+red_boot
+printf '%s\n' ActiveState=active Result=success ExecMainStartTimestampMonotonic=90000000 >"$GUEST_DIR/state/bootloader.props"
+check "red boot: bootupctl ran, which fails" 1 "$(guest assert_bootloader_skipped t)"
+red_boot
+echo 'Updated EFI: grub2-1:2.12-78.fc45.x86_64,shim-16.1-7.x86_64' >"$GUEST_DIR/state/bootupctl.0"
+check "red boot: a bootupctl line alone fails" 1 "$(guest assert_bootloader_skipped t)"
+red_boot
+printf '%s\n' ActiveState=inactive Result=success ExecMainStartTimestampMonotonic=0 >"$GUEST_DIR/state/bootloader.props"
+check "red boot: a unit that never started is not the condition's skip" 1 "$(guest assert_bootloader_skipped t)"
+echo "bootloader-update.service: Skipped due to 'exec-condition'." >"$GUEST_DIR/state/skipped"
+check "red boot: an unloaded unit whose skip systemd logged" 0 "$(guest assert_bootloader_skipped t)"
+
+red_boot
+printf '%s\n' ' -3 a' ' -2 b' ' -1 c' '  0 d' >"$GUEST_DIR/state/boots"
+check "the three red boots before: bootupctl silent" 0 "$(guest assert_bootloader_quiet_before t 3)"
+echo 'No update available for any component.' >"$GUEST_DIR/state/bootupctl.-2"
+check "bootupctl in one of them fails" 1 "$(guest assert_bootloader_quiet_before t 3)"
+check_true "naming that boot" grep -q '^| t-bootloader | FAIL | bootupctl ran in the red boots -2 ' "$GUEST_DIR/out/results.md"
+printf '  0 d\n' >"$GUEST_DIR/state/boots"
+check "a volatile journal skips the check" 0 "$(guest assert_bootloader_quiet_before t 3)"
+check "with a SKIP row" 1 "$(row t-bootloader SKIP)"
+
+rm -rf "$GUEST_DIR/state"
+mkdir -p "$GUEST_DIR/state"
+echo 'c1 60578 wayland' >"$GUEST_DIR/state/greeter"
+echo 4321 >"$GUEST_DIR/state/greeter-pid"
+check "GDM's greeter with its gnome-shell" 0 "$(guest assert_greeter local)"
+check "passes" 1 "$(row local-greeter PASS)"
+: >"$GUEST_DIR/state/greeter-pid"
+check "a greeter session without gnome-shell fails" 1 "$(guest assert_greeter local)"
+echo 4321 >"$GUEST_DIR/state/greeter-pid"
+: >"$GUEST_DIR/state/gdm-down"
+check "gdm.service down fails" 1 "$(guest assert_greeter local)"
+rm "$GUEST_DIR/state/greeter"
+check "no greeter session fails" 1 "$(guest assert_greeter local)"
+
+rm -rf "$GUEST_DIR/state"
+mkdir -p "$GUEST_DIR/state"
+check "a password for the test user" 0 "$(guest set_test_password local)"
+check_true "set with chpasswd, 24 hex digits" grep -Eqx 'apexqa:[0-9a-f]{24}' "$GUEST_DIR/state/chpasswd"
+check_false "and in no row" grep -qF "$(cut -d: -f2 "$GUEST_DIR/state/chpasswd")" "$GUEST_DIR/out/results.md"
+check_false "nor on the console" grep -qF "$(cut -d: -f2 "$GUEST_DIR/state/chpasswd")" "$GUEST_DIR/stderr"
+qualify_fn() { bash -c '. "$1"; shift; "$@"' _ "$APEX_ROOT/.github/scripts/qualify.sh" "$@"; }
+check "Enter in QMP" '{"execute":"send-key","arguments":{"keys":[{"type":"qcode","data":"ret"}]}}' "$(qualify_fn key_press ret)"
+check_true "a chord is one command" jq -e '.arguments.keys == [{type: "qcode", data: "ctrl"}, {type: "qcode", data: "a"}]' \
+    <<<"$(qualify_fn key_press ctrl a)"
+check "typing a0f" 0 "$(guest type_text a0f)"
+check "is three presses, in order" "a 0 f" "$(jq -r '.arguments.keys[].data' "$GUEST_DIR/state/qmp" | paste -sd' ')"
+check "a key without a qcode of its own is refused" 1 "$(guest type_text aB)"
+
+at_greeter() {
+    rm -rf "$GUEST_DIR/state"
+    mkdir -p "$GUEST_DIR/state"
+    echo 'c1 60578 wayland' >"$GUEST_DIR/state/greeter"
+    : >"$GUEST_DIR/state/takes-keys"
+    echo 0 >"$GUEST_DIR/state/conversations"
+    echo 0123456789abcdef01234567 >"$GUEST_DIR/state/password"
+    echo apexqa:0123456789abcdef01234567 >"$GUEST_DIR/state/chpasswd"
+    echo '4 1000 wayland' >"$GUEST_DIR/state/session-after-login"
+}
+keys_sent() { jq -r 'select(.execute == "send-key") | .arguments.keys[0].data' "$GUEST_DIR/state/qmp" | paste -sd' '; }
+at_greeter
+check "the login through GDM's greeter" 0 "$(guest greeter_login local)"
+check "passes" 1 "$(row local-greeter-login PASS)"
+check "Enter, the password, Enter" "ret 0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7 ret" "$(keys_sent)"
+check_true "with a screendump of the prompt" grep -qF "\"filename\":\"$GUEST_DIR/out/logs/local-greeter-login.png\"" "$GUEST_DIR/state/qmp"
+at_greeter
+rm "$GUEST_DIR/state/takes-keys"
+check "a greeter that starts no password conversation fails" 1 "$(guest greeter_login local)"
+check_true "and says so" grep -q '^| local-greeter-login | FAIL | GDM started no password conversation' "$GUEST_DIR/out/results.md"
+at_greeter
+echo apexqa:ffffffffffffffffffffffff >"$GUEST_DIR/state/chpasswd"
+check "a password GDM does not take fails" 1 "$(guest greeter_login local)"
+check "at the login" 1 "$(row local-greeter-login FAIL)"
+at_greeter
+: >"$GUEST_DIR/state/qmp-down"
+check "no QMP fails" 1 "$(guest greeter_login local)"
+check_true "naming the socket" grep -q '^| local-greeter-login | FAIL | QEMU took no key on its QMP socket' "$GUEST_DIR/out/results.md"
+at_greeter
+rm "$GUEST_DIR/state/greeter"
+check "no greeter fails" 1 "$(guest greeter_login local)"
+
+D0="sha256:$(printf '0%.0s' {1..64})"
+manifest='{"schema": 1, "version": "45.20260929.0", "packages": [{"name": "gdm", "version": "51.0"}]}'
+staged() {
+    local digest=$1 download_only=$2
+    jq -n --arg d "$digest" --argjson o "$download_only" '{status: {staged: {image: {imageDigest: $d}, downloadOnly: $o}}}' >"$GUEST_DIR/state/status"
+}
+rm -rf "$GUEST_DIR/state"
+mkdir -p "$GUEST_DIR/state"
+printf '%s\n' "$manifest" >"$GUEST_DIR/state/manifest"
+staged "$D1" true
+check "a newer image derived in the guest is staged" 0 "$(guest stage_local_candidate local-stage "$D0")"
+check "its manifest version extends the booted one" 45.20260929.0.1 "$(jq -r .version "$GUEST_DIR/state/built-manifest")"
+check "and nothing else changes in it" "$(jq -S 'del(.version)' <<<"$manifest")" "$(jq -S 'del(.version)' "$GUEST_DIR/state/built-manifest")"
+check "the candidate is the booted image plus that manifest" \
+    "FROM localhost/bootc|COPY manifest.json /usr/share/apex/manifest.json" "$(paste -sd'|' "$GUEST_DIR/state/built-containerfile")"
+check_true "the row names the staged digest" grep -qF "| local-stage | PASS | staged localhost/apex-qualify:candidate ($D1, version 45.20260929.0.1)" "$GUEST_DIR/out/results.md"
+staged "$D0" true
+check "a candidate with the booted digest fails" 1 "$(guest stage_local_candidate local-stage "$D0")"
+staged "$D1" false
+check "a candidate that is not download-only fails" 1 "$(guest stage_local_candidate local-stage "$D0")"
+staged "" true
+check "no staged digest fails" 1 "$(guest stage_local_candidate local-stage "$D0")"
+jq 'del(.version)' <<<"$manifest" >"$GUEST_DIR/state/manifest"
+staged "$D1" true
+check "a booted manifest without a version fails" 1 "$(guest stage_local_candidate local-stage "$D0")"
+
+logged_in() {
+    at_greeter
+    rm "$GUEST_DIR/state/greeter"
+    cp "$GUEST_DIR/state/session-after-login" "$GUEST_DIR/state/session"
+    : >"$GUEST_DIR/state/manager-active"
+    echo 1 >"$GUEST_DIR/state/conversations"
+    echo false >"$GUEST_DIR/state/active"
+    echo no >"$GUEST_DIR/state/locked"
+    echo 1234 >"$GUEST_DIR/state/pid"
+    echo "'default'" >"$GUEST_DIR/state/scheme"
+    : >"$GUEST_DIR/state/marker"
+    echo 'gnome-shell[1234]: Extension manager started' >"$GUEST_DIR/state/journal"
+}
+logged_in
+check "login with the Apex layer, lock, and both unlocks" 0 "$(guest login_lock_unlock local)"
+for r in local-login local-lock local-unlock local-unlock-signal local-user-units; do
+    check "row $r passes" 1 "$(row "$r" PASS)"
+done
+check "the password went into the unlock dialog" "ret 0 1 2 3 4 5 6 7 8 9 a b c d e f 0 1 2 3 4 5 6 7 ret" "$(keys_sent)"
+check_true "with a screendump of the lock screen" grep -qF "\"filename\":\"$GUEST_DIR/out/logs/local-lock.png\"" "$GUEST_DIR/state/qmp"
+logged_in
+echo 'gnome-shell[1234]: JS ERROR: Error: stock' >>"$GUEST_DIR/state/journal"
+check "a JS ERROR at login only warns" 0 "$(guest login_only local)"
+check "with a WARN row" 1 "$(row local-login WARN)"
+logged_in
+rm "$GUEST_DIR/state/marker"
+check "a login whose layer never armed the crash guard fails" 1 "$(guest login_lock_unlock local)"
+check_true "and says so" grep -q '^| local-login | FAIL | the layer never created /run/user/1000/apex-shell-starting' "$GUEST_DIR/out/results.md"
+logged_in
+echo 'gnome-shell[1234]: Apex: safe mode (APEX_SHELL_SAFE=1)' >>"$GUEST_DIR/state/journal"
+check "a login in safe mode fails" 1 "$(guest login_lock_unlock local)"
+logged_in
+echo 'gnome-shell[1234]: Apex: hook session-mode threw; stock for the rest of the session: x' >>"$GUEST_DIR/state/journal"
+check "a hook that threw at login fails" 1 "$(guest login_lock_unlock local)"
+logged_in
+echo "'prefer-dark'" >"$GUEST_DIR/state/scheme"
+check "a login that changed color-scheme fails" 1 "$(guest login_lock_unlock local)"
+logged_in
+echo 'apex-session-agent.service loaded active running Apex agent' >"$GUEST_DIR/state/agents"
+check "a running Apex agent fails" 1 "$(guest login_lock_unlock local)"
+logged_in
+: >"$GUEST_DIR/state/js-error"
+check "a JS ERROR between lock and unlock fails" 1 "$(guest login_lock_unlock local)"
+check_true "and the row quotes it" grep -q '^| local-unlock | FAIL | 1 JS ERROR line(s) from lock to unlock' "$GUEST_DIR/out/results.md"
+logged_in
+rm "$GUEST_DIR/state/takes-keys"
+check "an unlock dialog that asks for no password fails" 1 "$(guest login_lock_unlock local)"
+check_true "at the unlock" grep -q '^| local-unlock | FAIL | GDM started no password conversation' "$GUEST_DIR/out/results.md"
+logged_in
+echo apexqa:ffffffffffffffffffffffff >"$GUEST_DIR/state/chpasswd"
+check "a password the unlock dialog does not take fails" 1 "$(guest login_lock_unlock local)"
+logged_in
+: >"$GUEST_DIR/state/crash"
+check "a gnome-shell that restarts at logind's unlock fails" 1 "$(guest login_lock_unlock local)"
+check "at the signal unlock" 1 "$(row local-unlock-signal FAIL)"
+logged_in
+: >"$GUEST_DIR/state/never-locks"
+check "a session that never locks fails" 1 "$(guest login_lock_unlock local)"
+check "at the lock" 1 "$(row local-lock FAIL)"
+logged_in
+rm "$GUEST_DIR/state/session"
+check "no session of the test user fails" 1 "$(guest login_lock_unlock local)"
+logged_in
+echo 'foo.service loaded failed failed Foo' >"$GUEST_DIR/state/failed-user-units"
+check "a failed user unit fails" 1 "$(guest login_lock_unlock local)"
+check "at the user units" 1 "$(row local-user-units FAIL)"
+
+logged_in
+echo 'c1 60578 wayland' >"$GUEST_DIR/state/greeter"
+check "the crash guard trips at a real login, and the next login is safe" 0 "$(guest crash_guard_logins local)"
+check "row local-crash-guard passes" 1 "$(row local-crash-guard PASS)"
+check "row local-safe-login passes" 1 "$(row local-safe-login PASS)"
+check_false "the fault leaves the user's environment.d" test -e "$GUEST_DIR/state/fault-file"
+logged_in
+echo 'c1 60578 wayland' >"$GUEST_DIR/state/greeter"
+: >"$GUEST_DIR/state/safe-js-error"
+check "a JS ERROR in the safe login fails" 1 "$(guest crash_guard_logins local)"
+check_true "and the row quotes it" grep -q '^| local-safe-login | FAIL | 1 JS ERROR line(s) in the safe login' "$GUEST_DIR/out/results.md"
+logged_in
+echo 'c1 60578 wayland' >"$GUEST_DIR/state/greeter"
+: >"$GUEST_DIR/state/guard-broken"
+check "a fault login whose guard never trips fails" 1 "$(guest crash_guard_logins local)"
+check "at the crash guard" 1 "$(row local-crash-guard FAIL)"
+
+logged_in
+rm -f "$GUEST_DIR/record"
+printf '%s\n' "package gdm-1:51.0-1.fc45.x86_64" "file bbbb /usr/bin/apexctl" >"$GUEST_DIR/state/key"
+check "a full pass records the guest's G4 key" 0 "$(guest record_g4_pass local localhost/apex:build)"
+check "sorted, as g4-due reads it, then the time and the image" \
+    "file bbbb /usr/bin/apexctl|package gdm-1:51.0-1.fc45.x86_64|passed-at|image-id cafe" \
+    "$(sed 's/^passed-at .*/passed-at/' "$GUEST_DIR/record" | paste -sd'|')"
+check "so G4 is no longer due" 3 "$(g4_due "$GUEST_DIR/record" "$GUEST_DIR/record")"
+rm -f "$GUEST_DIR/record"
+record_g4_pass_after_rows() {
+    printf '%s\n' "$@" >"$GUEST_DIR/rows"
+    local rc=0
+    QUALIFY_OUT="$GUEST_DIR/out" QUALIFY_G4_RECORD="$GUEST_DIR/record" GITHUB_ACTIONS='' QUALIFY_LAYOUT=${LAYOUT:-separate-boot} \
+        bash -c 'cp "$3" "$QUALIFY_OUT/results.md"; . "$1"; STATE=$2; vm_ssh() { cat >/dev/null; cat "$STATE/key"; }; record_g4_pass local localhost/apex:build' \
+        _ "$APEX_ROOT/.github/scripts/qualify.sh" "$GUEST_DIR/state" "$GUEST_DIR/rows" >"$GUEST_DIR/stderr" 2>&1 || rc=$?
+    printf '%s\n' "$rc"
+}
+check "a run with a SKIP row records nothing" "1:no record" \
+    "$(record_g4_pass_after_rows '| local-install | PASS | x |' '| local-red | SKIP | y |'):$([[ -e $GUEST_DIR/record ]] && echo record || echo 'no record')"
+check "nor one with a WARN row" "1:no record" \
+    "$(record_g4_pass_after_rows '| local-login | WARN | 2 JS ERROR |'):$([[ -e $GUEST_DIR/record ]] && echo record || echo 'no record')"
+check "nor a to-disk run, which skipped the counted rollback" "1:no record" \
+    "$(LAYOUT=to-disk record_g4_pass_after_rows '| local-install | PASS | x |'):$([[ -e $GUEST_DIR/record ]] && echo record || echo 'no record')"
+
 # --- rpms.sh: cargo-auditable follows the spec and is part of the key ------------------
 rpms_fn() { bash -c '. "$1"; shift; "$@"' _ "$APEX_ROOT/.github/scripts/rpms.sh" "$@"; }
 printf '%%bcond auditable 1\n' >"$TMP/on.spec"
