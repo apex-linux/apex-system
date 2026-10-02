@@ -88,9 +88,9 @@ check_true "pinned image with tag" is_pinned_image "registry.fedoraproject.org/f
 check_true "pinned image without tag" is_pinned_image "registry.fedoraproject.org/fedora-bootc@sha256:$(printf '%064d' 1)"
 check_false "floating tag is not pinned" is_pinned_image registry.fedoraproject.org/fedora-bootc:45
 
-is_csv_list() { [[ $1 =~ ^[A-Za-z0-9._+-]+(,[A-Za-z0-9._+-]+)*$ ]]; }
+is_empty_or_csv_list() { [[ $1 =~ ^([A-Za-z0-9._+-]+(,[A-Za-z0-9._+-]+)*)?$ ]]; }
 if [[ -f $APEX_TESTING_ALLOWLIST ]]; then
-    check_true "includepkgs has no comments or blanks" is_csv_list "$(testing_includepkgs)"
+    check_true "includepkgs has no comments or blanks" is_empty_or_csv_list "$(testing_includepkgs)"
 fi
 
 # --- policy transforms -----------------------------------------------------------------
@@ -819,8 +819,9 @@ staged "$D1" true
 check "a newer image derived in the guest is staged" 0 "$(guest stage_local_candidate local-stage "$D0")"
 check "its manifest version extends the booted one" 45.20260929.0.1 "$(jq -r .version "$GUEST_DIR/state/built-manifest")"
 check "and nothing else changes in it" "$(jq -S 'del(.version)' <<<"$manifest")" "$(jq -S 'del(.version)' "$GUEST_DIR/state/built-manifest")"
-check "the candidate is the booted image plus that manifest" \
-    "FROM localhost/bootc|COPY manifest.json /usr/share/apex/manifest.json" "$(paste -sd'|' "$GUEST_DIR/state/built-containerfile")"
+check "the candidate is the booted image plus that manifest, labelled with its version" \
+    "FROM localhost/bootc|COPY manifest.json /usr/share/apex/manifest.json|LABEL org.opencontainers.image.version=45.20260929.0.1" \
+    "$(paste -sd'|' "$GUEST_DIR/state/built-containerfile")"
 check_true "the row names the staged digest" grep -qF "| local-stage | PASS | staged localhost/apex-qualify:candidate ($D1, version 45.20260929.0.1)" "$GUEST_DIR/out/results.md"
 staged "$D0" true
 check "a candidate with the booted digest fails" 1 "$(guest stage_local_candidate local-stage "$D0")"
@@ -1269,6 +1270,15 @@ check "image.sh build refuses a floating BASE tag" 1 "$ib_rc"
 # Past the check, image.sh build calls the fake git for the revision.
 image_build_with 's|^$||'
 check_true "the committed Containerfile passes the check" grep -q 'unexpected: .*git' <<<"$ib_log"
+printf '#!/usr/bin/env bash\nexec "$@"\n' >"$IB/bin/sudo"
+printf '#!/usr/bin/env bash\nprintf "%%040d\\n" 7\n' >"$IB/bin/git"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"%s"\n' "$IB/podman.log" >"$IB/bin/podman"
+chmod +x "$IB/bin/sudo"
+image_build_with 's|^$||'
+check "image.sh build runs to its end against a podman that only records" 0 "$ib_rc"
+built_version=$(sed -n 's/^APEX_VERSION=//p' "$IB/work/build.env")
+check_true "it labels the image with the version it gives the manifest" \
+    grep -q -- "^build .*--build-arg APEX_VERSION=$built_version .*--label org.opencontainers.image.version=$built_version " "$IB/podman.log"
 wf_quay=$(grep -rhoE 'quay\.io/fedora/[a-z0-9._-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}' \
     "$APEX_ROOT/.github/workflows" || true)
 check "no workflow pins a Fedora image by digest on quay.io" "" "$wf_quay"
