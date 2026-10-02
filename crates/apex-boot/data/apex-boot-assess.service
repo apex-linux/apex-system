@@ -2,7 +2,7 @@
 Description=Apex boot assessment
 Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0009-boot-assessment.md
 ConditionPathExists=/run/ostree-booted
-# No Before=: the assessment takes minutes and must never delay boot-complete.target or a login.
+# No Before=, and nothing a target or a login waits for is ordered after it: this takes minutes.
 After=graphical.target
 RequiresMountsFor=/boot /var/lib/apex
 

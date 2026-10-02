@@ -343,6 +343,20 @@ fn dry_run_with(
     (output, json, path)
 }
 
+/// bootloader-update.service's drop-in in the image reads this line of the journal to
+/// tell a green boot.
+fn assert_logs_decision_and_verdict(output: &Output, json: &Value) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let decision = json["decision"].as_str().unwrap();
+    let verdict = json["verdict"].as_str().unwrap();
+    let digest = json["digest"].as_str().unwrap();
+    let logged = format!("decision: {decision} (report {verdict} {digest})");
+    assert!(
+        stderr.lines().any(|line| line.contains(&logged)),
+        "no line contains {logged:?}:\n{stderr}"
+    );
+}
+
 fn check_outcome<'a>(json: &'a Value, list: &str, name: &str) -> Option<&'a str> {
     json["input"][list]
         .as_array()
@@ -371,11 +385,12 @@ fn dry_run_against_fakes_decides_and_changes_nothing() {
     // The unit checks come from this host's systemd, so the verdict may be either.
     let root = fake_root(None);
     let grubenv = grubenv_with(&[("apex_ok", "0")]);
-    let (_, json, path) = dry_run(&bus, root.path(), &grubenv);
+    let (output, json, path) = dry_run(&bus, root.path(), &grubenv);
     assert!(
         ["green", "red-unarmed"].contains(&json["decision"].as_str().unwrap()),
         "{json:#}"
     );
+    assert_logs_decision_and_verdict(&output, &json);
     assert_eq!(json["input"]["booted_digest"], BOOTED);
     assert_eq!(json["input"]["booted_source"], "apex-updated");
     // bootc is missing, so the boot order is unknown.
@@ -411,9 +426,10 @@ fn dry_run_against_fakes_decides_and_changes_nothing() {
         ("apex_counter", "1"),
         ("apex_ok", "0"),
     ]);
-    let (_, json, path) = dry_run(&bus, root.path(), &armed);
+    let (output, json, path) = dry_run(&bus, root.path(), &armed);
     assert_eq!(json["decision"], "red-armed-no-session", "{json:#}");
     assert_eq!(json["verdict"], "red");
+    assert_logs_decision_and_verdict(&output, &json);
     assert_eq!(json["reboot"], true);
     assert!(
         failed_checks(&json).contains(&names::FORCED_RED),
