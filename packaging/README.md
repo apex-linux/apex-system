@@ -502,5 +502,8 @@ updates never wait for this package.
 The image will boot the CachyOS kernel (GCC build), rebuilt from the COPR's signed SRPM,
 with NVIDIA's open modules built for exactly that kernel in the same job
 ([ADR 0015](../docs/adr/0015-cachyos-kernel-and-nvidia.md)). The lane lands in roadmap
-S1c. Today `pkgs/kernel/patches/` holds only the ALC294 quirk, which is out of any
+S1c. Today `pkgs/kernel/` holds what the K1 spike measured and the pieces the lane will
+reuse: the spec patch, the per-build module key, the kmod build and the pair's checks
+([pkgs/kernel/README.md](pkgs/kernel/README.md)); it has no `pkg.env`, so no image takes
+the kernel yet. `pkgs/kernel/patches/` holds only the ALC294 quirk, which is out of any
 series: it ships only if the `model=` alias fails (ADR 0004, as amended).
