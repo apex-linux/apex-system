@@ -6,6 +6,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: zbus 5.19 depends on it; zbus 6 merged it in. Drop with the zbus 6 migration." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: zbus 5.19 depends on it; zbus 6 merged it in. Drop with the zbus 6 migration." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: zbus 5.19 depends on it; zbus 6 merged it in. Drop with the zbus 6 migration." },
+]
 
 [licenses]
 version = 2
