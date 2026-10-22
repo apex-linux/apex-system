@@ -6,6 +6,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: zbus 5.19 depends on it; zbus 6 merged it in. Drop with the zbus 6 migration." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: zbus 5.19 depends on it; zbus 6 merged it in. Drop with the zbus 6 migration." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: zbus 5.19 depends on it; zbus 6 merged it in. Drop with the zbus 6 migration." },
+]
 
 [licenses]
 version = 2
@@ -29,12 +34,9 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
-    # One async runtime in daemons: tokio. async-std is unmaintained.
-    { crate = "async-std" },
-    # GUI code must stay on the GLib main loop; relm4 forces tokio into the UI (ADR 0002).
-    { crate = "relm4" },
-    # OpenSSL is not needed anywhere; image signatures are enforced by containers-policy.json.
-    { crate = "openssl-sys" },
+    { crate = "async-std", reason = "One async runtime in daemons: tokio. async-std is unmaintained." },
+    { crate = "relm4", reason = "GUI code must stay on the GLib main loop; relm4 forces tokio into the UI (ADR 0002)." },
+    { crate = "openssl-sys", reason = "OpenSSL is not needed anywhere; image signatures are enforced by containers-policy.json." },
 ]
 
 [sources]
