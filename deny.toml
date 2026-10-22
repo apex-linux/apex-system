@@ -34,12 +34,9 @@ multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true
 deny = [
-    # One async runtime in daemons: tokio. async-std is unmaintained.
-    { crate = "async-std" },
-    # GUI code must stay on the GLib main loop; relm4 forces tokio into the UI (ADR 0002).
-    { crate = "relm4" },
-    # OpenSSL is not needed anywhere; image signatures are enforced by containers-policy.json.
-    { crate = "openssl-sys" },
+    { crate = "async-std", reason = "One async runtime in daemons: tokio. async-std is unmaintained." },
+    { crate = "relm4", reason = "GUI code must stay on the GLib main loop; relm4 forces tokio into the UI (ADR 0002)." },
+    { crate = "openssl-sys", reason = "OpenSSL is not needed anywhere; image signatures are enforced by containers-policy.json." },
 ]
 
 [sources]
