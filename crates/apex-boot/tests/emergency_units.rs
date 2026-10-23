@@ -27,7 +27,7 @@ use apex_boot::emergency::{
     WATCHDOG_FLAG, schedule_args,
 };
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant};
 
 const SYSTEMD_ANALYZE: &str = "/usr/bin/systemd-analyze";
 const HOST_UNIT_DIR: &str = "/usr/lib/systemd/system";
@@ -277,7 +277,7 @@ impl Drop for PrivateBus {
     }
 }
 
-type Properties = Vec<(String, OwnedValue)>;
+type Properties = Vec<(String, OwnedVariant)>;
 type Recorded = (String, String, Properties, Vec<(String, Properties)>);
 
 /// `JobRemoved` goes out before the reply; the client queues it until it waits for the job.
@@ -361,11 +361,8 @@ fn run_against_fake_systemd(bus: &PrivateBus) -> Vec<Recorded> {
     let recorded = Arc::clone(&calls);
     let output = runtime.block_on(async move {
         let _systemd = zbus::connection::Builder::address(address.as_str())
-            .unwrap()
             .name("org.freedesktop.systemd1")
-            .unwrap()
             .serve_at("/org/freedesktop/systemd1", FakeManager { calls: recorded })
-            .unwrap()
             .build()
             .await
             .unwrap();

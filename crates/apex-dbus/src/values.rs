@@ -1,7 +1,7 @@
 use std::{fmt, marker::PhantomData, str::FromStr};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use zbus::zvariant::{OwnedValue, Signature, Str, Type, Value};
+use zbus::{OwnedVariant, Signature, Str, Type, Variant};
 
 /// One entry per RPM architecture. D-Bus has no null string, so an added package has an
 /// empty `from_evr` and a removed one an empty `to_evr`.
@@ -49,7 +49,7 @@ impl ValueError {
     pub(crate) fn wrong_type(
         field: impl Into<String>,
         expected: &'static Signature,
-        found: &Value<'_>,
+        found: &Variant<'_>,
     ) -> Self {
         Self::WrongType {
             field: field.into(),
@@ -59,10 +59,10 @@ impl ValueError {
     }
 }
 
-/// Lets proxy getters (`TryFrom<OwnedValue, Error = ValueError>`) report through zbus.
+/// So `?` turns a `ValueError` from the `TryFrom<OwnedVariant>` conversions into a zbus error.
 impl From<ValueError> for zbus::Error {
     fn from(error: ValueError) -> Self {
-        zbus::Error::Variant(zbus::zvariant::Error::Message(error.to_string()))
+        zbus::Error::Failure(error.to_string())
     }
 }
 
@@ -83,8 +83,8 @@ where
     }
 }
 
-/// Serde and zvariant conversions go through `as_str` and `FromStr`, so the wire form is the
-/// contract string whatever serde or zvariant do with enum variants.
+/// Serde and variant conversions go through `as_str` and `FromStr`, so the wire form is the
+/// contract string whatever serde or zbus do with enum variants.
 macro_rules! string_enum {
     (
         $(#[$meta:meta])*
@@ -141,25 +141,25 @@ macro_rules! string_enum {
             const SIGNATURE: &'static Signature = <&str as Type>::SIGNATURE;
         }
 
-        impl From<$name> for Value<'static> {
+        impl From<$name> for Variant<'static> {
             fn from(value: $name) -> Self {
-                Value::from(value.as_str())
+                Variant::from(value.as_str())
             }
         }
 
-        impl From<$name> for OwnedValue {
+        impl From<$name> for OwnedVariant {
             fn from(value: $name) -> Self {
-                OwnedValue::from(Str::from_static(value.as_str()))
+                OwnedVariant::from(Str::from_static(value.as_str()))
             }
         }
 
-        impl TryFrom<&Value<'_>> for $name {
+        impl TryFrom<&Variant<'_>> for $name {
             type Error = ValueError;
 
             // `ValueError` is spelled out: `Self::Error` would be ambiguous with `State::Error`.
-            fn try_from(value: &Value<'_>) -> Result<Self, ValueError> {
+            fn try_from(value: &Variant<'_>) -> Result<Self, ValueError> {
                 match value {
-                    Value::Str(text) => Ok(text.as_str().parse()?),
+                    Variant::Str(text) => Ok(text.as_str().parse()?),
                     other => Err(ValueError::wrong_type(
                         stringify!($name),
                         <Self as Type>::SIGNATURE,
@@ -169,10 +169,10 @@ macro_rules! string_enum {
             }
         }
 
-        impl TryFrom<OwnedValue> for $name {
+        impl TryFrom<OwnedVariant> for $name {
             type Error = ValueError;
 
-            fn try_from(value: OwnedValue) -> Result<Self, ValueError> {
+            fn try_from(value: OwnedVariant) -> Result<Self, ValueError> {
                 Self::try_from(&*value)
             }
         }
@@ -259,9 +259,9 @@ mod tests {
         for state in State::ALL {
             assert_eq!(state.as_str().parse::<State>(), Ok(*state));
             assert_eq!(state.to_string(), state.as_str());
-            let owned = OwnedValue::from(*state);
+            let owned = OwnedVariant::from(*state);
             assert_eq!(State::try_from(owned), Ok(*state));
-            assert_eq!(State::try_from(&Value::from(*state)), Ok(*state));
+            assert_eq!(State::try_from(&Variant::from(*state)), Ok(*state));
         }
         for channel in Channel::ALL {
             assert_eq!(channel.as_str().parse::<Channel>(), Ok(*channel));
@@ -309,9 +309,9 @@ mod tests {
 
     #[test]
     fn wrong_dbus_type_is_reported() {
-        let error = State::try_from(OwnedValue::from(7_u32)).unwrap_err();
+        let error = State::try_from(OwnedVariant::from(7_u32)).unwrap_err();
         assert_eq!(error.to_string(), "State: expected D-Bus type s, found u");
-        let error = Channel::try_from(OwnedValue::from(Str::from_static("beta"))).unwrap_err();
+        let error = Channel::try_from(OwnedVariant::from(Str::from_static("beta"))).unwrap_err();
         assert!(matches!(error, ValueError::Unknown(_)));
         let zbus_error = zbus::Error::from(error);
         assert!(
@@ -333,13 +333,13 @@ mod tests {
 
     #[test]
     fn serde_uses_contract_strings() {
-        let ctxt = zbus::zvariant::serialized::Context::new_dbus(zbus::zvariant::LE, 0);
-        let encoded = zbus::zvariant::to_bytes(ctxt, &State::ReadyForReboot).unwrap();
+        let ctxt = zbus::wire::serialized::Context::new(zbus::wire::LE, 0);
+        let encoded = zbus::wire::to_bytes(ctxt, &State::ReadyForReboot).unwrap();
         let (text, _): (String, _) = encoded.deserialize().unwrap();
         assert_eq!(text, "ready-for-reboot");
         let (state, _): (State, _) = encoded.deserialize().unwrap();
         assert_eq!(state, State::ReadyForReboot);
-        let bad = zbus::zvariant::to_bytes(ctxt, &"Staged").unwrap();
+        let bad = zbus::wire::to_bytes(ctxt, &"Staged").unwrap();
         assert!(bad.deserialize::<State>().is_err());
     }
 

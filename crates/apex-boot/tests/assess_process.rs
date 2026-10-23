@@ -26,7 +26,7 @@ use apex_boot::checks::names;
 use apex_boot::snippet::SNIPPET;
 use apex_dbus::Deployment;
 use serde_json::Value;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 
 const BINARY: &str = env!("CARGO_BIN_EXE_apex-boot-assess");
 const BOOTED: &str = "sha256:9999999999999999999999999999999999999999999999999999999999999999";
@@ -300,25 +300,18 @@ fn dry_run_with(
     let root = root.to_owned();
     let output = runtime.block_on(async move {
         let _logind = zbus::connection::Builder::address(address.as_str())
-            .unwrap()
             .name("org.freedesktop.login1")
-            .unwrap()
             .serve_at("/org/freedesktop/login1", FakeManager)
-            .unwrap()
             .serve_at(SESSION_PATH, FakeGreeter)
-            .unwrap()
             .build()
             .await
             .unwrap();
         let _updated = zbus::connection::Builder::address(address.as_str())
-            .unwrap()
             .name("io.github.apex_linux.Apex.Update1")
-            .unwrap()
             .serve_at(
                 "/io/github/apex_linux/Apex/Update1",
                 FakeUpdated { ping_delay },
             )
-            .unwrap()
             .build()
             .await
             .unwrap();

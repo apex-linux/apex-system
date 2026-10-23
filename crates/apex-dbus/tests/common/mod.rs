@@ -52,7 +52,7 @@ impl Log {
         let interactive = header
             .primary()
             .flags()
-            .contains(Flags::AllowInteractiveAuth);
+            .contains(Flags::ALLOW_INTERACTIVE_AUTH);
         self.calls
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -334,6 +334,36 @@ impl MockDaemon {
     }
 }
 
+fn emits<'r, 'x: 'r>(
+    annotations: impl IntoIterator<Item = &'r zbus_xml::Annotation<'x>>,
+    default: &str,
+) -> String {
+    annotations
+        .into_iter()
+        .find(|a| a.name() == "org.freedesktop.DBus.Property.EmitsChangedSignal")
+        .map_or(default.to_owned(), |a| a.value().to_owned())
+}
+
+fn args<'r, 'x: 'r>(
+    args: impl IntoIterator<Item = &'r zbus_xml::Arg<'x>>,
+    default: zbus_xml::ArgDirection,
+) -> String {
+    args.into_iter()
+        .map(|arg| {
+            let direction = match arg.direction().unwrap_or(default) {
+                zbus_xml::ArgDirection::In => "in",
+                zbus_xml::ArgDirection::Out => "out",
+            };
+            format!(
+                "{direction} {} {}",
+                arg.name().unwrap_or("<unnamed>"),
+                arg.ty().to_string()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// One entry per member, e.g. `"method Download" => "in override_soft_gates b"`.
 pub(crate) fn interface_description(xml: &str) -> BTreeMap<String, String> {
     let node = zbus_xml::Node::try_from(xml).expect("introspection XML parses");
@@ -342,30 +372,8 @@ pub(crate) fn interface_description(xml: &str) -> BTreeMap<String, String> {
         .iter()
         .find(|interface| interface.name().as_str() == INTERFACE)
         .unwrap_or_else(|| panic!("no interface {INTERFACE}"));
-    let emits = |annotations: &[zbus_xml::Annotation], default: &str| {
-        annotations
-            .iter()
-            .find(|a| a.name() == "org.freedesktop.DBus.Property.EmitsChangedSignal")
-            .map_or(default.to_owned(), |a| a.value().to_owned())
-    };
     // Per the D-Bus specification the default is "true", overridable per interface.
     let interface_emits = emits(interface.annotations(), "true");
-    let args = |args: &[zbus_xml::Arg], default: zbus_xml::ArgDirection| {
-        args.iter()
-            .map(|arg| {
-                let direction = match arg.direction().unwrap_or(default) {
-                    zbus_xml::ArgDirection::In => "in",
-                    zbus_xml::ArgDirection::Out => "out",
-                };
-                format!(
-                    "{direction} {} {}",
-                    arg.name().unwrap_or("<unnamed>"),
-                    arg.ty().to_string()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
 
     let mut description = BTreeMap::new();
     for method in interface.methods() {

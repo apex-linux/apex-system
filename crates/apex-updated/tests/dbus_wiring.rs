@@ -19,10 +19,10 @@ use apex_updated::queue::Op;
 use apex_updated::service::{Update1Service, emit_property_changes};
 use apex_updated::testing::{FakeAuthorizer, SharedGrubWriter};
 use common::*;
+use zbus::OwnedVariant;
 use zbus::export::futures_core::Stream;
 use zbus::fdo::{IntrospectableProxy, PropertiesChangedStream, PropertiesProxy};
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::OwnedValue;
 use zbus::{Connection, Guid, connection};
 
 /// Returns once the emitter's first signal has arrived, so later streams see only changes.
@@ -35,16 +35,15 @@ async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) 
 async fn connect_announced(
     h: &Harness,
     auth: FakeAuthorizer,
-) -> (Connection, Connection, BTreeMap<String, OwnedValue>) {
+) -> (Connection, Connection, BTreeMap<String, OwnedVariant>) {
     let service: Update1Service<Arc<FakeRunner>> =
         Update1Service::new(h.daemon.clone(), Arc::new(auth));
-    let (server_socket, client_socket) = tokio::net::UnixStream::pair().expect("socket pair");
+    let (server_socket, client_socket) =
+        std::os::unix::net::UnixStream::pair().expect("socket pair");
     let server = connection::Builder::unix_stream(server_socket)
         .server(Guid::generate())
-        .expect("guid")
         .p2p()
         .serve_at(OBJECT_PATH, service)
-        .expect("serve")
         .build();
     let client = connection::Builder::unix_stream(client_socket)
         .p2p()
@@ -72,9 +71,7 @@ async fn connect_announced(
 async fn properties_proxy(client: &Connection) -> PropertiesProxy<'static> {
     PropertiesProxy::builder(client)
         .destination(BUS_NAME)
-        .unwrap()
         .path(OBJECT_PATH)
-        .unwrap()
         .build()
         .await
         .unwrap()
@@ -90,6 +87,23 @@ async fn proxy(client: &Connection) -> Update1Proxy<'static> {
 
 const EMITS_CHANGED_SIGNAL_DEFAULT: &str = "true";
 
+fn args<'r, 'x: 'r>(args: impl IntoIterator<Item = &'r zbus_xml::Arg<'x>>) -> String {
+    args.into_iter()
+        .map(|arg| {
+            let direction = match arg.direction() {
+                Some(zbus_xml::ArgDirection::Out) => "out",
+                _ => "in",
+            };
+            format!(
+                "{direction} {} {}",
+                arg.name().unwrap_or("?"),
+                arg.ty().to_string()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// `"method Apply" => "in expected_digest s"`, `"property State" => "s read changes=true"`.
 fn members(xml: &str) -> BTreeMap<String, String> {
     let node = zbus_xml::Node::try_from(xml).expect("introspection XML parses");
@@ -98,22 +112,6 @@ fn members(xml: &str) -> BTreeMap<String, String> {
         .iter()
         .find(|i| i.name().as_str() == INTERFACE)
         .expect("the interface is present");
-    let args = |args: &[zbus_xml::Arg]| {
-        args.iter()
-            .map(|arg| {
-                let direction = match arg.direction() {
-                    Some(zbus_xml::ArgDirection::Out) => "out",
-                    _ => "in",
-                };
-                format!(
-                    "{direction} {} {}",
-                    arg.name().unwrap_or("?"),
-                    arg.ty().to_string()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
     let mut out = BTreeMap::new();
     for method in interface.methods() {
         out.insert(format!("method {}", method.name()), args(method.args()));
@@ -146,9 +144,7 @@ async fn introspection_matches_the_contract() {
     let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
     let introspectable = IntrospectableProxy::builder(&client)
         .destination(BUS_NAME)
-        .unwrap()
         .path(OBJECT_PATH)
-        .unwrap()
         .build()
         .await
         .unwrap();
@@ -375,7 +371,7 @@ async fn each_method_asks_polkit_for_its_contract_action() {
     h.fake.assert_finished();
 }
 
-type Seen = BTreeMap<String, Vec<OwnedValue>>;
+type Seen = BTreeMap<String, Vec<OwnedVariant>>;
 
 async fn watch_until(
     stream: &mut PropertiesChangedStream,

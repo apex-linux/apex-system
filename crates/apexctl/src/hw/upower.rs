@@ -16,11 +16,8 @@ pub async fn read(connection: &zbus::Connection, battery: &str) -> Option<Upower
     let query = async {
         let proxy = zbus::proxy::Builder::<zbus::Proxy<'_>>::new(connection)
             .destination("org.freedesktop.UPower")
-            .ok()?
             .path(path.as_str())
-            .ok()?
             .interface("org.freedesktop.UPower.Device")
-            .ok()?
             .cache_properties(zbus::proxy::CacheProperties::No)
             .build()
             .await

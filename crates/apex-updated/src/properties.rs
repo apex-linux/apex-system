@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use apex_dbus::{Channel, Deployment, State};
 use apex_update::state::is_available;
 use apex_update::{AfterCheck, SystemSnapshot, plan_after_check};
-use zbus::zvariant::Value;
+use zbus::Variant;
 
 use crate::text::display_text;
 
@@ -43,11 +43,11 @@ impl Default for Properties {
 }
 
 impl Properties {
-    pub fn changed_since(&self, previous: &Self) -> HashMap<&'static str, Value<'static>> {
+    pub fn changed_since(&self, previous: &Self) -> HashMap<&'static str, Variant<'static>> {
         self.entries(Some(previous))
     }
 
-    pub fn all(&self) -> HashMap<&'static str, Value<'static>> {
+    pub fn all(&self) -> HashMap<&'static str, Variant<'static>> {
         self.entries(None)
     }
 
@@ -83,11 +83,11 @@ impl Properties {
         self
     }
 
-    fn entries(&self, previous: Option<&Self>) -> HashMap<&'static str, Value<'static>> {
+    fn entries(&self, previous: Option<&Self>) -> HashMap<&'static str, Variant<'static>> {
         let all = previous.is_none();
         let previous = previous.unwrap_or(self);
         let mut changed = HashMap::new();
-        let mut put = |name: &'static str, differs: bool, value: Value<'static>| {
+        let mut put = |name: &'static str, differs: bool, value: Variant<'static>| {
             if differs || all {
                 changed.insert(name, value);
             }
@@ -97,7 +97,7 @@ impl Properties {
         put(
             "Progress",
             self.progress.to_bits() != previous.progress.to_bits(),
-            Value::F64(self.progress),
+            Variant::F64(self.progress),
         );
         put(
             "Booted",
@@ -127,22 +127,22 @@ impl Properties {
         put(
             "LastCheck",
             self.last_check != previous.last_check,
-            Value::U64(self.last_check),
+            Variant::U64(self.last_check),
         );
         put(
             "DeferredReason",
             self.deferred_reason != previous.deferred_reason,
-            Value::from(self.deferred_reason.clone()),
+            Variant::from(self.deferred_reason.clone()),
         );
         put(
             "LastError",
             self.last_error != previous.last_error,
-            Value::from(self.last_error.clone()),
+            Variant::from(self.last_error.clone()),
         );
         put(
             "HealthFailure",
             self.health_failure != previous.health_failure,
-            Value::from(self.health_failure.clone()),
+            Variant::from(self.health_failure.clone()),
         );
         changed
     }
@@ -426,7 +426,6 @@ mod tests {
         let node = zbus_xml::Node::try_from(apex_dbus::INTROSPECTION_XML).unwrap();
         node.interfaces()[0]
             .properties()
-            .iter()
             .map(|p| (p.name().to_string(), p.ty().to_string()))
             .collect()
     }
@@ -494,7 +493,7 @@ mod tests {
         assert_eq!(names, expected);
         assert_eq!(
             Properties::default().all()["LastError"],
-            Value::from(String::new())
+            Variant::from(String::new())
         );
     }
 

@@ -122,7 +122,7 @@ fn interface_shape_is_what_the_crate_assumes() {
     };
     assert_eq!(interface.name().as_str(), INTERFACE);
     assert!(
-        interface.signals().is_empty(),
+        interface.signals().next().is_none(),
         "the contract has no signals of its own"
     );
     for property in interface.properties() {
@@ -143,7 +143,6 @@ fn get_changes_returns_the_change_array() {
     };
     let method = interface
         .methods()
-        .iter()
         .find(|method| method.name() == "GetChanges")
         .expect("GetChanges");
     let [out] = method.args() else {
@@ -152,7 +151,7 @@ fn get_changes_returns_the_change_array() {
     assert_eq!(out.direction(), Some(zbus_xml::ArgDirection::Out));
     assert_eq!(
         out.ty().to_string(),
-        <Vec<Change> as zbus::zvariant::Type>::SIGNATURE.to_string()
+        <Vec<Change> as zbus::Type>::SIGNATURE.to_string()
     );
 }
 
@@ -164,7 +163,6 @@ fn polkit_guards_match_the_xml() {
     };
     let unguarded: BTreeSet<String> = interface
         .methods()
-        .iter()
         .map(|method| method.name().to_string())
         .filter(|name| PolkitAction::guarding(name).is_none())
         .collect();
@@ -240,7 +238,6 @@ fn proxy_declares_the_contract_names() {
     };
     let xml_methods: Vec<(String, Vec<String>)> = interface
         .methods()
-        .iter()
         .map(|method| {
             let inputs = method
                 .args()
@@ -253,7 +250,6 @@ fn proxy_declares_the_contract_names() {
         .collect();
     let xml_properties: BTreeSet<String> = interface
         .properties()
-        .iter()
         .map(|property| property.name().to_string())
         .collect();
 

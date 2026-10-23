@@ -48,7 +48,7 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util", "net"] }
 # Peer-to-peer connections let the wiring test run the real interface without a bus daemon.
 zbus = { workspace = true, features = ["p2p"] }
-zbus_xml = "5.2.1"
+zbus_xml = "6.0.0"
 
 [lints]
 workspace = true

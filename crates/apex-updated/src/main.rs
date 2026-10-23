@@ -90,7 +90,6 @@ fn notify(states: &[NotifyState<'_>]) {
 
 async fn run() -> anyhow::Result<()> {
     let connection = zbus::connection::Builder::system()
-        .context("cannot configure the system bus connection")?
         .build()
         .await
         .context("cannot connect to the system bus")?;
@@ -126,7 +125,7 @@ async fn run() -> anyhow::Result<()> {
     // The bus delivers the activating call right after RequestName; it must find real state.
     daemon.engine().first_refresh().await;
     let reply = connection
-        .request_name_with_flags(BUS_NAME, RequestNameFlags::DoNotQueue.into())
+        .request_name_with_flags(BUS_NAME, RequestNameFlags::DO_NOT_QUEUE)
         .await
         .with_context(|| format!("cannot own {BUS_NAME}"))?;
     if !matches!(

@@ -7,7 +7,6 @@ use crate::{ApexError, BootVerdict, Change, Channel, Deployment, State};
     interface = "io.github.apex_linux.Apex.Update1",
     default_service = "io.github.apex_linux.Apex.Update1",
     default_path = "/io/github/apex_linux/Apex/Update1",
-    gen_blocking = false
 )]
 pub trait Update1 {
     #[zbus(name = "Ping")]
@@ -76,9 +75,9 @@ mod tests {
     use super::*;
     use crate::{BUS_NAME, INTERFACE, OBJECT_PATH};
     use zbus::{
+        ObjectPath,
         names::{BusName, InterfaceName},
         proxy::Defaults,
-        zvariant::ObjectPath,
     };
 
     #[test]

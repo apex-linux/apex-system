@@ -77,14 +77,12 @@ fn proxy_runs_without_a_tokio_runtime() {
         std::os::unix::net::UnixStream::pair().expect("socket pair");
 
     block_on(async {
-        let server = connection::Builder::async_io_unix_stream(server_socket)
+        let server = connection::Builder::unix_stream(server_socket)
             .server(Guid::generate())
-            .expect("guid")
             .p2p()
             .serve_at(OBJECT_PATH, MockDaemon::new(log.clone()))
-            .expect("serve")
             .build();
-        let client = connection::Builder::async_io_unix_stream(client_socket)
+        let client = connection::Builder::unix_stream(client_socket)
             .p2p()
             .build();
         let (server, client) = join(server, client).await;

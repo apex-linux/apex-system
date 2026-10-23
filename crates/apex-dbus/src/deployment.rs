@@ -1,6 +1,8 @@
 use std::{collections::HashMap, hash::BuildHasher};
 
-use zbus::zvariant::{Optional, OwnedValue, Signature, Str, Type, Value};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+use zbus::{Optional, OwnedVariant, Signature, Str, Type, Variant};
 
 use crate::values::ValueError;
 
@@ -20,7 +22,7 @@ pub struct Deployment {
     pub degraded: Option<Vec<String>>,
 }
 
-const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedValue> as Type>::SIGNATURE;
+const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedVariant> as Type>::SIGNATURE;
 
 impl Deployment {
     pub const IMAGE: &'static str = "image";
@@ -51,7 +53,7 @@ impl Deployment {
 
     /// Each value arrives already unwrapped from its variant.
     fn from_entries<'v>(
-        entries: impl IntoIterator<Item = (&'v str, &'v Value<'v>)>,
+        entries: impl IntoIterator<Item = (&'v str, &'v Variant<'v>)>,
     ) -> Result<Self, ValueError> {
         let mut deployment = Self::default();
         for (key, value) in entries {
@@ -74,9 +76,9 @@ fn field(key: &str) -> String {
     format!("deployment key {key:?}")
 }
 
-fn string(key: &str, value: &Value<'_>) -> Result<String, ValueError> {
+fn string(key: &str, value: &Variant<'_>) -> Result<String, ValueError> {
     match value {
-        Value::Str(text) => Ok(text.as_str().to_owned()),
+        Variant::Str(text) => Ok(text.as_str().to_owned()),
         other => Err(ValueError::wrong_type(
             field(key),
             <String as Type>::SIGNATURE,
@@ -85,9 +87,9 @@ fn string(key: &str, value: &Value<'_>) -> Result<String, ValueError> {
     }
 }
 
-fn uint64(key: &str, value: &Value<'_>) -> Result<u64, ValueError> {
+fn uint64(key: &str, value: &Variant<'_>) -> Result<u64, ValueError> {
     match value {
-        Value::U64(number) => Ok(*number),
+        Variant::U64(number) => Ok(*number),
         other => Err(ValueError::wrong_type(
             field(key),
             <u64 as Type>::SIGNATURE,
@@ -96,9 +98,9 @@ fn uint64(key: &str, value: &Value<'_>) -> Result<u64, ValueError> {
     }
 }
 
-fn boolean(key: &str, value: &Value<'_>) -> Result<bool, ValueError> {
+fn boolean(key: &str, value: &Variant<'_>) -> Result<bool, ValueError> {
     match value {
-        Value::Bool(flag) => Ok(*flag),
+        Variant::Bool(flag) => Ok(*flag),
         other => Err(ValueError::wrong_type(
             field(key),
             <bool as Type>::SIGNATURE,
@@ -107,9 +109,9 @@ fn boolean(key: &str, value: &Value<'_>) -> Result<bool, ValueError> {
     }
 }
 
-fn string_array(key: &str, value: &Value<'_>) -> Result<Vec<String>, ValueError> {
+fn string_array(key: &str, value: &Variant<'_>) -> Result<Vec<String>, ValueError> {
     let expected = <Vec<String> as Type>::SIGNATURE;
-    let Value::Array(array) = value else {
+    let Variant::Array(array) = value else {
         return Err(ValueError::wrong_type(field(key), expected, value));
     };
     // Every element has the array's element signature, so this makes the match below total.
@@ -119,19 +121,19 @@ fn string_array(key: &str, value: &Value<'_>) -> Result<Vec<String>, ValueError>
     array
         .iter()
         .map(|element| match element {
-            Value::Str(text) => Ok(text.as_str().to_owned()),
+            Variant::Str(text) => Ok(text.as_str().to_owned()),
             other => Err(ValueError::wrong_type(field(key), expected, other)),
         })
         .collect()
 }
 
-/// zvariant converts arrays only fallibly (duplicating file descriptors can fail), but its
-/// infallible `From<Optional<V>> for OwnedValue` covers `Vec<String>`.
-fn owned_string_array(items: Vec<String>) -> OwnedValue {
-    OwnedValue::from(Optional::from(Some(items)))
+/// zbus converts arrays only fallibly (duplicating file descriptors can fail), but its
+/// infallible `From<Optional<V>> for OwnedVariant` covers `Vec<String>`.
+fn owned_string_array(items: Vec<String>) -> OwnedVariant {
+    OwnedVariant::from(Optional::from(Some(items)))
 }
 
-impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedValue, S> {
+impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant, S> {
     fn from(deployment: Deployment) -> Self {
         let Deployment {
             image,
@@ -142,16 +144,16 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedValue, 
             download_only,
             degraded,
         } = deployment;
-        let text = |value: String| OwnedValue::from(Str::from(value));
+        let text = |value: String| OwnedVariant::from(Str::from(value));
         let entries = [
             (Deployment::IMAGE, image.map(text)),
             (Deployment::DIGEST, digest.map(text)),
             (Deployment::VERSION, version.map(text)),
-            (Deployment::TIMESTAMP, timestamp.map(OwnedValue::from)),
-            (Deployment::PINNED, pinned.map(OwnedValue::from)),
+            (Deployment::TIMESTAMP, timestamp.map(OwnedVariant::from)),
+            (Deployment::PINNED, pinned.map(OwnedVariant::from)),
             (
                 Deployment::DOWNLOAD_ONLY,
-                download_only.map(OwnedValue::from),
+                download_only.map(OwnedVariant::from),
             ),
             (Deployment::DEGRADED, degraded.map(owned_string_array)),
         ];
@@ -162,38 +164,38 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedValue, 
     }
 }
 
-impl<S: BuildHasher> TryFrom<&HashMap<String, OwnedValue, S>> for Deployment {
+impl<S: BuildHasher> TryFrom<&HashMap<String, OwnedVariant, S>> for Deployment {
     type Error = ValueError;
 
-    fn try_from(map: &HashMap<String, OwnedValue, S>) -> Result<Self, Self::Error> {
+    fn try_from(map: &HashMap<String, OwnedVariant, S>) -> Result<Self, Self::Error> {
         Self::from_entries(map.iter().map(|(key, value)| (key.as_str(), &**value)))
     }
 }
 
-impl<S: BuildHasher> TryFrom<HashMap<String, OwnedValue, S>> for Deployment {
+impl<S: BuildHasher> TryFrom<HashMap<String, OwnedVariant, S>> for Deployment {
     type Error = ValueError;
 
-    fn try_from(map: HashMap<String, OwnedValue, S>) -> Result<Self, Self::Error> {
+    fn try_from(map: HashMap<String, OwnedVariant, S>) -> Result<Self, Self::Error> {
         Self::try_from(&map)
     }
 }
 
-impl TryFrom<&Value<'_>> for Deployment {
+impl TryFrom<&Variant<'_>> for Deployment {
     type Error = ValueError;
 
-    fn try_from(value: &Value<'_>) -> Result<Self, Self::Error> {
+    fn try_from(value: &Variant<'_>) -> Result<Self, Self::Error> {
         let dict = match value {
-            Value::Dict(dict) if dict.signature() == DICT_SIGNATURE => dict,
+            Variant::Dict(dict) if dict.signature() == DICT_SIGNATURE => dict,
             other => return Err(ValueError::wrong_type("Deployment", DICT_SIGNATURE, other)),
         };
         let entries = dict.iter().map(|(key, value)| {
             // In an a{sv} dict each value is a variant wrapping the real value.
             let key = match key {
-                Value::Str(text) => text.as_str(),
+                Variant::Str(text) => text.as_str(),
                 _ => "",
             };
             let value = match value {
-                Value::Value(inner) => &**inner,
+                Variant::Variant(inner) => &**inner,
                 plain => plain,
             };
             (key, value)
@@ -202,25 +204,24 @@ impl TryFrom<&Value<'_>> for Deployment {
     }
 }
 
-/// What the proxy's property getters use.
-impl TryFrom<OwnedValue> for Deployment {
+/// For a `PropertiesChanged` value read by hand.
+impl TryFrom<OwnedVariant> for Deployment {
     type Error = ValueError;
 
-    fn try_from(value: OwnedValue) -> Result<Self, Self::Error> {
+    fn try_from(value: OwnedVariant) -> Result<Self, Self::Error> {
         Self::try_from(&*value)
     }
 }
 
-impl From<Deployment> for OwnedValue {
+impl From<Deployment> for OwnedVariant {
     fn from(deployment: Deployment) -> Self {
-        OwnedValue::from(HashMap::<String, OwnedValue>::from(deployment))
+        OwnedVariant::from(HashMap::<String, OwnedVariant>::from(deployment))
     }
 }
 
-/// What the daemon's `#[zbus::interface]` property getters use.
-impl From<Deployment> for Value<'static> {
+impl From<Deployment> for Variant<'static> {
     fn from(deployment: Deployment) -> Self {
-        Value::from(HashMap::<String, OwnedValue>::from(deployment))
+        Variant::from(HashMap::<String, OwnedVariant>::from(deployment))
     }
 }
 
@@ -228,11 +229,25 @@ impl Type for Deployment {
     const SIGNATURE: &'static Signature = DICT_SIGNATURE;
 }
 
+/// What the proxy and the daemon's `#[zbus::interface]` properties use, as the `a{sv}` dictionary.
+impl Serialize for Deployment {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        HashMap::<String, OwnedVariant>::from(self.clone()).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Deployment {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let map = HashMap::<String, OwnedVariant>::deserialize(deserializer)?;
+        Self::try_from(map).map_err(de::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::{collection::vec, option, prelude::*};
-    use zbus::zvariant::Dict;
+    use zbus::Dict;
 
     fn full() -> Deployment {
         Deployment {
@@ -274,7 +289,7 @@ mod tests {
 
     #[test]
     fn keys_and_signatures_match_the_map() {
-        let map = HashMap::<String, OwnedValue>::from(full());
+        let map = HashMap::<String, OwnedVariant>::from(full());
         assert_eq!(map.len(), Deployment::KEYS.len());
         for (key, signature) in Deployment::KEYS {
             let value = map.get(key).unwrap_or_else(|| panic!("{key} missing"));
@@ -301,10 +316,10 @@ mod tests {
 
     #[test]
     fn empty_dictionary_is_no_deployment() {
-        let empty = Deployment::try_from(HashMap::<String, OwnedValue>::new()).unwrap();
+        let empty = Deployment::try_from(HashMap::<String, OwnedVariant>::new()).unwrap();
         assert!(empty.is_empty());
         assert_eq!(empty.into_option(), None);
-        assert!(HashMap::<String, OwnedValue>::from(Deployment::default()).is_empty());
+        assert!(HashMap::<String, OwnedVariant>::from(Deployment::default()).is_empty());
         let only_pinned = Deployment {
             pinned: Some(false),
             ..Deployment::default()
@@ -315,33 +330,33 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_ignored() {
-        let mut map = HashMap::<String, OwnedValue>::from(full());
-        map.insert("soft-reboot-capable".to_owned(), OwnedValue::from(true));
-        map.insert("size".to_owned(), OwnedValue::from(12_u32));
+        let mut map = HashMap::<String, OwnedVariant>::from(full());
+        map.insert("soft-reboot-capable".to_owned(), OwnedVariant::from(true));
+        map.insert("size".to_owned(), OwnedVariant::from(12_u32));
         assert_eq!(Deployment::try_from(map), Ok(full()));
     }
 
     #[test]
     fn wrong_types_are_errors() {
         let cases = [
-            (Deployment::IMAGE, OwnedValue::from(1_u64), "s", "t"),
-            (Deployment::TIMESTAMP, OwnedValue::from(1_u32), "t", "u"),
-            (Deployment::TIMESTAMP, OwnedValue::from(1_i64), "t", "x"),
+            (Deployment::IMAGE, OwnedVariant::from(1_u64), "s", "t"),
+            (Deployment::TIMESTAMP, OwnedVariant::from(1_u32), "t", "u"),
+            (Deployment::TIMESTAMP, OwnedVariant::from(1_i64), "t", "x"),
             (
                 Deployment::PINNED,
-                OwnedValue::from(Str::from_static("yes")),
+                OwnedVariant::from(Str::from_static("yes")),
                 "b",
                 "s",
             ),
             (
                 Deployment::DEGRADED,
-                OwnedValue::from(Str::from_static("audio")),
+                OwnedVariant::from(Str::from_static("audio")),
                 "as",
                 "s",
             ),
             (
                 Deployment::DEGRADED,
-                OwnedValue::from(Optional::from(Some(vec![1_u32]))),
+                OwnedVariant::from(Optional::from(Some(vec![1_u32]))),
                 "as",
                 "au",
             ),
@@ -358,14 +373,15 @@ mod tests {
 
     #[test]
     fn non_dictionary_value_is_an_error() {
-        let error = Deployment::try_from(OwnedValue::from(true)).unwrap_err();
+        let error = Deployment::try_from(OwnedVariant::from(true)).unwrap_err();
         assert_eq!(
             error.to_string(),
             "Deployment: expected D-Bus type a{sv}, found b"
         );
         let mut dict = Dict::new(<String as Type>::SIGNATURE, <String as Type>::SIGNATURE);
-        dict.append(Value::from("image"), Value::from("x")).unwrap();
-        let error = Deployment::try_from(&Value::Dict(dict)).unwrap_err();
+        dict.append(Variant::from("image"), Variant::from("x"))
+            .unwrap();
+        let error = Deployment::try_from(&Variant::Dict(dict)).unwrap_err();
         assert_eq!(
             error.to_string(),
             "Deployment: expected D-Bus type a{sv}, found a{ss}"
@@ -378,7 +394,7 @@ mod tests {
             degraded: Some(Vec::new()),
             ..Deployment::default()
         };
-        let map = HashMap::<String, OwnedValue>::from(deployment.clone());
+        let map = HashMap::<String, OwnedVariant>::from(deployment.clone());
         assert_eq!(
             map[Deployment::DEGRADED].value_signature().to_string(),
             "as"
@@ -389,33 +405,33 @@ mod tests {
     proptest! {
         #[test]
         fn map_round_trip(deployment in deployments()) {
-            let map = HashMap::<String, OwnedValue>::from(deployment.clone());
+            let map = HashMap::<String, OwnedVariant>::from(deployment.clone());
             prop_assert_eq!(Deployment::try_from(map), Ok(deployment));
         }
 
         #[test]
         fn map_is_preserved(deployment in deployments()) {
-            let map = HashMap::<String, OwnedValue>::from(deployment);
-            let again = HashMap::<String, OwnedValue>::from(Deployment::try_from(&map).unwrap());
+            let map = HashMap::<String, OwnedVariant>::from(deployment);
+            let again = HashMap::<String, OwnedVariant>::from(Deployment::try_from(&map).unwrap());
             prop_assert_eq!(again, map);
         }
 
         /// As the daemon's property getter produces it and the proxy's reads it.
         #[test]
         fn property_value_round_trip(deployment in deployments()) {
-            let value = Value::from(deployment.clone());
+            let value = Variant::from(deployment.clone());
             prop_assert_eq!(value.value_signature(), DICT_SIGNATURE);
-            let owned = OwnedValue::try_from(value).unwrap();
+            let owned = OwnedVariant::try_from(value).unwrap();
             prop_assert_eq!(Deployment::try_from(owned), Ok(deployment.clone()));
-            let direct = OwnedValue::from(deployment.clone());
+            let direct = OwnedVariant::from(deployment.clone());
             prop_assert_eq!(Deployment::try_from(direct), Ok(deployment));
         }
 
         #[test]
         fn dbus_encoding_round_trip(deployment in deployments()) {
-            let ctxt = zbus::zvariant::serialized::Context::new_dbus(zbus::zvariant::LE, 0);
-            let encoded = zbus::zvariant::to_bytes(ctxt, &Value::from(deployment.clone())).unwrap();
-            let (decoded, _): (OwnedValue, _) = encoded.deserialize().unwrap();
+            let ctxt = zbus::wire::serialized::Context::new(zbus::wire::LE, 0);
+            let encoded = zbus::wire::to_bytes(ctxt, &Variant::from(deployment.clone())).unwrap();
+            let (decoded, _): (OwnedVariant, _) = encoded.deserialize().unwrap();
             prop_assert_eq!(Deployment::try_from(decoded), Ok(deployment));
         }
     }

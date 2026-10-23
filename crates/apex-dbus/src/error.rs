@@ -182,7 +182,6 @@ mod tests {
             let name = ErrorName::try_from(kind.error_name()).unwrap();
             // zbus makes a received error reply MethodError(name, description, message).
             let message = zbus::message::Message::method_call("/", "Ping")
-                .unwrap()
                 .build(&())
                 .unwrap();
             let error = zbus::Error::MethodError(name.into(), Some("why".to_owned()), message);

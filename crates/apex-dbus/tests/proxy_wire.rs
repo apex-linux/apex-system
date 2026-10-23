@@ -23,13 +23,12 @@ use zbus::{
 };
 
 async fn connect(daemon: MockDaemon) -> (Connection, Connection) {
-    let (server_socket, client_socket) = tokio::net::UnixStream::pair().expect("socket pair");
+    let (server_socket, client_socket) =
+        std::os::unix::net::UnixStream::pair().expect("socket pair");
     let server = connection::Builder::unix_stream(server_socket)
         .server(Guid::generate())
-        .expect("guid")
         .p2p()
         .serve_at(OBJECT_PATH, daemon)
-        .expect("serve")
         .build();
     let client = connection::Builder::unix_stream(client_socket)
         .p2p()
@@ -57,9 +56,7 @@ async fn server_types_produce_the_contract_introspection() {
     let (_server, client) = connect(MockDaemon::new(Log::default())).await;
     let introspectable = IntrospectableProxy::builder(&client)
         .destination(BUS_NAME)
-        .expect("destination")
         .path(OBJECT_PATH)
-        .expect("path")
         .build()
         .await
         .expect("introspectable proxy");

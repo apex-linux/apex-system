@@ -10,10 +10,10 @@ use apex_dbus::{
 };
 use tokio::sync::watch;
 use zbus::Connection;
+use zbus::Variant;
 use zbus::message::Header;
 use zbus::names::InterfaceName;
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::Value;
 
 use crate::auth::{Authorizer, require_root};
 use crate::daemon::Daemon;
@@ -300,7 +300,7 @@ async fn emit_from(connection: Connection, mut properties: watch::Receiver<Prope
 async fn signal(
     emitter: &SignalEmitter<'_>,
     interface: &InterfaceName<'static>,
-    changed: HashMap<&'static str, Value<'static>>,
+    changed: HashMap<&'static str, Variant<'static>>,
 ) {
     let signal = zbus::fdo::Properties::properties_changed(
         emitter,
