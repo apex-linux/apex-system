@@ -171,7 +171,7 @@ check-data:
 	rm -rf '$(CHECK_ROOT)'; \
 	$(MAKE) --no-print-directory -s install-data DESTDIR='$(CHECK_ROOT)'; \
 	for f in '$(BINDIR)/apexctl' '$(LIBEXECDIR)/apex-updated' \
-		'$(LIBEXECDIR)/apex-boot-assess' /usr/bin/true; do \
+		'$(LIBEXECDIR)/apex-boot-assess' '$(LIBEXECDIR)/apex-session-agent' /usr/bin/true; do \
 		mkdir -p "$$(dirname '$(CHECK_ROOT)'"$$f")"; \
 		printf '#!/bin/sh\nexit 0\n' > '$(CHECK_ROOT)'"$$f"; \
 		chmod 0755 '$(CHECK_ROOT)'"$$f"; \
@@ -182,7 +182,14 @@ check-data:
 	done; \
 	echo "systemd-analyze verify --root=$(CHECK_ROOT) $(UNITS) $(SYSTEMD_UNITS_WITH_APEX_DROPIN)"; \
 	systemd-analyze verify --man=no --recursive-errors=no \
-		--root='$(CHECK_ROOT)' $(UNITS) $(SYSTEMD_UNITS_WITH_APEX_DROPIN)
+		--root='$(CHECK_ROOT)' $(UNITS) $(SYSTEMD_UNITS_WITH_APEX_DROPIN); \
+	user_unit='$(CHECK_ROOT)$(USERUNITDIR)/apex-session-agent.service'; \
+	runtime=$$(mktemp -d); \
+	trap 'rm -rf "$$runtime"' EXIT; \
+	sed 's|^ExecStart=|ExecStart=$(CHECK_ROOT)|' "$$user_unit" >"$$runtime/apex-session-agent.service"; \
+	echo "systemd-analyze --user verify apex-session-agent.service (ExecStart in the staged root)"; \
+	XDG_RUNTIME_DIR="$$runtime" systemd-analyze --user verify --man=no --recursive-errors=no \
+		"$$runtime/apex-session-agent.service"
 
 rpm:
 	@if [ -z '$(SHORTCOMMIT)' ]; then \

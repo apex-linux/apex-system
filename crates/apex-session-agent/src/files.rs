@@ -16,6 +16,8 @@ pub enum FileError {
     },
     #[error("{} leads to {}, outside the agent's config and state directories", .link.display(), .target.display())]
     Outside { link: PathBuf, target: PathBuf },
+    #[error("{} is not writable by its owner, so it is left as it is", .path.display())]
+    ReadOnly { path: PathBuf },
 }
 
 fn io_error(path: &Path) -> impl FnOnce(io::Error) -> FileError + '_ {
@@ -57,19 +59,31 @@ pub fn write_atomic(path: &Path, contents: &[u8], mode: u32) -> Result<bool, Fil
     written.map(|()| true).map_err(io_error(path))
 }
 
-/// A symlinked `gtk.css`, as dotfile managers leave it, is edited where it points, and only
-/// inside the agent's own directories.
-fn resolve(path: &Path, paths: &Paths) -> Result<PathBuf, FileError> {
-    let is_link = fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
-    if !is_link {
-        return Ok(path.to_owned());
+/// The deepest part of `path` that exists, resolved, with the rest appended.
+fn resolve_existing(path: &Path) -> io::Result<PathBuf> {
+    let mut missing = Vec::new();
+    let mut base = path;
+    loop {
+        match fs::canonicalize(base) {
+            Ok(real) => return Ok(missing.iter().rev().fold(real, |p, part| p.join(part))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (base.parent(), base.file_name()) else {
+                    return Err(error);
+                };
+                missing.push(name.to_owned());
+                base = parent;
+            }
+            Err(error) => return Err(error),
+        }
     }
-    let target = fs::canonicalize(path).map_err(io_error(path))?;
-    let canonical = |home: &Path| fs::canonicalize(home).unwrap_or_else(|_| home.to_owned());
-    let homes = Paths {
-        config_home: canonical(&paths.config_home),
-        state_home: canonical(&paths.state_home),
-    };
+}
+
+/// Dotfile managers link `gtk.css` or the whole `gtk-4.0` directory. The agent writes where
+/// a link leads, but only inside the canonical config or state home.
+pub fn contained(path: &Path, paths: &Paths) -> Result<PathBuf, FileError> {
+    let target = resolve_existing(path).map_err(io_error(path))?;
+    let canonical = |home: &Path| resolve_existing(home).unwrap_or_else(|_| home.to_owned());
+    let homes = Paths::new(canonical(&paths.config_home), canonical(&paths.state_home));
     if homes.is_ours(&target) {
         Ok(target)
     } else {
@@ -81,24 +95,28 @@ fn resolve(path: &Path, paths: &Paths) -> Result<PathBuf, FileError> {
 }
 
 pub fn write_apex_css(paths: &Paths, radius: u32) -> Result<bool, FileError> {
-    write_atomic(&paths.apex_css(), css::radius_css(radius).as_bytes(), 0o644)
+    let path = contained(&paths.apex_css(), paths)?;
+    write_atomic(&path, css::radius_css(radius).as_bytes(), 0o644)
 }
 
-/// Adds the import line once; the user's own text is kept byte for byte.
+/// Adds the import line once; every byte of the user's own file is kept.
 pub fn ensure_import(paths: &Paths) -> Result<bool, FileError> {
-    let path = resolve(&paths.gtk_css(), paths)?;
-    let (text, mode) = match fs::read(&path) {
+    let path = contained(&paths.gtk_css(), paths)?;
+    let (bytes, mode) = match fs::read(&path) {
         Ok(bytes) => {
             let mode = fs::metadata(&path).map_or(0o644, |m| m.permissions().mode() & 0o7777);
-            (String::from_utf8_lossy(&bytes).into_owned(), mode)
+            (bytes, mode)
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => (String::new(), 0o644),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => (Vec::new(), 0o644),
         Err(error) => return Err(io_error(&path)(error)),
     };
-    match css::with_import(&text) {
-        Some(edited) => write_atomic(&path, edited.as_bytes(), mode),
-        None => Ok(false),
+    let Some(edited) = css::with_import(&bytes) else {
+        return Ok(false);
+    };
+    if mode & 0o200 == 0 {
+        return Err(FileError::ReadOnly { path });
     }
+    write_atomic(&path, &edited, mode)
 }
 
 pub fn remove_marker(paths: &Paths) -> Result<(), FileError> {
@@ -116,10 +134,7 @@ mod tests {
 
     fn tree() -> (tempfile::TempDir, Paths) {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths {
-            config_home: dir.path().join("config"),
-            state_home: dir.path().join("state"),
-        };
+        let paths = Paths::new(dir.path().join("config"), dir.path().join("state"));
         (dir, paths)
     }
 
@@ -198,10 +213,78 @@ mod tests {
     }
 
     #[test]
+    fn a_linked_gtk_directory_outside_our_homes_is_refused_for_both_files() {
+        let (dir, paths) = tree();
+        let dotfiles = dir.path().join("dotfiles/gtk-4.0");
+        fs::create_dir_all(&dotfiles).unwrap();
+        fs::write(dotfiles.join("gtk.css"), "window {}\n").unwrap();
+        fs::create_dir_all(&paths.config_home).unwrap();
+        symlink(&dotfiles, paths.gtk_dir()).unwrap();
+        assert!(matches!(
+            write_apex_css(&paths, 9),
+            Err(FileError::Outside { .. })
+        ));
+        assert!(matches!(
+            ensure_import(&paths),
+            Err(FileError::Outside { .. })
+        ));
+        assert!(!dotfiles.join("apex.css").exists());
+        assert_eq!(
+            fs::read_to_string(dotfiles.join("gtk.css")).unwrap(),
+            "window {}\n"
+        );
+    }
+
+    #[test]
+    fn a_linked_gtk_directory_inside_our_homes_is_followed() {
+        let (_dir, paths) = tree();
+        let real = paths.config_home.join("dotfiles/gtk-4.0");
+        fs::create_dir_all(&real).unwrap();
+        symlink(&real, paths.gtk_dir()).unwrap();
+        assert!(write_apex_css(&paths, 9).unwrap());
+        assert!(ensure_import(&paths).unwrap());
+        assert!(real.join("apex.css").exists());
+        assert!(real.join("gtk.css").exists());
+    }
+
+    #[test]
+    fn a_gtk_css_without_owner_write_is_left_alone() {
+        let (_dir, paths) = tree();
+        fs::create_dir_all(paths.gtk_dir()).unwrap();
+        fs::write(paths.gtk_css(), "window {}\n").unwrap();
+        fs::set_permissions(paths.gtk_css(), Permissions::from_mode(0o444)).unwrap();
+        assert!(matches!(
+            ensure_import(&paths),
+            Err(FileError::ReadOnly { .. })
+        ));
+        assert_eq!(fs::read_to_string(paths.gtk_css()).unwrap(), "window {}\n");
+
+        fs::set_permissions(paths.gtk_css(), Permissions::from_mode(0o644)).unwrap();
+        fs::write(paths.gtk_css(), "@import url(\"apex.css\");\n").unwrap();
+        fs::set_permissions(paths.gtk_css(), Permissions::from_mode(0o444)).unwrap();
+        assert!(
+            !ensure_import(&paths).unwrap(),
+            "nothing to add is no error"
+        );
+    }
+
+    #[test]
+    fn a_gtk_css_in_another_encoding_keeps_its_bytes() {
+        let (_dir, paths) = tree();
+        fs::create_dir_all(paths.gtk_dir()).unwrap();
+        let latin1 = b"/* caf\xe9 */\nwindow {}\n";
+        fs::write(paths.gtk_css(), latin1).unwrap();
+        assert!(ensure_import(&paths).unwrap());
+        let mut expected = b"@import url(\"apex.css\");\n".to_vec();
+        expected.extend_from_slice(latin1);
+        assert_eq!(fs::read(paths.gtk_css()).unwrap(), expected);
+    }
+
+    #[test]
     fn removing_a_missing_marker_is_fine() {
         let (_dir, paths) = tree();
         remove_marker(&paths).unwrap();
-        fs::create_dir_all(paths.state_dir()).unwrap();
+        fs::create_dir_all(paths.marker_dir()).unwrap();
         fs::write(paths.guard_marker(), "").unwrap();
         remove_marker(&paths).unwrap();
         assert!(!paths.guard_marker().exists());

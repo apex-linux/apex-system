@@ -22,8 +22,8 @@ impl DbusNotifier {
         Self { connection }
     }
 
-    /// Kept alive by the caller: dropping a subscription ends it.
-    pub fn subscribe(&self, agent: &Rc<Agent>) -> Vec<gio::SignalSubscription> {
+    /// Kept alive by the caller: dropping it ends the subscriptions and the name watch.
+    pub fn subscribe(&self, agent: &Rc<Agent>) -> Subscription {
         let on_action = Rc::downgrade(agent);
         let on_close: Weak<Agent> = Rc::downgrade(agent);
         let subscribe = |member, callback: Box<dyn Fn(&glib::Variant)>| {
@@ -37,7 +37,7 @@ impl DbusNotifier {
                 move |signal| callback(signal.parameters),
             )
         };
-        vec![
+        let signals = vec![
             subscribe(
                 "ActionInvoked",
                 Box::new(move |parameters| {
@@ -60,7 +60,48 @@ impl DbusNotifier {
                     }
                 }),
             ),
-        ]
+        ];
+        let appeared = Rc::downgrade(agent);
+        let vanished = Rc::downgrade(agent);
+        let watcher = gio::bus_watch_name_on_connection(
+            &self.connection,
+            BUS_NAME,
+            gio::BusNameWatcherFlags::NONE,
+            move |_, _, _| {
+                if let Some(agent) = appeared.upgrade() {
+                    agent.notification_server(true);
+                }
+            },
+            move |_, _| {
+                if let Some(agent) = vanished.upgrade() {
+                    agent.notification_server(false);
+                }
+            },
+        );
+        Subscription {
+            _signals: signals,
+            unwatch: Some(Box::new(move || gio::bus_unwatch_name(watcher))),
+        }
+    }
+}
+
+/// The signal subscriptions and the watch on the notification server's name.
+pub struct Subscription {
+    _signals: Vec<gio::SignalSubscription>,
+    unwatch: Option<Box<dyn FnOnce()>>,
+}
+
+impl std::fmt::Debug for Subscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Subscription").finish_non_exhaustive()
+    }
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        if let Some(unwatch) = self.unwatch.take() {
+            unwatch();
+        }
     }
 }
 

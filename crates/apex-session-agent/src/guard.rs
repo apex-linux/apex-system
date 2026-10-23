@@ -31,6 +31,8 @@ enum Notification {
 pub struct Offer {
     marker: bool,
     notification: Notification,
+    /// Only a watcher that saw the name vanish sets this; without one the agent tries.
+    server_gone: bool,
 }
 
 impl Offer {
@@ -41,7 +43,7 @@ impl Offer {
     pub fn marker(&mut self, present: bool) -> Option<Effect> {
         self.marker = present;
         match (present, self.notification) {
-            (true, Notification::None) => {
+            (true, Notification::None) if !self.server_gone => {
                 self.notification = Notification::Posting;
                 Some(Effect::Post)
             }
@@ -55,6 +57,22 @@ impl Offer {
             }
             _ => None,
         }
+    }
+
+    /// The notification server came onto the bus or left it. A shell restart takes its
+    /// notifications along, so a shown or pending offer is posted again on its return.
+    pub fn server(&mut self, present: bool) -> Option<Effect> {
+        self.server_gone = !present;
+        if !present {
+            if matches!(
+                self.notification,
+                Notification::Posting | Notification::Shown(_)
+            ) {
+                self.notification = Notification::None;
+            }
+            return None;
+        }
+        self.marker(self.marker)
     }
 
     /// The marker was created again: a new trip, offered even after a dismissal.
@@ -196,6 +214,50 @@ mod tests {
         assert_eq!(offer.marker(true), Some(Effect::Post));
         offer.post_failed();
         assert_eq!(offer.marker(true), Some(Effect::Post));
+    }
+
+    #[test]
+    fn an_offer_waits_for_the_notification_server() {
+        let mut offer = Offer::new();
+        assert_eq!(offer.server(false), None);
+        assert_eq!(offer.marker(true), None, "nobody to show it");
+        assert_eq!(offer.server(true), Some(Effect::Post));
+        assert_eq!(offer.posted(5), None);
+        assert_eq!(offer.shown(), Some(5));
+    }
+
+    #[test]
+    fn a_post_that_failed_is_retried_when_the_server_appears() {
+        let mut offer = Offer::new();
+        assert_eq!(offer.marker(true), Some(Effect::Post));
+        offer.post_failed();
+        assert_eq!(offer.server(true), Some(Effect::Post));
+    }
+
+    #[test]
+    fn a_shell_restart_posts_the_offer_again() {
+        let mut offer = shown(7);
+        assert_eq!(offer.server(false), None);
+        assert_eq!(offer.shown(), None, "the old id is gone with the server");
+        assert_eq!(offer.action(7, ACTION_KEY), None);
+        assert_eq!(offer.server(true), Some(Effect::Post));
+        assert_eq!(offer.posted(8), None);
+        assert_eq!(offer.shown(), Some(8));
+    }
+
+    #[test]
+    fn a_dismissed_offer_stays_dismissed_across_a_shell_restart() {
+        let mut offer = shown(7);
+        offer.closed(7);
+        assert_eq!(offer.server(false), None);
+        assert_eq!(offer.server(true), None);
+    }
+
+    #[test]
+    fn without_a_marker_the_server_changes_nothing() {
+        let mut offer = Offer::new();
+        assert_eq!(offer.server(false), None);
+        assert_eq!(offer.server(true), None);
     }
 
     #[test]
