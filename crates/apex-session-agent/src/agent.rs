@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gio::prelude::*;
@@ -25,6 +26,7 @@ pub struct Agent {
     notifier: Box<dyn Notifier>,
     watches: RefCell<Vec<glib::SignalHandlerId>>,
     monitor: RefCell<Option<gio::FileMonitor>>,
+    warned: RefCell<HashSet<String>>,
 }
 
 impl Agent {
@@ -36,6 +38,7 @@ impl Agent {
             notifier,
             watches: RefCell::new(Vec::new()),
             monitor: RefCell::new(None),
+            warned: RefCell::new(HashSet::new()),
         });
         let schema = agent.settings.settings_schema();
         let has = |key: &str| schema.as_ref().is_some_and(|s| s.has_key(key));
@@ -69,23 +72,31 @@ impl Agent {
         self.write_radius();
     }
 
+    /// A refusal repeats with every radius change; the journal needs it once.
+    fn warn_once(&self, what: &str, error: &files::FileError) {
+        let text = format!("{what}: {}", error_chain(error));
+        if self.warned.borrow_mut().insert(text.clone()) {
+            tracing::warn!("{text}");
+        }
+    }
+
     fn write_radius(&self) {
         let radius = self.settings.uint(RADIUS_KEY);
         match files::write_apex_css(&self.paths, radius) {
             Ok(true) => tracing::info!(radius, "wrote apex.css"),
             Ok(false) => {}
-            Err(error) => tracing::warn!(error = %error_chain(&error), "cannot write apex.css"),
+            Err(error) => self.warn_once("cannot write apex.css", &error),
         }
         match files::ensure_import(&self.paths) {
             Ok(true) => tracing::info!("gtk.css now imports apex.css"),
             Ok(false) => {}
-            Err(error) => tracing::warn!(error = %error_chain(&error), "cannot edit gtk.css"),
+            Err(error) => self.warn_once("cannot edit gtk.css", &error),
         }
     }
 
     /// The directory exists before the monitor, so inotify watches it from the start.
     fn start_offer(self: &Rc<Self>) {
-        let state_dir = self.paths.state_dir();
+        let state_dir = self.paths.marker_dir();
         if let Err(error) = std::fs::create_dir_all(&state_dir) {
             tracing::warn!(%error, dir = %state_dir.display(), "cannot create the state directory");
         }
@@ -117,6 +128,11 @@ impl Agent {
 
     pub fn marker_created(self: &Rc<Self>) {
         let effect = self.offer.borrow_mut().tripped();
+        self.run(effect);
+    }
+
+    pub fn notification_server(self: &Rc<Self>, present: bool) {
+        let effect = self.offer.borrow_mut().server(present);
         self.run(effect);
     }
 
@@ -154,14 +170,18 @@ impl Agent {
         }
     }
 
-    /// The marker goes only after the setting is written, so a failed write is offered
-    /// again at the next login.
+    /// The marker goes only once the setting reads back true: dconf can accept a write and
+    /// lose it, and then the offer must come back at the next login.
     fn turn_on(&self) {
         if let Err(error) = self.settings.set_boolean(LAYER_KEY, true) {
             tracing::warn!(%error, "cannot turn the Apex desktop back on");
             return;
         }
         gio::Settings::sync();
+        if !self.settings.boolean(LAYER_KEY) {
+            tracing::warn!("{LAYER_KEY} did not stay true; the offer comes back at the next login");
+            return;
+        }
         tracing::info!("the Apex desktop is on again from the next login");
         if let Err(error) = files::remove_marker(&self.paths) {
             tracing::warn!(error = %error_chain(&error), "cannot remove the crash-guard marker");

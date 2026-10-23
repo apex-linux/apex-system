@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    reason = "integration test: a failed expectation is the test failure"
+)]
+
+use apex_session_agent::paths::MARKER_ENV;
 use apex_session_agent::{BINARY_PATH, USER_UNIT};
 
 const PRESET: &str = include_str!("../data/80-apex.preset");
@@ -22,6 +28,39 @@ fn the_unit_runs_the_installed_binary_in_the_graphical_session() {
     assert_eq!(
         values("After").collect::<Vec<_>>(),
         ["graphical-session.target"]
+    );
+}
+
+fn seconds(key: &str) -> u64 {
+    let value: Vec<&str> = values(key).collect();
+    let [value] = value[..] else {
+        panic!("{key} is set {} times", value.len())
+    };
+    value.trim_end_matches('s').parse().expect("seconds")
+}
+
+#[test]
+fn the_greeter_and_system_users_are_skipped() {
+    assert_eq!(values("ConditionUser").collect::<Vec<_>>(), ["!@system"]);
+}
+
+/// Restart=on-failure alone would retry a start that cannot succeed every few seconds.
+#[test]
+fn failed_starts_reach_the_start_limit() {
+    assert_eq!(values("Restart").collect::<Vec<_>>(), ["on-failure"]);
+    let burst = seconds("StartLimitBurst");
+    assert!(burst >= 1);
+    assert!(
+        burst * seconds("RestartSec") < seconds("StartLimitIntervalSec"),
+        "the restarts must fall inside one start-limit interval"
+    );
+}
+
+#[test]
+fn the_marker_is_where_the_crash_guard_writes_it() {
+    assert_eq!(
+        values("Environment").collect::<Vec<_>>(),
+        [format!("{MARKER_ENV}=%S/apex/shell-guard-tripped")]
     );
 }
 

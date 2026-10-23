@@ -6,6 +6,8 @@ const FILE_NAME: &str = "apex.css";
 
 const BOM: char = '\u{feff}';
 
+const BOM_BYTES: &[u8] = b"\xef\xbb\xbf";
+
 /// A user-priority rule beats libadwaita's own, so windows that must stay square say so.
 const SQUARE_WINDOWS: [&str; 8] = [
     "window.maximized",
@@ -29,9 +31,9 @@ pub fn radius_css(radius: u32) -> String {
     )
 }
 
-/// The `@import` target of one line, without `url()` and quotes.
-fn import_target(line: &str) -> Option<&str> {
-    let rule = line.trim().strip_prefix("@import")?.trim_start();
+/// The `@import` target of one statement, without `url()` and quotes.
+fn import_target(statement: &str) -> Option<&str> {
+    let rule = statement.trim().strip_prefix("@import")?.trim_start();
     let rule = rule.strip_suffix(';')?.trim_end();
     let target = rule
         .strip_prefix("url(")
@@ -43,46 +45,87 @@ fn import_target(line: &str) -> Option<&str> {
     Some(unquoted.unwrap_or(target))
 }
 
-pub fn imports_apex_css(gtk_css: &str) -> bool {
-    gtk_css
-        .lines()
-        .any(|line| import_target(line.trim_start_matches(BOM)) == Some(FILE_NAME))
+/// An unterminated comment runs to the end, as in CSS.
+fn without_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("/*") {
+        out.push_str(&rest[..start]);
+        out.push(' ');
+        rest = rest[start + 2..]
+            .find("*/")
+            .map_or("", |end| &rest[start + 2 + end + 2..]);
+    }
+    out.push_str(rest);
+    out
 }
 
-/// `gtk_css` with the import added in front of every rule, or `None` when it is there.
-/// Nothing of the user's text moves: only a BOM and an `@charset` rule stay ahead of it.
-pub fn with_import(gtk_css: &str) -> Option<String> {
+/// Only the statements in front of the first rule count: an `@import` after a rule, or in a
+/// comment, imports nothing.
+pub fn imports_apex_css(gtk_css: &[u8]) -> bool {
+    let text = without_comments(&String::from_utf8_lossy(gtk_css));
+    let mut rest = text.trim_start_matches(BOM);
+    loop {
+        rest = rest.trim_start();
+        if !rest.starts_with('@') {
+            return false;
+        }
+        let Some(end) = rest
+            .find([';', '{'])
+            .filter(|&i| rest[i..].starts_with(';'))
+        else {
+            return false;
+        };
+        if import_target(&rest[..=end]) == Some(FILE_NAME) {
+            return true;
+        }
+        rest = &rest[end + 1..];
+    }
+}
+
+/// The import in front of every rule but a BOM and `@charset`, or `None` when it is there.
+/// The other bytes are kept as they are, so a file in another encoding survives.
+pub fn with_import(gtk_css: &[u8]) -> Option<Vec<u8>> {
     if imports_apex_css(gtk_css) {
         return None;
     }
-    let newline = if gtk_css.contains("\r\n") {
-        "\r\n"
+    let newline: &[u8] = if gtk_css.windows(2).any(|w| w == b"\r\n") {
+        b"\r\n"
     } else {
-        "\n"
+        b"\n"
     };
-    let (bom, body) = match gtk_css.strip_prefix(BOM) {
-        Some(body) => (&gtk_css[..BOM.len_utf8()], body),
-        None => ("", gtk_css),
-    };
-    let charset_len = if body.starts_with("@charset") {
-        body.find('\n').map_or(body.len(), |end| end + 1)
+    let bom_len = if gtk_css.starts_with(BOM_BYTES) {
+        BOM_BYTES.len()
     } else {
         0
     };
-    let (charset, rest) = body.split_at(charset_len);
-    let charset_newline = if charset.is_empty() || charset.ends_with('\n') {
-        ""
+    let body = &gtk_css[bom_len..];
+    let charset_len = if body.starts_with(b"@charset") {
+        body.iter()
+            .position(|&b| b == b'\n')
+            .map_or(body.len(), |end| end + 1)
     } else {
-        newline
+        0
     };
-    Some(format!(
-        "{bom}{charset}{charset_newline}{IMPORT_LINE}{newline}{rest}"
-    ))
+    let (head, rest) = gtk_css.split_at(bom_len + charset_len);
+    let mut out = Vec::with_capacity(gtk_css.len() + IMPORT_LINE.len() + 2);
+    out.extend_from_slice(head);
+    if charset_len > 0 && !head.ends_with(b"\n") {
+        out.extend_from_slice(newline);
+    }
+    out.extend_from_slice(IMPORT_LINE.as_bytes());
+    out.extend_from_slice(newline);
+    out.extend_from_slice(rest);
+    Some(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn added(gtk_css: &str) -> String {
+        String::from_utf8(with_import(gtk_css.as_bytes()).expect("added")).unwrap()
+    }
 
     #[test]
     fn the_radius_and_the_square_resets() {
@@ -104,65 +147,81 @@ mod tests {
 
     #[test]
     fn an_empty_file_gets_the_import_alone() {
-        assert_eq!(with_import("").unwrap(), "@import url(\"apex.css\");\n");
+        assert_eq!(added(""), "@import url(\"apex.css\");\n");
     }
 
     #[test]
     fn the_users_rules_stay_as_they_are_below_the_import() {
         let user = "/* mine */\nwindow { color: red; }\n@import url(\"other.css\");";
-        assert_eq!(
-            with_import(user).unwrap(),
-            format!("@import url(\"apex.css\");\n{user}")
-        );
+        assert_eq!(added(user), format!("@import url(\"apex.css\");\n{user}"));
     }
 
     #[test]
-    fn an_import_that_is_there_is_left_alone() {
+    fn a_leading_import_is_left_alone() {
         for present in [
             "@import url(\"apex.css\");\n",
-            "window {}\n  @import url('apex.css');  \n",
+            "  @import url('apex.css');  \nwindow {}\n",
             "@import \"apex.css\";",
             "@import url(apex.css);\r\n",
             "\u{feff}@import 'apex.css';\n",
+            "@charset \"UTF-8\";\n@import url(\"mine.css\");\n/* x */ @import url(\"apex.css\");",
         ] {
-            assert!(imports_apex_css(present), "{present:?}");
-            assert_eq!(with_import(present), None, "{present:?}");
+            assert!(imports_apex_css(present.as_bytes()), "{present:?}");
+            assert_eq!(with_import(present.as_bytes()), None, "{present:?}");
         }
+    }
+
+    #[test]
+    fn an_import_in_a_comment_or_after_a_rule_imports_nothing() {
         for absent in [
+            "/* @import url(\"apex.css\"); */\nwindow {}\n",
+            "/* unterminated @import url(\"apex.css\");",
+            "window {}\n@import url(\"apex.css\");\n",
+            "@media screen { }\n@import url(\"apex.css\");\n",
             "@import url(\"apex.css.bak\");",
             "@import url(\"other/apex.css\");",
-            "/* apex.css */",
             "@import url(\"apex.css\")",
         ] {
-            assert!(!imports_apex_css(absent), "{absent:?}");
+            assert!(!imports_apex_css(absent.as_bytes()), "{absent:?}");
         }
+        assert_eq!(
+            added("/* @import url(\"apex.css\"); */\n"),
+            "@import url(\"apex.css\");\n/* @import url(\"apex.css\"); */\n"
+        );
     }
 
     #[test]
     fn crlf_files_keep_crlf() {
         let user = "window { color: red; }\r\nlabel {}\r\n";
-        assert_eq!(
-            with_import(user).unwrap(),
-            format!("@import url(\"apex.css\");\r\n{user}")
-        );
+        assert_eq!(added(user), format!("@import url(\"apex.css\");\r\n{user}"));
     }
 
     #[test]
     fn a_bom_and_a_charset_stay_first() {
         assert_eq!(
-            with_import("\u{feff}@charset \"UTF-8\";\nwindow {}\n").unwrap(),
+            added("\u{feff}@charset \"UTF-8\";\nwindow {}\n"),
             "\u{feff}@charset \"UTF-8\";\n@import url(\"apex.css\");\nwindow {}\n"
         );
         assert_eq!(
-            with_import("@charset \"UTF-8\";").unwrap(),
+            added("@charset \"UTF-8\";"),
             "@charset \"UTF-8\";\n@import url(\"apex.css\");\n"
         );
     }
 
     #[test]
+    fn bytes_in_another_encoding_are_kept() {
+        let latin1 = b"/* caf\xe9 */\nwindow { color: red; }\n";
+        let edited = with_import(latin1).expect("added");
+        assert_eq!(
+            &edited[..=IMPORT_LINE.len()],
+            b"@import url(\"apex.css\");\n"
+        );
+        assert_eq!(&edited[IMPORT_LINE.len() + 1..], latin1);
+    }
+
+    #[test]
     fn adding_twice_adds_once() {
-        let once = with_import("label {}\n").unwrap();
+        let once = with_import(b"label {}\n").unwrap();
         assert_eq!(with_import(&once), None);
-        assert_eq!(once.matches("apex.css").count(), 1);
     }
 }
