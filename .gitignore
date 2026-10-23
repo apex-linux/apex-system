@@ -1,27 +1,5 @@
-/target/
-**/*.rs.bk
-
-node_modules/
-/shell/*/dist/
-
-**/__pycache__/
-
-/_build/
-/out/
-*.qcow2
-*.raw
-*.iso
-*.oci/
-# The RPMs image/Containerfile reads from the build context; `image.sh context` fills it.
-/rpms/
-
-# Private keys never belong in the repository: `cosign generate-key-pair` writes cosign.key next to cosign.pub.
-cosign.key
-*.key
-*.key.bak
-
-# Biometric data never belongs in the repository, in any letter case (docs/hardware/FINGERPRINT.md);
-# privacy-guard.sh also fails on these names, and on the hex dumps and long lines no pattern catches.
+# Biometric data never belongs in a repository, in any letter case; scripts/privacy-guard.sh
+# also fails on these names, and on the hex dumps and long lines no pattern catches.
 *.[Pp][Gg][Mm]
 *.[Vv][Aa][Rr][Ii][Aa][Nn][Tt]
 *.[Ii][Oo][Cc][Tt][Ll]
@@ -30,6 +8,10 @@ cosign.key
 *.[Pp][Cc][Aa][Pp][Nn][Gg]
 **/var/lib/fprint/
 
-.idea/
-.vscode/
+*.key
 *.swp
+
+/target/
+**/*.rs.bk
+/_build/
+/out/

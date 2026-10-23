@@ -1,73 +1,48 @@
-# Apex
+# apex-system
 
-Apex is a personal, image-based Linux distribution for exactly one laptop: the ASUS
-Vivobook Pro 14X OLED **M7400QC** (Ryzen 5 5600H, RTX 3050 Mobile, Realtek ALC294,
-ELAN fingerprint reader, Samsung 2880×1800 OLED at 90 Hz).
+The update and boot stack of [Apex](https://github.com/apex-linux/apex), a Fedora 45
+bootc desktop for one laptop, the ASUS Vivobook Pro 14X OLED (M7400QC). Everything here
+is Rust and ships in the `apex` RPM.
 
-- **Base:** Fedora 45 delivered with bootc. Updates are atomic and signed, the laptop
-  never reboots behind your back, and a bad update rolls back after a counted number of
-  failed boots.
-- **Desktop:** GNOME 51 on Wayland only, with GTK4/libadwaita apps. Legacy components
-  are removed and kept out by a build gate.
-- **Display:** pixel-exact by default (integer scale 2 on the built-in panel).
-- **Hardware:** fixes for this machine: ALC294 speakers, the ELAN `04f3:0c6e` reader,
-  firmware, dGPU power gating and the battery charge limit. Each fix is meant to go
-  upstream.
-- **Components:** everything Apex writes itself is Rust.
+| Crate | What it is |
+|---|---|
+| `apex-updated` | The update service on the system bus (`io.github.apex_linux.Apex.Update1`), the only component that runs bootc. One queue, polkit for every action, and it never reboots |
+| `apexctl` | The command-line tool: update control through `apex-updated`, read-only hardware reports, and hardware-profile rendering |
+| `apex-boot` | Boot assessment (`apex-boot-assess`): the GRUB environment codec, the boot counter, the health checks and the counted rollback |
+| `apex-update` | The pure update engine: gates, state derivation, version ordering and the persisted state |
+| `apex-bootc` | bootc as a library: the lenient status model, progress events, and argv built from enums |
+| `apex-dbus` | The `Update1` D-Bus contract and its proxy |
 
-> Status: **S1a done; step M in progress**: the design reset and the move to the
-> `apex-linux` GitHub organisation. Nothing here is ready to install yet. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+`hardware/m7400qc/profile.toml` is the single source of the machine's facts. `apexctl`
+compiles them in, and `just render` writes `hardware/m7400qc/generated/`, which the
+image installs. [docs/specs/M1-IMPLEMENTATION.md](docs/specs/M1-IMPLEMENTATION.md) is
+the contract of names, paths and formats the crates share with the image.
 
-## Read first
-
-- [Architecture](docs/ARCHITECTURE.md): how the pieces fit, and why.
-- [Design direction](docs/DESIGN.md): the look, the product rules and the settings
-  contract.
-- [Decisions](docs/adr/): one ADR per non-obvious choice.
-- [M1 contract](docs/specs/M1-IMPLEMENTATION.md): names, paths and formats shared
-  between components.
-- [Threat model](docs/THREAT-MODEL.md).
-- Hardware procedures and acceptance tests: [docs/hardware/](docs/hardware/).
-- [Install](docs/INSTALL.md) and [recovery](docs/RECOVERY.md) runbooks.
-- [Contributing](docs/CONTRIBUTING.md): code explains itself, and the comment guard
-  that holds every change to it.
-
-## Layout
-
-```
-crates/     Rust: apex-bootc, apex-update, apex-boot, apex-dbus, apex-updated, apexctl,
-            apex-lane, apex-lint
-desktop/    the Apex layer in gnome-shell, the apex-desktop schema, units and wallpapers
-hardware/   machine profile (single source of truth) and rendered drop-ins
-image/      Containerfile, package lists, rootfs overlay, image checks
-packaging/  RPM spec, libfprint patch series, the kernel lane's patches (S1c)
-.github/    ci.yml, the only workflow; the scripts of ci.yml and the builder VM
-```
+The design behind it is in the [apex](https://github.com/apex-linux/apex) repository:
+[ARCHITECTURE §5](https://github.com/apex-linux/apex/blob/main/docs/ARCHITECTURE.md#5-updates),
+the [ADRs](https://github.com/apex-linux/apex/tree/main/docs/adr) and the
+[threat model](https://github.com/apex-linux/apex/blob/main/docs/THREAT-MODEL.md).
+[apex-image](https://github.com/apex-linux/apex-image) pins this repository by commit
+and builds the RPM in its builder VM.
 
 ## Development
 
-The development host needs only a Rust toolchain. `rust-toolchain.toml` pins the same
-version Fedora 45 ships.
+The host needs only a Rust toolchain. `rust-toolchain.toml` pins the release Fedora 45
+ships, the one that builds the RPM.
 
 ```bash
-just check
+just check     # fmt, clippy -D warnings, the tests and the comment guard, as CI runs them
+just deny      # advisories, licences, bans and sources
+just render    # hardware/m7400qc/generated from the profile
+just rpm       # the RPM, on Fedora 45 (packaging/README.md)
 ```
 
-`just check` runs fmt, clippy, the tests and the comment guard
-([CONTRIBUTING](docs/CONTRIBUTING.md)) as ci.yml does.
-
-```bash
-just render
-```
-
-Packages and images build in a Fedora 45 builder VM
-([ARCHITECTURE §4](docs/ARCHITECTURE.md#4-build-and-publish)). GitHub runs only
-`ci.yml`, which checks the code on every pull request and every push to `main`.
-Hardware measurements need root and are run by hand. Nothing in this repository runs
-`sudo` for you.
+The comment guard is `apex-lint`, from
+[apex-ci](https://github.com/apex-linux/apex-ci):
+`cargo install --locked --git https://github.com/apex-linux/apex-ci apex-lint`.
+Code explains itself, and comments say only why
+([CONTRIBUTING](https://github.com/apex-linux/apex/blob/main/docs/CONTRIBUTING.md)).
 
 ## License
 
-GPL-3.0-or-later. Patches in `packaging/` carry the licenses of the projects they
-modify (GPL-2.0 for the kernel, LGPL-2.1-or-later for libfprint).
+GPL-3.0-or-later (`LICENSE`).

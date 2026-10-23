@@ -1,8 +1,8 @@
 # ALC294 audio tools
 
-Tools for the measured speaker fix ([ADR 0004](../../../docs/adr/0004-audio-hda-patch-firmware.md)).
+Tools for the measured speaker fix ([ADR 0004](https://github.com/apex-linux/apex/blob/main/docs/adr/0004-audio-hda-patch-firmware.md)).
 The full procedure, the findings and the upstream path are in
-[docs/hardware/AUDIO.md](../../../docs/hardware/AUDIO.md).
+[docs/hardware/AUDIO.md](https://github.com/apex-linux/apex/blob/main/docs/hardware/AUDIO.md).
 
 | File | What it does |
 |---|---|

@@ -33,7 +33,7 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - name: Tools for checkout, the cache and the tests
-        # dbus-daemon: the D-Bus tests' private buses; git, tar and diffutils: apex-lane's shell_fakes.rs.
+        # dbus-daemon: the D-Bus tests' private buses.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
           git-core tar gzip zstd xz findutils curl python3 dbus-daemon diffutils
@@ -42,11 +42,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Fedora's Rust toolchain (the compose's repositories)
-        run: .github/scripts/rpms.sh toolchain
-
-      - name: Fedora rustc matches rust-toolchain.toml
-        run: .github/scripts/rust-toolchain-check.sh
+      - uses: apex-linux/apex-ci/actions/fedora-rust@6e5d6c625ccb44ba31d1ca97a2a94a27205940a1 # main
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -54,10 +50,9 @@ jobs:
           # A pull request must not seed the cache that main uses.
           save-if: ${{ github.event_name == 'push' }}
 
-      - name: Install cargo-deny (pinned release, SHA-256 checked)
-        run: |
-          .github/scripts/install-tool.sh cargo-deny "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - uses: apex-linux/apex-ci/actions/install-tool@6e5d6c625ccb44ba31d1ca97a2a94a27205940a1 # main
+        with:
+          tools: cargo-deny
 
       - name: cargo fmt
         run: cargo fmt --all --check
@@ -71,12 +66,6 @@ jobs:
           unset APEXCTL_TEST_SKIP_BUS
           test -x /usr/bin/dbus-daemon || { echo "::error::/usr/bin/dbus-daemon is missing: the D-Bus tests would not run"; exit 1; }
           cargo test --workspace --locked
-
-      - name: Comment guard (docs/CONTRIBUTING.md)
-        # The guard lists files with git, which refuses the runner-owned checkout to root.
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          cargo run -p apex-lint --locked -- comments
 
       - name: cargo deny
         run: cargo deny --locked check
@@ -97,130 +86,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install actionlint and shellcheck (pinned releases, SHA-256 checked)
-        run: |
-          .github/scripts/install-tool.sh actionlint "$RUNNER_TEMP/bin"
-          .github/scripts/install-tool.sh shellcheck "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - uses: apex-linux/apex-ci/actions/install-tool@6e5d6c625ccb44ba31d1ca97a2a94a27205940a1 # main
+        with:
+          tools: actionlint shellcheck
 
       - name: actionlint
-        # With shellcheck on PATH, actionlint also checks every run: block.
         run: actionlint -config-file .github/scripts/actionlint.yaml
 
-      - name: bash -n and shellcheck of the CI, packaging, builder VM and test scripts
+      - name: bash -n and shellcheck
         run: |
-          for f in .github/scripts/*.sh packaging/*/build.sh packaging/pkgs/*/*.sh tools/builder-vm/*.sh tools/runner/*.sh tests/*/*.sh; do bash -n "$f"; done
-          shellcheck -x -P .github/scripts --severity=style .github/scripts/*.sh
-          shellcheck -x --severity=style packaging/*/build.sh packaging/pkgs/*/*.sh tools/builder-vm/*.sh tools/runner/*.sh tests/*/*.sh
-
-      - name: sh -n, bash -n and shellcheck of image/checks and image/tests
-        # The Containerfile's final stage runs image/checks with sh.
-        run: |
-          files=(image/checks/*.sh image/checks/lib/*.sh image/tests/*.sh image/tests/fake/createrepo_c)
-          for f in "${files[@]}"; do sh -n "$f"; bash -n "$f"; done
-          shellcheck -x -P SCRIPTDIR -s sh --severity=style "${files[@]}"
+          files=(.github/scripts/*.sh hardware/*/audio/*.sh)
+          for f in "${files[@]}"; do bash -n "$f"; done
+          shellcheck -x -P .github/scripts --severity=style "${files[@]}"
 
       - name: Script self-tests
         run: .github/scripts/selftest.sh
-
-      - name: Contracts between the image and its components
-        run: .github/scripts/contracts.sh
-
-      - name: The dev loop's host side, against a fake ssh
-        run: tests/devloop/run.sh
-
-      - name: renovate.json is valid JSON
-        run: jq empty renovate.json
-
-  image-tests:
-    name: image/tests/run.sh (Fedora 45)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    container:
-      image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-      # Mount namespaces for bubblewrap in t-repos.sh; the runner is disposable and this job holds no secrets.
-      options: --privileged
-    env:
-      APEX_IMAGE_TESTS_NO_SKIP: "1"
-    steps:
-      - name: Tools of the checks and their tests
-        # dash: run.sh runs every file with sh and with dash.
-        run: >-
-          dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
-          git-core python3 bubblewrap dash bash coreutils diffutils findutils gawk grep sed
-          systemd systemd-udev openssl glib2 gnupg2
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Python fakes compile
-        run: |
-          for f in image/tests/fake/*; do
-            if head -n 1 "$f" | grep -q python3; then
-              python3 -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f"
-            fi
-          done
-
-      - name: image/tests/run.sh
-        # Without safe.directory, git refuses the runner-owned checkout to root, and
-        # t-lists.sh silently leaves out its .gitignore checks.
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git rev-parse --git-dir >/dev/null
-          image/tests/run.sh
-
-  layer-tests:
-    name: tests/layer/run.sh (Fedora 45)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    container:
-      image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-      # Mount namespaces for bubblewrap's /proc/cmdline fixture; the runner is disposable and this job holds no secrets.
-      options: --privileged
-    env:
-      APEX_LAYER_TESTS_NO_SKIP: "1"
-    steps:
-      - name: gjs, glib2 and bubblewrap
-        run: >-
-          dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
-          gjs glib2 bubblewrap bash coreutils grep sed
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: tests/layer/run.sh
-        run: tests/layer/run.sh
-
-  shots-tests:
-    # G2 itself needs the built image and runs in the builder VM (just vm-g2); this job
-    # tests its PNG comparison and its reading of the token file and the top bar.
-    name: tests/shots/selftest.sh (Fedora 45)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    container:
-      image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
-    env:
-      APEX_SHOTS_TESTS_NO_SKIP: "1"
-    steps:
-      - name: gjs, GdkPixbuf and jq
-        run: >-
-          dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
-          gjs gdk-pixbuf2 jq bash coreutils gawk grep sed
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: tests/shots/selftest.sh
-        run: tests/shots/selftest.sh
 
   privacy:
     name: No biometric files
@@ -233,5 +113,17 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Tracked files
-        run: .github/scripts/privacy-guard.sh
+      - uses: apex-linux/apex-ci/actions/privacy-guard@6e5d6c625ccb44ba31d1ca97a2a94a27205940a1 # main
+
+  comments:
+    name: Comment guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: apex-linux/apex-ci/actions/comments@6e5d6c625ccb44ba31d1ca97a2a94a27205940a1 # main

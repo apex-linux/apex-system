@@ -34,9 +34,6 @@ BOOT_DATA      := crates/apex-boot/data
 XML_DATA := $(DBUS_IFACE_XML) \
 	$(UPDATED_DATA)/io.github.apex_linux.Apex.Update1.conf \
 	$(UPDATED_DATA)/io.github.apex-linux.apex.update.policy
-DESKTOP_XML := desktop/schemas/io.github.apex_linux.Apex.Desktop.gschema.xml \
-	desktop/keybindings/60-apex.xml desktop/wallpapers/apex-facets.xml \
-	desktop/fontconfig/60-apex-adwaita-sans-ss03.conf
 UNITS := apex-updated.service apex-update-auto.service apex-update-auto.timer \
 	apex-boot-assess.service
 SYSTEMD_UNITS_WITH_APEX_DROPIN := emergency.service rescue.service
@@ -50,10 +47,8 @@ CRATE_VERSION  = $(shell sed -n '/^\[workspace\.package\]/,/^\[/s/^version[[:spa
 COMMITDATE     = $(shell TZ=UTC git log -1 --format=%cd --date=format-local:%Y%m%d HEAD 2>/dev/null)
 SHORTCOMMIT    = $(shell git rev-parse --short=12 HEAD 2>/dev/null)
 RPMBUILD_FLAGS ?=
-DESKTOP_SPEC     := packaging/apex-desktop.spec
-DESKTOP_VERSION   = $(shell sed -n 's/^Version:[[:space:]]*//p' $(DESKTOP_SPEC))
 
-.PHONY: all build install install-bin install-data check-data rpm rpm-desktop clean help
+.PHONY: all build install install-bin install-data check-data rpm clean help
 .DELETE_ON_ERROR:
 
 all: build
@@ -61,10 +56,8 @@ all: build
 help:
 	@echo 'make build                release binaries (cargo auditable when it is installed)'
 	@echo 'make install DESTDIR=DIR  install the layout; never builds'
-	@echo 'make check-data           validate D-Bus, polkit, desktop and systemd data files'
+	@echo 'make check-data           validate the D-Bus, polkit and systemd data files'
 	@echo 'make rpm                  SRPM and RPMs from git HEAD with rpmbuild (packaging/README.md)'
-	@echo 'make rpm-desktop          the apex-desktop SRPM and RPM from git HEAD (desktop/, without'
-	@echo '                          desktop/shell/, which ships in the rebuilt gnome-shell)'
 	@echo 'make clean'
 	@echo 'Common variables: DESTDIR PREFIX LIBEXECDIR CARGO AUDITABLE=auto|yes|no RPMBUILD_FLAGS'
 	@echo 'AUDITABLE=auto            cargo auditable when installed, else plain cargo with a warning'
@@ -139,16 +132,10 @@ install-data:
 # The units name /usr paths: the staged root (stub binaries, no cargo build) needs PREFIX=/usr.
 check-data:
 	@if command -v xmllint >/dev/null 2>&1; then \
-		echo "xmllint --noout --nonet $(XML_DATA) $(DESKTOP_XML)"; \
-		xmllint --noout --nonet $(XML_DATA) $(DESKTOP_XML); \
+		echo "xmllint --noout --nonet $(XML_DATA)"; \
+		xmllint --noout --nonet $(XML_DATA); \
 	else \
 		echo "skip: xmllint not found (Fedora: libxml2)"; \
-	fi
-	@if command -v glib-compile-schemas >/dev/null 2>&1; then \
-		echo "glib-compile-schemas --strict --dry-run desktop/schemas"; \
-		glib-compile-schemas --strict --dry-run desktop/schemas; \
-	else \
-		echo "skip: glib-compile-schemas not found (Fedora: glib2)"; \
 	fi
 	@set -e; \
 	desktop=$$(find crates -path '*/data/*' -name '*.desktop' | sort); \
@@ -205,23 +192,6 @@ rpm:
 	git archive --format=tar.gz --prefix='apex-$(SPEC_VERSION)/' \
 		-o '$(RPM_TOPDIR)/SOURCES/apex-$(SPEC_VERSION).tar.gz' HEAD
 	$(RPMBUILD) -ba $(SPEC) \
-		--define '_topdir $(RPM_TOPDIR)' \
-		--define 'commitdate $(COMMITDATE)' \
-		--define 'shortcommit $(SHORTCOMMIT)' \
-		$(RPMBUILD_FLAGS)
-
-rpm-desktop:
-	@if [ -z '$(SHORTCOMMIT)' ]; then \
-		echo "error: 'make rpm-desktop' packages git HEAD, and this checkout has no commit" >&2; \
-		exit 1; \
-	fi
-	@git diff --quiet HEAD -- desktop $(DESKTOP_SPEC) 2>/dev/null || \
-		echo "warning: the RPM is built from HEAD; uncommitted changes are not included" >&2
-	mkdir -p '$(RPM_TOPDIR)/SOURCES'
-	git archive --format=tar.gz --prefix='apex-desktop-$(DESKTOP_VERSION)/' \
-		-o '$(RPM_TOPDIR)/SOURCES/apex-desktop-$(DESKTOP_VERSION).tar.gz' HEAD \
-		-- desktop ':(exclude)desktop/shell' LICENSE
-	$(RPMBUILD) -ba $(DESKTOP_SPEC) \
 		--define '_topdir $(RPM_TOPDIR)' \
 		--define 'commitdate $(COMMITDATE)' \
 		--define 'shortcommit $(SHORTCOMMIT)' \

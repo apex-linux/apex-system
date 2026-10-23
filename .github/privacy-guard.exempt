@@ -1,0 +1,2 @@
+crates/apex-bootc/tests/fixtures/progress/*.jsonl # bootc --progress-fd captures: one JSON event per line
+crates/apex-bootc/src/runner/tests.rs # a bootc status JSON in a shell string; owner follow-up: wrap it, drop this entry
