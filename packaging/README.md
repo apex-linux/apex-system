@@ -71,7 +71,7 @@ Decisions recorded in the spec:
   private mount namespace with `/boot` remounted read-write (contract section 5);
   `bootupd`, which owns `/usr/lib/bootupd/grub2-static/configs.d` for the boot-counter
   snippet; `dbus` and `dbus-common`, the system bus and the directories of the bus
-  files; `polkit`, the authority for the `io.github.sekirokenjii.apex.update.*` actions
+  files; `polkit`, the authority for the `io.github.apex-linux.apex.update.*` actions
   and the owner of `actions/`.
 
 ### In the builder VM (`rpms.sh build`)
@@ -107,7 +107,7 @@ The content key (`rpms.sh key`) covers everything that changes the RPM:
 `%doc`), plus the `rust` NEVRA those repositories resolve, the cargo-auditable pin
 while the spec builds with it, and the recipe (the repository options and `rpms.sh`
 itself), so a change to how the RPM is built never reuses RPMs built the old way. It
-was the tag of an attested `ghcr.io/sekirokenjii/apex-rpms` artifact; nothing publishes
+was the tag of an attested `ghcr.io/apex-linux/apex-rpms` artifact; nothing publishes
 or attests one now, so the builder VM always builds (`oci-artifact.sh` goes in S2c).
 
 ### Locally
@@ -473,7 +473,7 @@ never changes the apex key. `image/packages/apex.txt` lists it.
 
 In S1a it holds:
 
-- `io.github.sekirokenjii.Apex.Desktop` (`layer-enabled`, `disabled-features`), whose
+- `io.github.apex_linux.Apex.Desktop` (`layer-enabled`, `disabled-features`), whose
   `%check` runs `glib-compile-schemas --strict --dry-run`;
 - the shell's crash guard (ADR 0014): `org.gnome.Shell@.service.d/50-apex.conf`, which
   adds `OnFailure=apex-shell-safe.service` to GNOME Shell's user unit, and
@@ -494,7 +494,7 @@ the same SRPM the compose would install, verifies its signature against the
 pinned Fedora 45 key, applies `series`, builds `libfprint-…-1.fc45.apex1`, and runs the
 elan replay tests. `build-image.sh` then signs its RPMs with the Apex RPM key, and its
 `manifest.txt` records it ([Signing](#signing)). Exit 3 means degraded: the image ships
-Fedora's stock libfprint with `io.github.sekirokenjii.apex.degraded=fingerprint`, so OS
+Fedora's stock libfprint with `io.github.apex-linux.apex.degraded=fingerprint`, so OS
 updates never wait for this package.
 
 ## Kernel and NVIDIA (S1c)

@@ -90,7 +90,7 @@ fn digest_argument(name: &str, value: &str) -> Result<(), ApexError> {
     clippy::needless_pass_by_value,
     reason = "zbus hands the header over by value"
 )]
-#[zbus::interface(name = "io.github.sekirokenjii.Apex.Update1")]
+#[zbus::interface(name = "io.github.apex_linux.Apex.Update1")]
 impl<R: CommandRunner + 'static> Update1Service<R> {
     async fn ping(&self) -> Result<(), ApexError> {
         let _call = self.daemon.activity().call();

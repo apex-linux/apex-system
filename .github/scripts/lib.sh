@@ -3,13 +3,13 @@
 
 readonly APEX_FEDORA=45
 readonly APEX_REGISTRY=ghcr.io
-readonly APEX_NAMESPACE=ghcr.io/sekirokenjii
-readonly APEX_REPO_TESTING=ghcr.io/sekirokenjii/apex-testing
-readonly APEX_REPO_STABLE=ghcr.io/sekirokenjii/apex
-readonly APEX_REPO_RPMS=ghcr.io/sekirokenjii/apex-rpms
-readonly APEX_REPO_LIBFPRINT=ghcr.io/sekirokenjii/apex-libfprint
-readonly APEX_SOURCE_URL=https://github.com/SekiroKenjii/apex-fedora
-readonly APEX_LABEL_PREFIX=io.github.sekirokenjii.apex
+readonly APEX_NAMESPACE=ghcr.io/apex-linux
+readonly APEX_REPO_TESTING=ghcr.io/apex-linux/apex-testing
+readonly APEX_REPO_STABLE=ghcr.io/apex-linux/apex
+readonly APEX_REPO_RPMS=ghcr.io/apex-linux/apex-rpms
+readonly APEX_REPO_LIBFPRINT=ghcr.io/apex-linux/apex-libfprint
+readonly APEX_SOURCE_URL=https://github.com/apex-linux/apex-image
+readonly APEX_LABEL_PREFIX=io.github.apex-linux.apex
 
 APEX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly APEX_ROOT

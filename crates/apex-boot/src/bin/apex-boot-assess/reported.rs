@@ -446,8 +446,8 @@ headset-mic
     #[test]
     fn image_source_accepts_only_verified_apex_images() {
         for image in [
-            "ghcr.io/sekirokenjii/apex:45",
-            "ghcr.io/sekirokenjii/apex-testing:45",
+            "ghcr.io/apex-linux/apex:45",
+            "ghcr.io/apex-linux/apex-testing:45",
         ] {
             let ok = image_source(&Ok(booted(
                 image,
@@ -464,7 +464,7 @@ headset-mic
         assert_eq!(
             bad.outcome.to_string(),
             "fail: transport is oci, not registry; image quay.io/fedora/fedora-bootc:45 is \
-             neither ghcr.io/sekirokenjii/apex:45 nor ghcr.io/sekirokenjii/apex-testing:45; \
+             neither ghcr.io/apex-linux/apex:45 nor ghcr.io/apex-linux/apex-testing:45; \
              signature mode is insecure, not containerPolicy"
         );
         assert_eq!(

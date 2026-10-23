@@ -827,9 +827,9 @@ mod tests {
     #[test]
     fn a_channel_switch_to_the_running_build_changes_only_the_channel() {
         let mut s = status(State::Staged);
-        s.booted.image = Some("ghcr.io/sekirokenjii/apex-testing:45".to_owned());
+        s.booted.image = Some("ghcr.io/apex-linux/apex-testing:45".to_owned());
         s.staged = Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
             download_only: Some(true),
             ..s.booted.clone()
         };
@@ -924,7 +924,7 @@ mod tests {
 
     fn testing_image(version: &str, c: char) -> Deployment {
         Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex-testing:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex-testing:45".to_owned()),
             digest: Some(digest(c)),
             version: Some(version.to_owned()),
             download_only: Some(true),
@@ -933,7 +933,7 @@ mod tests {
     }
 
     fn stable_booted(mut status: ServiceStatus) -> ServiceStatus {
-        status.booted.image = Some("ghcr.io/sekirokenjii/apex:45".to_owned());
+        status.booted.image = Some("ghcr.io/apex-linux/apex:45".to_owned());
         status
     }
 

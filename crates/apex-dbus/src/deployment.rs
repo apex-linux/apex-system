@@ -236,7 +236,7 @@ mod tests {
 
     fn full() -> Deployment {
         Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
             digest: Some(format!("sha256:{}", "ab".repeat(32))),
             version: Some("45.20260924.1".to_owned()),
             timestamp: Some(1_790_000_000),

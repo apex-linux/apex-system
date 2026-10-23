@@ -32,7 +32,7 @@ meaning until \"schema\" changes.
                    a deployment, or null when there is none
 
 A deployment has these keys, each null when unknown:
-  image            image reference, e.g. \"ghcr.io/sekirokenjii/apex:45\"
+  image            image reference, e.g. \"ghcr.io/apex-linux/apex:45\"
   digest           the full manifest digest, \"sha256:\" and 64 hex digits
   version          e.g. \"45.20260924.117\"
   timestamp        build time, Unix seconds
@@ -528,7 +528,7 @@ pub(crate) mod tests {
 
     fn deployment(version: &str, digest_char: char) -> Deployment {
         Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
             digest: Some(format!("sha256:{}", digest_char.to_string().repeat(64))),
             version: Some(version.to_owned()),
             timestamp: Some(1_790_208_000),
@@ -697,7 +697,7 @@ pub(crate) mod tests {
     #[test]
     fn human_status_testing_stage_under_a_stable_system() {
         let mut status = staged_status();
-        status.staged.image = Some("ghcr.io/sekirokenjii/apex-testing:45".to_owned());
+        status.staged.image = Some("ghcr.io/apex-linux/apex-testing:45".to_owned());
         status.staged.version = Some("45.20260925.7".to_owned());
         let text = render_status(&status);
         assert!(
@@ -720,14 +720,14 @@ pub(crate) mod tests {
             image: Some(image.to_owned()),
             ..Deployment::default()
         };
-        let stable = with_image("ghcr.io/sekirokenjii/apex:45");
+        let stable = with_image("ghcr.io/apex-linux/apex:45");
         assert_eq!(other_origin(&stable, &stable), None);
         assert_eq!(
-            other_origin(&stable, &with_image("ghcr.io/sekirokenjii/apex@sha256:00")),
+            other_origin(&stable, &with_image("ghcr.io/apex-linux/apex@sha256:00")),
             None
         );
         assert_eq!(
-            other_origin(&with_image("ghcr.io/sekirokenjii/apex-testing:45"), &stable).as_deref(),
+            other_origin(&with_image("ghcr.io/apex-linux/apex-testing:45"), &stable).as_deref(),
             Some("the stable channel")
         );
         assert_eq!(

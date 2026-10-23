@@ -1,6 +1,6 @@
 [package]
 name = "apex-dbus"
-description = "The io.github.sekirokenjii.Apex.Update1 D-Bus contract and its zbus proxy"
+description = "The io.github.apex_linux.Apex.Update1 D-Bus contract and its zbus proxy"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

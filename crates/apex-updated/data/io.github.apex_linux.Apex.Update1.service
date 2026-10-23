@@ -1,6 +1,6 @@
 # Exec= is never run: the bus hands activation to SystemdService=.
 [D-BUS Service]
-Name=io.github.sekirokenjii.Apex.Update1
+Name=io.github.apex_linux.Apex.Update1
 Exec=/bin/false
 User=root
 SystemdService=apex-updated.service

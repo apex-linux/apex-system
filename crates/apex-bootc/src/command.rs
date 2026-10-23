@@ -26,10 +26,10 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_hours(2);
 pub const OTHER_TIMEOUT: Duration = Duration::from_mins(10);
 
-pub const APEX_STABLE: ImageRef = ImageRef::from_static("ghcr.io/sekirokenjii/apex:45");
-pub const APEX_TESTING: ImageRef = ImageRef::from_static("ghcr.io/sekirokenjii/apex-testing:45");
-pub const APEX_STABLE_REPOSITORY: &str = "ghcr.io/sekirokenjii/apex";
-pub const APEX_TESTING_REPOSITORY: &str = "ghcr.io/sekirokenjii/apex-testing";
+pub const APEX_STABLE: ImageRef = ImageRef::from_static("ghcr.io/apex-linux/apex:45");
+pub const APEX_TESTING: ImageRef = ImageRef::from_static("ghcr.io/apex-linux/apex-testing:45");
+pub const APEX_STABLE_REPOSITORY: &str = "ghcr.io/apex-linux/apex";
+pub const APEX_TESTING_REPOSITORY: &str = "ghcr.io/apex-linux/apex-testing";
 
 pub fn program() -> PathBuf {
     #[cfg(debug_assertions)]
@@ -267,10 +267,10 @@ mod tests {
 
     #[test]
     fn channel_constants_are_valid() {
-        assert_eq!(APEX_STABLE.to_string(), "ghcr.io/sekirokenjii/apex:45");
+        assert_eq!(APEX_STABLE.to_string(), "ghcr.io/apex-linux/apex:45");
         assert_eq!(
             APEX_TESTING.to_string(),
-            "ghcr.io/sekirokenjii/apex-testing:45"
+            "ghcr.io/apex-linux/apex-testing:45"
         );
         assert!(validate_repository(APEX_STABLE_REPOSITORY).is_ok());
         assert!(validate_repository(APEX_TESTING_REPOSITORY).is_ok());
@@ -303,11 +303,11 @@ mod tests {
     #[test]
     fn pinned_references() {
         let r = ImageRef::at_digest(APEX_STABLE_REPOSITORY, D).unwrap();
-        assert_eq!(r.to_string(), format!("ghcr.io/sekirokenjii/apex@{D}"));
+        assert_eq!(r.to_string(), format!("ghcr.io/apex-linux/apex@{D}"));
         assert_eq!(r.digest().map(Digest::as_str), Some(D));
         assert_eq!(APEX_STABLE.digest(), None);
         assert_eq!(
-            ImageRef::at_digest("ghcr.io/sekirokenjii/apex:45", D),
+            ImageRef::at_digest("ghcr.io/apex-linux/apex:45", D),
             Err(ImageRefError::TaggedRepository)
         );
         assert_eq!(

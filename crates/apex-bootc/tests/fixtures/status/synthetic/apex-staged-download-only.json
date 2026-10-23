@@ -7,7 +7,7 @@
   "spec": {
     "bootOrder": "default",
     "image": {
-      "image": "ghcr.io/sekirokenjii/apex:45",
+      "image": "ghcr.io/apex-linux/apex:45",
       "signature": "containerPolicy",
       "transport": "registry"
     }
@@ -17,7 +17,7 @@
       "cachedUpdate": {
         "architecture": "amd64",
         "image": {
-          "image": "ghcr.io/sekirokenjii/apex:45",
+          "image": "ghcr.io/apex-linux/apex:45",
           "signature": "containerPolicy",
           "transport": "registry"
         },
@@ -29,7 +29,7 @@
       "image": {
         "architecture": "amd64",
         "image": {
-          "image": "ghcr.io/sekirokenjii/apex:45",
+          "image": "ghcr.io/apex-linux/apex:45",
           "signature": "containerPolicy",
           "transport": "registry"
         },
@@ -54,7 +54,7 @@
       "image": {
         "architecture": "amd64",
         "image": {
-          "image": "ghcr.io/sekirokenjii/apex:45",
+          "image": "ghcr.io/apex-linux/apex:45",
           "signature": "containerPolicy",
           "transport": "registry"
         },
@@ -79,7 +79,7 @@
       "image": {
         "architecture": "amd64",
         "image": {
-          "image": "ghcr.io/sekirokenjii/apex:45",
+          "image": "ghcr.io/apex-linux/apex:45",
           "signature": "containerPolicy",
           "transport": "registry"
         },

@@ -68,7 +68,7 @@ mod tests {
         format!(
             "layers already present: 2; layers needed: 3 (300.0 MB)\n\
              Fetched layers: 300.0 MiB in 41 seconds (7.3 MiB/s)\n\
-             {prefix} ghcr.io/sekirokenjii/apex:45\n  Version: 45.20260924.117\n  Digest: {D}\n\
+             {prefix} ghcr.io/apex-linux/apex:45\n  Version: 45.20260924.117\n  Digest: {D}\n\
              Total new layers: 5    Size: 350.0 MB\nRemoved layers:   3    Size: 300.0 MB\n\
              Added layers:     3    Size: 300.0 MB\n"
         )
@@ -101,14 +101,14 @@ mod tests {
     #[test]
     fn the_staged_image_again() {
         let relocked = parse_download_output(&format!(
-            "No changes in ghcr.io/sekirokenjii/apex:45 => {D}\n\
+            "No changes in ghcr.io/apex-linux/apex:45 => {D}\n\
              Image downloaded, but will not be applied on reboot\n"
         ));
         assert_eq!(relocked, DownloadOutcome::Relocked);
         assert!(relocked.stage_locked());
 
         let unchanged = parse_download_output(&format!(
-            "No changes in ghcr.io/sekirokenjii/apex:45 => {D}\nStaged update present, not changed\n"
+            "No changes in ghcr.io/apex-linux/apex:45 => {D}\nStaged update present, not changed\n"
         ));
         assert_eq!(unchanged, DownloadOutcome::StageUnchanged);
         assert!(unchanged.stage_locked());

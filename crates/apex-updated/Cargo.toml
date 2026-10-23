@@ -1,6 +1,6 @@
 [package]
 name = "apex-updated"
-description = "Apex update service: the io.github.sekirokenjii.Apex.Update1 system bus service, the only component that runs bootc"
+description = "Apex update service: the io.github.apex_linux.Apex.Update1 system bus service, the only component that runs bootc"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

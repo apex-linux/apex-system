@@ -1,11 +1,11 @@
 [Unit]
 Description=Apex update service
-Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0008-update-policy.md
+Documentation=https://github.com/apex-linux/apex/blob/main/docs/adr/0008-update-policy.md
 RequiresMountsFor=/var/lib/apex /sysroot /boot
 
 [Service]
 Type=dbus
-BusName=io.github.sekirokenjii.Apex.Update1
+BusName=io.github.apex_linux.Apex.Update1
 ExecStart=/usr/libexec/apex/apex-updated
 # Readiness is still the bus name; this only admits the daemon's STATUS= lines.
 NotifyAccess=main

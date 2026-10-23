@@ -1,6 +1,6 @@
 [Unit]
 Description=Apex boot assessment
-Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0009-boot-assessment.md
+Documentation=https://github.com/apex-linux/apex/blob/main/docs/adr/0009-boot-assessment.md
 ConditionPathExists=/run/ostree-booted
 # No Before=, and nothing a target or a login waits for is ordered after it: this takes minutes.
 After=graphical.target

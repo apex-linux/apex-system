@@ -72,7 +72,7 @@ impl Log {
 
 pub(crate) fn booted() -> Deployment {
     Deployment {
-        image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+        image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
         digest: Some(
             "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae".to_owned(),
         ),
@@ -86,7 +86,7 @@ pub(crate) fn booted() -> Deployment {
 
 pub(crate) fn staged() -> Deployment {
     Deployment {
-        image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+        image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
         digest: Some(STAGED_DIGEST.to_owned()),
         version: Some("45.20260924.1".to_owned()),
         timestamp: Some(1_790_300_000),
@@ -162,7 +162,7 @@ impl MockDaemon {
     clippy::unnecessary_wraps,
     reason = "zbus hands the header over by value; handlers keep the contract's Result shape"
 )]
-#[zbus::interface(name = "io.github.sekirokenjii.Apex.Update1")]
+#[zbus::interface(name = "io.github.apex_linux.Apex.Update1")]
 impl MockDaemon {
     fn ping(&self, #[zbus(header)] header: Header<'_>) {
         self.log.call(&header);

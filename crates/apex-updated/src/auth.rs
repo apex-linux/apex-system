@@ -156,7 +156,7 @@ mod tests {
 
     fn call(interactive: bool) -> zbus::Message {
         let builder =
-            zbus::Message::method_call("/io/github/sekirokenjii/Apex/Update1", "Apply").unwrap();
+            zbus::Message::method_call("/io/github/apex_linux/Apex/Update1", "Apply").unwrap();
         let builder = if interactive {
             builder.with_flags(Flags::AllowInteractiveAuth).unwrap()
         } else {

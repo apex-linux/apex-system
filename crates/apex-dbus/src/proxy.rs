@@ -4,9 +4,9 @@ use crate::{ApexError, BootVerdict, Change, Channel, Deployment, State};
 /// Polkit-guarded methods allow interactive authorization, which `auth_admin` actions need.
 #[zbus::proxy(
     // Literals only, so a unit test compares them with the crate's constants.
-    interface = "io.github.sekirokenjii.Apex.Update1",
-    default_service = "io.github.sekirokenjii.Apex.Update1",
-    default_path = "/io/github/sekirokenjii/Apex/Update1",
+    interface = "io.github.apex_linux.Apex.Update1",
+    default_service = "io.github.apex_linux.Apex.Update1",
+    default_path = "/io/github/apex_linux/Apex/Update1",
     gen_blocking = false
 )]
 pub trait Update1 {

@@ -27,13 +27,13 @@ RELEASE_DIR      := $(CARGO_TARGET_DIR)/release
 # --bin, not --workspace or --bins: keeps the GUI crates and their GTK dependency out.
 APEX_BINS := apexctl apex-updated apex-boot-assess
 
-DBUS_IFACE_XML := crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml
+DBUS_IFACE_XML := crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml
 UPDATED_DATA   := crates/apex-updated/data
 BOOT_DATA      := crates/apex-boot/data
 
 XML_DATA := $(DBUS_IFACE_XML) \
-	$(UPDATED_DATA)/io.github.sekirokenjii.Apex.Update1.conf \
-	$(UPDATED_DATA)/io.github.sekirokenjii.apex.update.policy
+	$(UPDATED_DATA)/io.github.apex_linux.Apex.Update1.conf \
+	$(UPDATED_DATA)/io.github.apex-linux.apex.update.policy
 UNITS := apex-updated.service apex-update-auto.service apex-update-auto.timer \
 	apex-boot-assess.service
 SYSTEMD_UNITS_WITH_APEX_DROPIN := emergency.service rescue.service
@@ -104,19 +104,19 @@ install-bin:
 
 define install_data
 	$(INSTALL) -Dm0644 $(DBUS_IFACE_XML) \
-		'$(1)$(DBUSDIR)/interfaces/io.github.sekirokenjii.Apex.Update1.xml'
+		'$(1)$(DBUSDIR)/interfaces/io.github.apex_linux.Apex.Update1.xml'
 	$(INSTALL) -Dm0644 $(UPDATED_DATA)/apex-updated.service \
 		'$(1)$(UNITDIR)/apex-updated.service'
 	$(INSTALL) -Dm0644 $(UPDATED_DATA)/apex-update-auto.service \
 		'$(1)$(UNITDIR)/apex-update-auto.service'
 	$(INSTALL) -Dm0644 $(UPDATED_DATA)/apex-update-auto.timer \
 		'$(1)$(UNITDIR)/apex-update-auto.timer'
-	$(INSTALL) -Dm0644 $(UPDATED_DATA)/io.github.sekirokenjii.Apex.Update1.service \
-		'$(1)$(DBUSDIR)/system-services/io.github.sekirokenjii.Apex.Update1.service'
-	$(INSTALL) -Dm0644 $(UPDATED_DATA)/io.github.sekirokenjii.Apex.Update1.conf \
-		'$(1)$(DBUSDIR)/system.d/io.github.sekirokenjii.Apex.Update1.conf'
-	$(INSTALL) -Dm0644 $(UPDATED_DATA)/io.github.sekirokenjii.apex.update.policy \
-		'$(1)$(POLKITDIR)/io.github.sekirokenjii.apex.update.policy'
+	$(INSTALL) -Dm0644 $(UPDATED_DATA)/io.github.apex_linux.Apex.Update1.service \
+		'$(1)$(DBUSDIR)/system-services/io.github.apex_linux.Apex.Update1.service'
+	$(INSTALL) -Dm0644 $(UPDATED_DATA)/io.github.apex_linux.Apex.Update1.conf \
+		'$(1)$(DBUSDIR)/system.d/io.github.apex_linux.Apex.Update1.conf'
+	$(INSTALL) -Dm0644 $(UPDATED_DATA)/io.github.apex-linux.apex.update.policy \
+		'$(1)$(POLKITDIR)/io.github.apex-linux.apex.update.policy'
 	$(INSTALL) -Dm0644 $(UPDATED_DATA)/apex.tmpfiles.conf \
 		'$(1)$(TMPFILESDIR)/apex.conf'
 	$(INSTALL) -Dm0644 $(BOOT_DATA)/apex-boot-assess.service \

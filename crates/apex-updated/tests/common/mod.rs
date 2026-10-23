@@ -31,7 +31,7 @@ pub const BOOTED_VERSION: &str = "45.20260920.1";
 pub const STAGED_VERSION: &str = "45.20260924.3";
 pub const OLDER_VERSION: &str = "45.20260918.1";
 
-pub const STABLE_IMAGE: &str = "ghcr.io/sekirokenjii/apex:45";
+pub const STABLE_IMAGE: &str = "ghcr.io/apex-linux/apex:45";
 
 pub const NOW: u64 = 1_790_300_000;
 

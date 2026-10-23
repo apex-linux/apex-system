@@ -1,6 +1,6 @@
 [Unit]
 Description=Apex automatic update check and download
-Documentation=https://github.com/SekiroKenjii/apex-fedora/blob/main/docs/adr/0008-update-policy.md
+Documentation=https://github.com/apex-linux/apex/blob/main/docs/adr/0008-update-policy.md
 ConditionPathExists=/run/ostree-booted
 Wants=network-online.target
 After=network-online.target

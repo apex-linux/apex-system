@@ -7,7 +7,7 @@ Properties {
     progress: -1.0,
     booted: Deployment {
         image: Some(
-            "ghcr.io/sekirokenjii/apex:45",
+            "ghcr.io/apex-linux/apex:45",
         ),
         digest: Some(
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -39,7 +39,7 @@ Properties {
     },
     rollback: Deployment {
         image: Some(
-            "ghcr.io/sekirokenjii/apex:45",
+            "ghcr.io/apex-linux/apex:45",
         ),
         digest: Some(
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -62,7 +62,7 @@ Properties {
     },
     available: Deployment {
         image: Some(
-            "ghcr.io/sekirokenjii/apex:45",
+            "ghcr.io/apex-linux/apex:45",
         ),
         digest: Some(
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",

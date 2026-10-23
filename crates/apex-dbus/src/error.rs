@@ -43,15 +43,15 @@ impl ErrorKind {
     // Spelled out to stay `&'static str`; a unit test checks them against ERROR_PREFIX.
     pub const fn error_name(self) -> &'static str {
         match self {
-            Self::Busy => "io.github.sekirokenjii.Apex.Update1.Error.Busy",
-            Self::NotAuthorized => "io.github.sekirokenjii.Apex.Update1.Error.NotAuthorized",
-            Self::PolicyDenied => "io.github.sekirokenjii.Apex.Update1.Error.PolicyDenied",
-            Self::NothingToDo => "io.github.sekirokenjii.Apex.Update1.Error.NothingToDo",
-            Self::InvalidArgument => "io.github.sekirokenjii.Apex.Update1.Error.InvalidArgument",
-            Self::DigestMismatch => "io.github.sekirokenjii.Apex.Update1.Error.DigestMismatch",
-            Self::Bootc => "io.github.sekirokenjii.Apex.Update1.Error.Bootc",
-            Self::Network => "io.github.sekirokenjii.Apex.Update1.Error.Network",
-            Self::Internal => "io.github.sekirokenjii.Apex.Update1.Error.Internal",
+            Self::Busy => "io.github.apex_linux.Apex.Update1.Error.Busy",
+            Self::NotAuthorized => "io.github.apex_linux.Apex.Update1.Error.NotAuthorized",
+            Self::PolicyDenied => "io.github.apex_linux.Apex.Update1.Error.PolicyDenied",
+            Self::NothingToDo => "io.github.apex_linux.Apex.Update1.Error.NothingToDo",
+            Self::InvalidArgument => "io.github.apex_linux.Apex.Update1.Error.InvalidArgument",
+            Self::DigestMismatch => "io.github.apex_linux.Apex.Update1.Error.DigestMismatch",
+            Self::Bootc => "io.github.apex_linux.Apex.Update1.Error.Bootc",
+            Self::Network => "io.github.apex_linux.Apex.Update1.Error.Network",
+            Self::Internal => "io.github.apex_linux.Apex.Update1.Error.Internal",
         }
     }
 }
@@ -59,7 +59,7 @@ impl ErrorKind {
 /// A daemon passes every error through [`ApexError::into_contract`]. `Display` is for logs;
 /// show users [`ApexError::message`].
 #[derive(Debug, DBusError)]
-#[zbus(prefix = "io.github.sekirokenjii.Apex.Update1.Error")]
+#[zbus(prefix = "io.github.apex_linux.Apex.Update1.Error")]
 pub enum ApexError {
     /// Transport, bus and non-contract errors. A daemon replying with it would send
     /// `org.freedesktop.zbus.Error`.
@@ -172,7 +172,7 @@ mod tests {
         );
         assert_eq!(
             error.to_string(),
-            "io.github.sekirokenjii.Apex.Update1.Error.PolicyDenied: On battery below 50 %"
+            "io.github.apex_linux.Apex.Update1.Error.PolicyDenied: On battery below 50 %"
         );
     }
 

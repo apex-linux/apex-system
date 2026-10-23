@@ -71,7 +71,7 @@ fn elements(xml: &str) -> Vec<Element> {
 
 #[test]
 fn polkit_policy_matches_the_contract_table() {
-    let xml = data("io.github.sekirokenjii.apex.update.policy");
+    let xml = data("io.github.apex-linux.apex.update.policy");
     assert!(xml.contains("-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"));
     let elements = elements(&xml);
     let mut actions: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
@@ -125,7 +125,7 @@ fn polkit_policy_matches_the_contract_table() {
 
 #[test]
 fn bus_policy_allows_exactly_the_contract() {
-    let xml = data("io.github.sekirokenjii.Apex.Update1.conf");
+    let xml = data("io.github.apex_linux.Apex.Update1.conf");
     assert!(xml.contains("-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"));
     let mut owners = Vec::new();
     let mut sends = BTreeSet::new();
@@ -197,7 +197,7 @@ fn value<'a>(
 
 #[test]
 fn activation_file_hands_over_to_systemd() {
-    let file = ini(&data("io.github.sekirokenjii.Apex.Update1.service"));
+    let file = ini(&data("io.github.apex_linux.Apex.Update1.service"));
     let section = "D-BUS Service";
     assert_eq!(value(&file, section, "Name"), Some(BUS_NAME));
     assert_eq!(value(&file, section, "Exec"), Some("/bin/false"));
