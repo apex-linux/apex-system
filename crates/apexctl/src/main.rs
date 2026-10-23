@@ -132,11 +132,9 @@ async fn update_command(command: UpdateCommand) -> anyhow::Result<Exit> {
         UpdateCommand::Check => update::check(&service).await,
         UpdateCommand::Download { force } => update::download(&service, *force).await,
         UpdateCommand::Apply { digest } => update::apply(&service, digest.as_deref()).await,
-        UpdateCommand::Discard => update::discard(&service).await,
         UpdateCommand::Rollback { mark_bad } => update::rollback(&service, *mark_bad).await,
         UpdateCommand::Changes => update::changes(&service).await,
         UpdateCommand::Acknowledge => update::acknowledge(&service).await,
-        UpdateCommand::Channel { channel } => update::channel(&service, *channel).await,
         UpdateCommand::Automatic => update::automatic(&service).await,
     };
     match result {

@@ -1,7 +1,6 @@
 use crate::gates::{
-    Deferral, Gate, Operation, Trigger, bootc_flags, check_download_gates,
-    check_download_resources, gate_boot_space, gate_bootc_flags, gate_denylist, gate_disk_headroom,
-    gate_intent, gate_power,
+    Deferral, Gate, Operation, Trigger, check_download_gates, check_download_resources,
+    gate_boot_space, gate_bootc_flags, gate_denylist, gate_disk_headroom, gate_intent, gate_power,
 };
 use crate::snapshot::{RemoteView, SystemSnapshot};
 use crate::version::Version;
@@ -127,42 +126,6 @@ pub fn validate_apply(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DiscardError {
-    #[error("There is no update to cancel.")]
-    NothingStaged,
-    #[error("The update is not set to install, so there is nothing to cancel.")]
-    NotApplied,
-    #[error(transparent)]
-    Gate(#[from] Deferral),
-}
-
-/// The re-lock pulls the channel tag again and may stage another image or change nothing,
-/// so the daemon must confirm afterwards that no unlocked stage remains.
-pub fn validate_discard(snapshot: &SystemSnapshot) -> Result<(), DiscardError> {
-    let host = &snapshot.host;
-    let staged = host.staged.as_ref().ok_or(DiscardError::NothingStaged)?;
-    if staged.download_only {
-        return Err(DiscardError::NotApplied);
-    }
-    // No `/usr` overlay check: restarting to clear it would install the very update.
-    bootc_flags(host.incompatible, false, host.rollback_queued)?;
-    let remote = snapshot.remote.as_ref().map(|r| r.digest.as_str());
-    let may_download =
-        remote.is_none_or(|digest| digest != staged.digest && Some(digest) != host.booted_digest());
-    if may_download {
-        check_download_resources(snapshot, false).map_err(|deferral| {
-            let context = if remote.is_some() {
-                "The update channel has a newer update, and cancelling downloads it."
-            } else {
-                "Cancelling may download a newer update from the update channel."
-            };
-            Deferral::new(deferral.gate, format!("{context} {}", deferral.reason))
-        })?;
-    }
-    Ok(())
-}
-
 /// The daemon must clear an orphaned intent, or [`plan_automatic`] would skip for good.
 pub fn intent_is_orphaned(snapshot: &SystemSnapshot) -> bool {
     let Some(intent) = &snapshot.intent else {
@@ -181,7 +144,7 @@ pub fn intent_is_orphaned(snapshot: &SystemSnapshot) -> bool {
 mod tests {
     use super::*;
     use crate::gates::GIB;
-    use crate::snapshot::{Power, RemoteView};
+    use crate::snapshot::Power;
     use crate::test_support::{
         BOOTED, REMOTE, STAGED, deny, deployment, healthy, intent, ver, with_locked_stage,
     };
@@ -593,110 +556,6 @@ mod tests {
         s.host.staged.as_mut().expect("staged").download_only = false;
         s.intent = Some(intent(REMOTE));
         s
-    }
-
-    #[test]
-    fn discard_re_locks_an_applied_stage() {
-        assert_eq!(validate_discard(&applied()), Ok(()));
-    }
-
-    #[test]
-    fn discard_needs_an_applied_stage() {
-        assert_eq!(
-            validate_discard(&healthy()),
-            Err(DiscardError::NothingStaged)
-        );
-        assert_eq!(
-            validate_discard(&with_locked_stage()),
-            Err(DiscardError::NotApplied)
-        );
-    }
-
-    #[test]
-    fn discard_is_blocked_by_incompatible_and_rollback_queued_only() {
-        for set in [
-            |s: &mut SystemSnapshot| s.host.incompatible = true,
-            |s: &mut SystemSnapshot| s.host.rollback_queued = true,
-        ] {
-            let mut s = applied();
-            set(&mut s);
-            assert!(matches!(
-                validate_discard(&s),
-                Err(DiscardError::Gate(Deferral {
-                    gate: Gate::BootcFlags,
-                    ..
-                }))
-            ));
-        }
-        let mut s = applied();
-        s.host.usr_overlay = true;
-        assert_eq!(validate_discard(&s), Ok(()));
-    }
-
-    /// bootc re-locks the stage the tag points at after fetching only the manifest.
-    #[test]
-    fn discard_of_the_current_remote_needs_no_resources() {
-        let mut s = applied();
-        s.power = on_battery(1);
-        s.metered = Some(true);
-        s.boot_free = 0;
-        s.sysroot_free = 0;
-        assert_eq!(validate_discard(&s), Ok(()));
-        // Tag back at the booted image: bootc downloads nothing and leaves the stage applied.
-        s.remote.as_mut().expect("remote").digest = BOOTED.into();
-        assert_eq!(validate_discard(&s), Ok(()));
-    }
-
-    fn discard_gate(s: &SystemSnapshot) -> Option<(Gate, String)> {
-        match validate_discard(s) {
-            Err(DiscardError::Gate(d)) => Some((d.gate, d.reason)),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn discard_after_the_channel_moved_applies_the_download_gates() {
-        let moved = || {
-            let mut s = applied();
-            s.remote = Some(RemoteView {
-                digest: "sha256:newer".into(),
-                version: Some(ver("45.20260926.1")),
-            });
-            s
-        };
-        assert_eq!(validate_discard(&moved()), Ok(()));
-        let cases: [Case; 4] = [
-            (|s| s.power = on_battery(10), Gate::Power),
-            (|s| s.metered = Some(true), Gate::Metered),
-            (|s| s.sysroot_free = GIB, Gate::DiskSpace),
-            (|s| s.boot_free = 0, Gate::BootSpace),
-        ];
-        for (set, gate) in cases {
-            let mut s = moved();
-            set(&mut s);
-            let (got, reason) = discard_gate(&s).expect("deferred");
-            assert_eq!(got, gate);
-            assert!(
-                reason.starts_with(
-                    "The update channel has a newer update, and cancelling downloads it. "
-                ),
-                "{reason}"
-            );
-        }
-    }
-
-    #[test]
-    fn discard_without_a_known_remote_applies_the_download_gates() {
-        let mut s = applied();
-        s.remote = None;
-        assert_eq!(validate_discard(&s), Ok(()));
-        s.metered = Some(true);
-        let (gate, reason) = discard_gate(&s).expect("deferred");
-        assert_eq!(gate, Gate::Metered);
-        assert!(
-            reason.starts_with("Cancelling may download a newer update from the update channel. "),
-            "{reason}"
-        );
     }
 
     #[test]

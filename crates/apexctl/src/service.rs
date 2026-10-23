@@ -19,7 +19,6 @@ pub struct ServiceStatus {
     pub channel: Channel,
     /// Unix seconds; 0 if never.
     pub last_check: u64,
-    pub stale: bool,
     pub deferred_reason: String,
     pub last_error: String,
     pub health_failure: String,
@@ -32,10 +31,8 @@ pub trait UpdateService {
     fn check(&self) -> impl Future<Output = Result<(), ClientError>>;
     fn download(&self, override_soft_gates: bool) -> impl Future<Output = Result<(), ClientError>>;
     fn apply(&self, expected_digest: &str) -> impl Future<Output = Result<(), ClientError>>;
-    fn discard_staged(&self) -> impl Future<Output = Result<(), ClientError>>;
     fn rollback(&self, mark_bad: bool) -> impl Future<Output = Result<(), ClientError>>;
     fn changes(&self) -> impl Future<Output = Result<Vec<Change>, ClientError>>;
-    fn switch_channel(&self, channel: Channel) -> impl Future<Output = Result<(), ClientError>>;
     fn acknowledge_health_failure(&self) -> impl Future<Output = Result<(), ClientError>>;
     fn automatic(&self) -> impl Future<Output = Result<(), ClientError>>;
 }
@@ -276,7 +273,6 @@ impl UpdateService for DbusService {
             available: p.available().await?,
             channel: p.channel().await?,
             last_check: p.last_check().await?,
-            stale: p.stale().await?,
             deferred_reason: p.deferred_reason().await?,
             last_error: p.last_error().await?,
             health_failure: p.health_failure().await?,
@@ -296,20 +292,12 @@ impl UpdateService for DbusService {
         Ok(self.proxy.apply(expected_digest).await?)
     }
 
-    async fn discard_staged(&self) -> Result<(), ClientError> {
-        Ok(self.proxy.discard_staged().await?)
-    }
-
     async fn rollback(&self, mark_bad: bool) -> Result<(), ClientError> {
         Ok(self.proxy.rollback(mark_bad).await?)
     }
 
     async fn changes(&self) -> Result<Vec<Change>, ClientError> {
         Ok(self.proxy.get_changes().await?)
-    }
-
-    async fn switch_channel(&self, channel: Channel) -> Result<(), ClientError> {
-        self.with_progress(self.proxy.switch_channel(channel)).await
     }
 
     async fn acknowledge_health_failure(&self) -> Result<(), ClientError> {

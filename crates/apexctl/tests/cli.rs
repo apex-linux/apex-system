@@ -296,8 +296,7 @@ fn update_commands_explain_an_unreachable_bus() {
         &["status", "--json"],
         &["update", "check"],
         &["update", "acknowledge"],
-        &["update", "channel", "stable"],
-        &["update", "channel", "testing"],
+        &["update", "download"],
     ] {
         let (code, stdout, stderr) = run(apexctl(args).env(
             "DBUS_SYSTEM_BUS_ADDRESS",
@@ -398,26 +397,13 @@ fn help_names_every_contract_command() {
         "check",
         "download",
         "apply",
-        "discard",
         "rollback",
         "changes",
         "acknowledge",
-        "channel",
         "automatic",
     ] {
         assert!(stdout.contains(command), "{command}");
     }
-    let (code, stdout, _) = run(&mut apexctl(&["update", "channel", "--help"]));
-    assert_eq!(code, 0);
-    assert!(
-        stdout.contains("Usage: apexctl update channel <CHANNEL>"),
-        "{stdout}"
-    );
-    assert!(stdout.contains("administrator password"), "{stdout}");
-    assert!(
-        stdout.contains("[possible values: stable, testing]"),
-        "{stdout}"
-    );
     let (code, stdout, _) = run(&mut apexctl(&["update", "acknowledge", "--help"]));
     assert_eq!(code, 0);
     assert!(stdout.contains("health checks"), "{stdout}");
@@ -428,8 +414,9 @@ fn help_names_every_contract_command() {
 #[test]
 fn usage_errors_exit_1_because_2_means_a_gate_refused() {
     for args in [
-        &["update", "channel", "beta"][..],
-        &["update", "channel"],
+        &["update", "apply", "--digest", "nope"][..],
+        &["update", "channel", "stable"],
+        &["update", "discard"],
         &["update", "acknowledge", "now"],
         &["update", "reboot"],
         &["--no-such-flag"],
@@ -443,11 +430,8 @@ fn usage_errors_exit_1_because_2_means_a_gate_refused() {
             "{args:?}: {stderr}"
         );
     }
-    let (_, _, stderr) = run(&mut apexctl(&["update", "channel", "beta"]));
-    assert!(
-        stderr.contains("invalid value 'beta'") && stderr.contains("stable, testing"),
-        "{stderr}"
-    );
+    let (_, _, stderr) = run(&mut apexctl(&["update", "apply", "--digest", "nope"]));
+    assert!(stderr.contains("invalid value 'nope'"), "{stderr}");
     let (code, stdout, _) = run(&mut apexctl(&["--version"]));
     assert_eq!(code, 0);
     assert!(stdout.starts_with("apexctl "), "{stdout}");

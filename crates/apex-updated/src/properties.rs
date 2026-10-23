@@ -2,10 +2,9 @@ use std::collections::HashMap;
 
 use apex_dbus::{Channel, Deployment, State};
 use apex_update::state::is_available;
-use apex_update::{AfterCheck, SystemSnapshot, Version, is_stale, plan_after_check};
+use apex_update::{AfterCheck, SystemSnapshot, plan_after_check};
 use zbus::zvariant::Value;
 
-use crate::civil::unix_from_yyyymmdd;
 use crate::text::display_text;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +21,6 @@ pub struct Properties {
     pub last_check: u64,
     pub deferred_reason: String,
     pub last_error: String,
-    pub stale: bool,
     pub health_failure: String,
 }
 
@@ -39,7 +37,6 @@ impl Default for Properties {
             last_check: 0,
             deferred_reason: String::new(),
             last_error: String::new(),
-            stale: false,
             health_failure: String::new(),
         }
     }
@@ -143,11 +140,6 @@ impl Properties {
             Value::from(self.last_error.clone()),
         );
         put(
-            "Stale",
-            self.stale != previous.stale,
-            Value::Bool(self.stale),
-        );
-        put(
             "HealthFailure",
             self.health_failure != previous.health_failure,
             Value::from(self.health_failure.clone()),
@@ -203,7 +195,7 @@ pub fn progress(work: Work) -> f64 {
 }
 
 /// Derived with the automatic run's own rule rather than remembered from the last run, so it
-/// survives the idle exit and follows the charger and the network as they change.
+/// survives a restart and follows the charger and the network as they change.
 pub fn deferred_reason(snapshot: Option<&SystemSnapshot>) -> String {
     let Some(snapshot) = snapshot.filter(|s| is_available(s)) else {
         return String::new();
@@ -215,8 +207,8 @@ pub fn deferred_reason(snapshot: Option<&SystemSnapshot>) -> String {
 }
 
 /// `Apply`'s denylist and version gates on the digest bootc actually staged: the tag can move
-/// between the check and the pull. `Apply` waives the version gate for a channel `switch`.
-pub fn stage_refusal(snapshot: &SystemSnapshot, switch: bool) -> Option<String> {
+/// between the check and the pull.
+pub fn stage_refusal(snapshot: &SystemSnapshot) -> Option<String> {
     let host = &snapshot.host;
     let staged = host.staged.as_ref()?;
     if snapshot.denylist.contains(&staged.digest) {
@@ -227,9 +219,6 @@ pub fn stage_refusal(snapshot: &SystemSnapshot, switch: bool) -> Option<String> 
         return Some(format!(
             "The downloaded update{what} failed to start correctly before, so it will not be installed. Waiting for a newer update."
         ));
-    }
-    if switch {
-        return None;
     }
     match (host.booted_version(), staged.version.as_ref()) {
         (_, None) => Some(
@@ -242,7 +231,7 @@ pub fn stage_refusal(snapshot: &SystemSnapshot, switch: bool) -> Option<String> 
     }
 }
 
-pub fn deferred_reason_or_stage(snapshot: Option<&SystemSnapshot>, switch: bool) -> String {
+pub fn deferred_reason_or_stage(snapshot: Option<&SystemSnapshot>) -> String {
     let reason = deferred_reason(snapshot);
     if !reason.is_empty() {
         return reason;
@@ -254,31 +243,14 @@ pub fn deferred_reason_or_stage(snapshot: Option<&SystemSnapshot>, switch: bool)
                 .as_ref()
                 .is_some_and(|staged| staged.download_only)
         })
-        .and_then(|s| stage_refusal(s, switch))
+        .and_then(stage_refusal)
         .unwrap_or_default()
-}
-
-pub fn newest_build_time(
-    timestamps: impl IntoIterator<Item = Option<u64>>,
-    versions: impl IntoIterator<Item = Option<Version>>,
-) -> Option<u64> {
-    let from_versions = versions
-        .into_iter()
-        .map(|v| v.and_then(|v| unix_from_yyyymmdd(v.date())));
-    timestamps.into_iter().chain(from_versions).flatten().max()
-}
-
-/// Without any check there is no evidence either way.
-pub fn stale(last_check_at: u64, newest_build: Option<u64>, now: u64) -> bool {
-    last_check_at != 0 && newest_build.is_some_and(|built| is_stale(built, now))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apex_update::{DeploymentView, HostView, Power, RemoteView};
-
-    const DAY: u64 = 86_400;
+    use apex_update::{DeploymentView, HostView, Power, RemoteView, Version};
 
     fn view(digest: &str, version: &str) -> DeploymentView {
         DeploymentView {
@@ -387,25 +359,24 @@ mod tests {
     #[test]
     fn a_stage_that_apply_would_refuse_is_explained() {
         let newer = staged_snapshot("45.20260924.1", false);
-        assert_eq!(stage_refusal(&newer, false), None);
-        assert_eq!(deferred_reason_or_stage(Some(&newer), false), "");
+        assert_eq!(stage_refusal(&newer), None);
+        assert_eq!(deferred_reason_or_stage(Some(&newer)), "");
 
         let older = staged_snapshot("45.20260918.1", false);
-        let reason = stage_refusal(&older, false).expect("older");
+        let reason = stage_refusal(&older).expect("older");
         assert_eq!(
             reason,
             "The downloaded update 45.20260918.1 is not newer than the installed version 45.20260920.1, so it will not be installed."
         );
-        assert_eq!(deferred_reason_or_stage(Some(&older), false), reason);
-        assert!(stage_refusal(&staged_snapshot("45.20260920.1", false), false).is_some());
-        assert_eq!(stage_refusal(&older, true), None);
+        assert_eq!(deferred_reason_or_stage(Some(&older)), reason);
+        assert!(stage_refusal(&staged_snapshot("45.20260920.1", false)).is_some());
 
         let mut unversioned = staged_snapshot("45.20260924.1", false);
         if let Some(staged) = &mut unversioned.host.staged {
             staged.version = None;
         }
         assert!(
-            stage_refusal(&unversioned, false)
+            stage_refusal(&unversioned)
                 .expect("no version")
                 .contains("no version number")
         );
@@ -416,19 +387,17 @@ mod tests {
             reason: "fell back".into(),
             at: 1,
         });
-        for switch in [false, true] {
-            assert_eq!(
-                stage_refusal(&denied, switch).as_deref(),
-                Some(
-                    "The downloaded update 45.20260924.1 failed to start correctly before, so it will not be installed. Waiting for a newer update."
-                )
-            );
-        }
+        assert_eq!(
+            stage_refusal(&denied).as_deref(),
+            Some(
+                "The downloaded update 45.20260924.1 failed to start correctly before, so it will not be installed. Waiting for a newer update."
+            )
+        );
 
         let applied = staged_snapshot("45.20260918.1", true);
-        assert!(stage_refusal(&applied, false).is_some());
-        assert_eq!(deferred_reason_or_stage(Some(&applied), false), "");
-        assert_eq!(deferred_reason_or_stage(None, false), "");
+        assert!(stage_refusal(&applied).is_some());
+        assert_eq!(deferred_reason_or_stage(Some(&applied)), "");
+        assert_eq!(deferred_reason_or_stage(None), "");
     }
 
     #[test]
@@ -439,22 +408,9 @@ mod tests {
             digest: "sha256:r".into(),
             version: Version::parse("45.20260926.1"),
         });
-        assert!(deferred_reason_or_stage(Some(&s), false).contains("metered"));
+        assert!(deferred_reason_or_stage(Some(&s)).contains("metered"));
         s.metered = Some(false);
-        assert!(deferred_reason_or_stage(Some(&s), false).contains("not newer"));
-    }
-
-    #[test]
-    fn staleness() {
-        let now = 1_790_208_000 + 8 * DAY;
-        let newest = newest_build_time([None], [Version::parse("45.20260924.1")]);
-        assert_eq!(newest, Some(1_790_208_000));
-        assert!(stale(now - 60, newest, now));
-        assert!(!stale(0, newest, now), "never checked");
-        assert!(!stale(now, newest, 1_790_208_000 + 7 * DAY));
-        let newer = newest_build_time([Some(now - DAY)], [Version::parse("45.20260924.1")]);
-        assert!(!stale(now, newer, now));
-        assert_eq!(newest_build_time([None], [None]), None);
+        assert!(deferred_reason_or_stage(Some(&s)).contains("not newer"));
     }
 
     fn deployment(digest: &str) -> Deployment {
@@ -478,7 +434,7 @@ mod tests {
     #[test]
     fn every_contract_property_is_signalled_alone_when_it_changes() {
         let before = Properties::default();
-        let edits: [(&str, Edit); 12] = [
+        let edits: [(&str, Edit); 11] = [
             ("State", |p| p.state = State::Staged),
             ("Progress", |p| p.progress = 0.5),
             ("Booted", |p| p.booted = deployment("b")),
@@ -493,11 +449,10 @@ mod tests {
             ("LastCheck", |p| p.last_check = 1),
             ("DeferredReason", |p| p.deferred_reason = "later".into()),
             ("LastError", |p| p.last_error = "failed".into()),
-            ("Stale", |p| p.stale = true),
             ("HealthFailure", |p| p.health_failure = "sha256:h".into()),
         ];
         let contract = contract_properties();
-        assert_eq!(contract.len(), edits.len(), "the XML has twelve properties");
+        assert_eq!(contract.len(), edits.len(), "the XML has eleven properties");
         let mut all = before.clone();
         for (name, edit) in edits {
             let mut after = before.clone();

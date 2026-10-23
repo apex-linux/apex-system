@@ -10,19 +10,17 @@ use apex_update::StateDir;
 use apex_updated::auth::PolkitAuthorizer;
 use apex_updated::daemon::Daemon;
 use apex_updated::engine::{Engine, EngineParts, grubenv_writer};
+use apex_updated::properties::Properties;
 use apex_updated::providers::{GrubEnvFile, Providers};
 use apex_updated::queue::Op;
 use apex_updated::service::{Update1Service, emit_property_changes};
 use apex_updated::store::Store as _;
-use apex_updated::{IDLE_TIMEOUT, properties::Properties};
 use sd_notify::NotifyState;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use zbus::fdo::{RequestNameFlags, RequestNameReply};
 
-const IDLE_POLL: Duration = Duration::from_secs(15);
-const DRAIN_AFTER_RELEASING_NAME: Duration = Duration::from_secs(2);
 // bootc gets SIGTERM, then SIGKILL after 5 s.
 const STOP_GRACE: Duration = Duration::from_secs(15);
 
@@ -149,16 +147,10 @@ async fn run() -> anyhow::Result<()> {
     let mut status = daemon.engine().subscribe();
     let mut terminate = signal(SignalKind::terminate()).context("SIGTERM handler")?;
     let mut interrupt = signal(SignalKind::interrupt()).context("SIGINT handler")?;
-    let mut idle_poll = tokio::time::interval(IDLE_POLL);
     let reason = loop {
         tokio::select! {
             _ = terminate.recv() => break Stop::Signal("SIGTERM"),
             _ = interrupt.recv() => break Stop::Signal("SIGINT"),
-            _ = idle_poll.tick() => {
-                if daemon.is_idle(IDLE_TIMEOUT) {
-                    break Stop::Idle;
-                }
-            }
             ended = &mut worker => break Stop::WorkerEnded(ended),
             changed = status.changed() => {
                 if changed.is_ok() {
@@ -174,9 +166,6 @@ async fn run() -> anyhow::Result<()> {
     // Released first, so new callers activate a fresh instance instead of reaching this one.
     if let Err(error) = connection.release_name(BUS_NAME).await {
         tracing::debug!(%error, "cannot release the bus name");
-    }
-    if matches!(reason, Stop::Idle) {
-        tokio::time::sleep(DRAIN_AFTER_RELEASING_NAME).await;
     }
     daemon.shutdown();
     if let Stop::WorkerEnded(ended) = reason {
@@ -197,7 +186,6 @@ async fn run() -> anyhow::Result<()> {
 
 enum Stop {
     Signal(&'static str),
-    Idle,
     WorkerEnded(Result<(), tokio::task::JoinError>),
 }
 
@@ -205,7 +193,6 @@ impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Signal(name) => f.write_str(name),
-            Self::Idle => f.write_str("idle"),
             Self::WorkerEnded(_) => f.write_str("the operation worker ended"),
         }
     }

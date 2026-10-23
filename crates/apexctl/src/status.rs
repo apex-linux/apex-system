@@ -9,20 +9,19 @@ use serde::Serialize;
 use crate::service::ServiceStatus;
 use crate::timefmt::{format_utc, format_utc_date};
 
-pub const STATUS_JSON_SCHEMA: u32 = 1;
+pub const STATUS_JSON_SCHEMA: u32 = 2;
 
 pub const STATUS_JSON_HELP: &str = "\
-JSON output (--json), schema 1. One object; every key is always present, and a value the
+JSON output (--json), schema 2. One object; every key is always present, and a value the
 update service does not report is null. New keys may be added; existing keys keep their
 meaning until \"schema\" changes.
 
-  schema           1
+  schema           2
   state            \"up-to-date\", \"available\", \"downloading\", \"staged\", \"ready-for-reboot\",
                    \"rollback-queued\", \"incompatible\", \"usr-overlay\", \"finalize-failed\",
                    \"health-failure\", \"error\" or \"unknown\"
   progress         download progress from 0 to 1 while \"downloading\", otherwise null
   channel          \"stable\" or \"testing\": the channel of the running image
-  stale            true when the channel published no newer build for more than 7 days
   last_check       Unix time of the last successful check, or null
   deferred_reason  why the automatic download is waiting, or null
   last_error       message of the last failed update operation, or null
@@ -72,7 +71,6 @@ pub struct StatusJson {
     pub state: State,
     pub progress: Option<f64>,
     pub channel: Channel,
-    pub stale: bool,
     pub last_check: Option<u64>,
     pub deferred_reason: Option<String>,
     pub last_error: Option<String>,
@@ -100,7 +98,6 @@ impl StatusJson {
             state: status.state,
             progress: known_progress(status),
             channel: status.channel,
-            stale: status.stale,
             last_check: (status.last_check != 0).then_some(status.last_check),
             deferred_reason: non_empty(&status.deferred_reason),
             last_error: non_empty(&status.last_error),
@@ -404,9 +401,6 @@ pub fn render_status(status: &ServiceStatus) -> String {
     }
 
     let mut notes = Vec::new();
-    if status.stale {
-        notes.push("No newer build was published on this channel for more than 7 days.".to_owned());
-    }
     if !status.deferred_reason.is_empty() {
         notes.push(format!(
             "The automatic download is waiting: {}",
@@ -552,7 +546,6 @@ pub(crate) mod tests {
             available: Deployment::default(),
             channel: Channel::Stable,
             last_check: 1_790_240_400,
-            stale: false,
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
@@ -569,7 +562,6 @@ pub(crate) mod tests {
         let status = ServiceStatus {
             state: State::Downloading,
             progress: 0.425,
-            stale: true,
             deferred_reason: "On battery below 50 %".to_owned(),
             last_error: "bootc failed: no space".to_owned(),
             staged: Deployment::default(),

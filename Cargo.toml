@@ -5,7 +5,6 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Highest MSRV in the dependency stack is gtk4-rs 0.11 (1.92); Fedora 45 ships 1.98.1.
 rust-version = "1.93"
 license = "GPL-3.0-or-later"
 authors = ["Thuong Vo <66083331+SekiroKenjii@users.noreply.github.com>"]
@@ -37,14 +36,12 @@ tracing-journald = "0.3.2"
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 zbus_polkit = "5.1.0"
 
-# GNOME 51 is the release target: gtk v4_24, adw v1_10 and glib v2_90 through crate features.
-adw = { package = "libadwaita", version = "0.9.2" }
+# GNOME 51 is the release target: glib v2_90 through crate features.
 async-channel = "2.5.0"
 gettext-rs = { version = "0.8.0", features = ["gettext-system"] }
 gio = "0.22.10"
 glib = "0.22.10"
 glib-build-tools = "0.22.8"
-gtk = { package = "gtk4", version = "0.11.5" }
 
 insta = { version = "1.48.0", features = ["json"] }
 proptest = "1.11.0"
@@ -59,7 +56,7 @@ rust_2018_idioms = { level = "warn", priority = -1 }
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-# Pedantic lints that fight idiomatic GTK/zbus code or add noise without value here.
+# Pedantic lints that fight idiomatic zbus code or add noise without value here.
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
@@ -81,5 +78,5 @@ panic = "unwind"
 strip = "debuginfo"
 
 [profile.dev.package."*"]
-# Dependencies (gtk4-rs in particular) compile once with optimisations; our code stays debuggable.
+# Dependencies compile once with optimisations; our code stays debuggable.
 opt-level = 1

@@ -13,6 +13,5 @@ Channel    stable (running image)
 Checked    never
 Degraded   audio: the speaker fix is not available yet
 
-No newer build was published on this channel for more than 7 days.
 The automatic download is waiting: On battery below 50 %
 Last error: bootc failed: no space

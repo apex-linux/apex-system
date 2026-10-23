@@ -22,17 +22,11 @@ pub trait Update1 {
     #[zbus(name = "Apply", allow_interactive_auth)]
     fn apply(&self, expected_digest: &str) -> Result<(), ApexError>;
 
-    #[zbus(name = "DiscardStaged", allow_interactive_auth)]
-    fn discard_staged(&self) -> Result<(), ApexError>;
-
     #[zbus(name = "Rollback", allow_interactive_auth)]
     fn rollback(&self, mark_bad: bool) -> Result<(), ApexError>;
 
     #[zbus(name = "GetChanges")]
     fn get_changes(&self) -> Result<Vec<Change>, ApexError>;
-
-    #[zbus(name = "SwitchChannel", allow_interactive_auth)]
-    fn switch_channel(&self, channel: Channel) -> Result<(), ApexError>;
 
     #[zbus(name = "AcknowledgeHealthFailure", allow_interactive_auth)]
     fn acknowledge_health_failure(&self) -> Result<(), ApexError>;
@@ -72,9 +66,6 @@ pub trait Update1 {
 
     #[zbus(property, name = "LastError")]
     fn last_error(&self) -> zbus::Result<String>;
-
-    #[zbus(property, name = "Stale")]
-    fn stale(&self) -> zbus::Result<bool>;
 
     #[zbus(property, name = "HealthFailure")]
     fn health_failure(&self) -> zbus::Result<String>;

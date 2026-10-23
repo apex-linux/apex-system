@@ -91,7 +91,6 @@ pub struct FakeState {
     pub running_manifest: Option<Manifest>,
     /// By ostree commit checksum.
     pub manifests: HashMap<String, Manifest>,
-    pub fedora: Option<u32>,
     pub finalize_stamp: bool,
 }
 
@@ -110,7 +109,6 @@ impl Default for FakeState {
             units: HashMap::new(),
             running_manifest: None,
             manifests: HashMap::new(),
-            fedora: Some(45),
             finalize_stamp: false,
         }
     }
@@ -212,10 +210,6 @@ impl DeploymentFiles for FakeSystem {
             }
         };
         Box::pin(async move { Ok(manifest) })
-    }
-
-    fn fedora_release(&self) -> Option<u32> {
-        self.lock().fedora
     }
 
     fn finalize_failure_stamp(&self) -> bool {

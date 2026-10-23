@@ -3,7 +3,7 @@
 <!--
   Apex update service: apex-updated is the only process that runs bootc.
   System bus name io.github.apex_linux.Apex.Update1, object /io/github/apex_linux/Apex/Update1;
-  D-Bus activated (SystemdService=apex-updated.service), exits when idle.
+  D-Bus activated (SystemdService=apex-updated.service).
 
   No property is writable: every mutation is a method guarded by polkit (subject: the caller's
   system-bus-name, never a PID). uid 0 is always allowed; inactive and remote sessions never.
@@ -39,10 +39,8 @@
     io.github.apex-linux.apex.update.check           yes
     io.github.apex-linux.apex.update.download        yes
     io.github.apex-linux.apex.update.apply           yes
-    io.github.apex-linux.apex.update.discard         yes         also AcknowledgeHealthFailure
+    io.github.apex-linux.apex.update.discard         yes         AcknowledgeHealthFailure
     io.github.apex-linux.apex.update.rollback        auth_admin
-    io.github.apex-linux.apex.update.switch-channel  auth_admin
-    io.github.apex-linux.apex.update.downgrade       auth_admin  reserved: no method checks it
 -->
 <node>
   <interface name="io.github.apex_linux.Apex.Update1">
@@ -79,9 +77,6 @@
     <!-- Cleared by the next success. -->
     <property name="LastError" type="s" access="read"/>
 
-    <!-- No newer build on the channel for more than 7 days. -->
-    <property name="Stale" type="b" access="read"/>
-
     <!-- The digest of an armed boot that failed its health checks, or ""; cleared by
          AcknowledgeHealthFailure or a green boot. -->
     <property name="HealthFailure" type="s" access="read"/>
@@ -90,8 +85,7 @@
          cannot be used. -->
     <method name="Ping"/>
 
-    <!-- Returns at once within 60 s of the last success. Busy while a Download,
-         SwitchChannel, Automatic or DiscardStaged runs or waits. -->
+    <!-- Busy while a Download or Automatic runs or waits. -->
     <method name="Check"/>
 
     <!-- Stages locked. override_soft_gates skips only the power and metered gates. The
@@ -101,14 +95,10 @@
     </method>
 
     <!-- DigestMismatch unless the stage holds expected_digest. Arms the boot counter and
-         never reboots. Only a SwitchChannel stage may hold the running or an older build. -->
+         never reboots. -->
     <method name="Apply">
       <arg name="expected_digest" type="s" direction="in"/>
     </method>
-
-    <!-- Re-locks by pulling the channel tag again: needs the registry, and may stage a newer
-         image, locked. On failure the update stays applied and the counter armed. -->
-    <method name="DiscardStaged"/>
 
     <!-- mark_bad denylists the booted digest. PolicyDenied when the rollback deployment is
          denylisted. -->
@@ -121,12 +111,6 @@
          removed ones. Sorted by (name, arch); empty when nothing is staged. -->
     <method name="GetChanges">
       <arg name="changes" type="a(sssss)" direction="out"/>
-    </method>
-
-    <!-- "stable" or "testing" of the same Fedora major; stages locked and takes effect with
-         Apply and a restart. -->
-    <method name="SwitchChannel">
-      <arg name="channel" type="s" direction="in"/>
     </method>
 
     <method name="AcknowledgeHealthFailure"/>

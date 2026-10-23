@@ -19,7 +19,6 @@ use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::BoxFuture;
-use crate::channel::os_release_version_id;
 
 pub const SYSROOT: &str = "/sysroot";
 pub const BOOT: &str = "/boot";
@@ -29,7 +28,6 @@ pub const FINALIZE_FAILURE_STAMP: &str = "/boot/ostree/finalize-failure.stamp";
 pub const BOOT_COMPLETE_UNIT: &str = "ostree-boot-complete.service";
 pub const ASSESS_UNIT: &str = "apex-boot-assess.service";
 /// The running image's own, never the one in `/etc`.
-pub const OS_RELEASE: &str = "/usr/lib/os-release";
 pub const OSTREE_PROGRAM: &str = "/usr/bin/ostree";
 pub const OSTREE_REPO: &str = "/sysroot/ostree/repo";
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -76,8 +74,6 @@ pub trait DeploymentFiles: Send + Sync {
         &'a self,
         source: &'a ManifestSource,
     ) -> BoxFuture<'a, Result<Option<Manifest>, FileError>>;
-
-    fn fedora_release(&self) -> Option<u32>;
 
     fn finalize_failure_stamp(&self) -> bool;
 }
@@ -590,12 +586,6 @@ impl DeploymentFiles for HostFiles {
         Box::pin(self.read_manifest(source))
     }
 
-    fn fedora_release(&self) -> Option<u32> {
-        let relative = OS_RELEASE.trim_start_matches('/');
-        let text = std::fs::read_to_string(self.root.join(relative)).ok()?;
-        os_release_version_id(&text)
-    }
-
     fn finalize_failure_stamp(&self) -> bool {
         self.finalize_stamp.try_exists().unwrap_or(false)
     }
@@ -801,18 +791,10 @@ mod tests {
     }
 
     #[test]
-    fn os_release_and_stamp() {
+    fn finalize_failure_stamp() {
         let dir = tempfile::tempdir().unwrap();
         let files = files(dir.path());
-        assert_eq!(files.fedora_release(), None);
         assert!(!files.finalize_failure_stamp());
-        std::fs::create_dir_all(dir.path().join("root/usr/lib")).unwrap();
-        std::fs::write(
-            dir.path().join("root/usr/lib/os-release"),
-            "VERSION_ID=45\n",
-        )
-        .unwrap();
-        assert_eq!(files.fedora_release(), Some(45));
         std::fs::create_dir_all(dir.path().join("root/boot/ostree")).unwrap();
         std::fs::write(
             dir.path().join("root/boot/ostree/finalize-failure.stamp"),

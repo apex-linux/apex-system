@@ -18,14 +18,10 @@ version     The offered version 45.20260920.1 is not newer than the installed ve
 version     The update has no version number, so it is not downloaded automatically.
 version     The installed version is unknown, so updates are not downloaded automatically.
 intent      An update is already set to install at the next restart.
-intent      An update is already set to install at the next restart. Cancel it first to download a different one.
-metered     The update channel has a newer update, and cancelling downloads it. The network connection is metered. Connect to a network without data limits to download the update.
-metered     Cancelling may download a newer update from the update channel. The network connection is metered. Connect to a network without data limits to download the update.
+intent      An update is already set to install at the next restart. Restart first to download a different one.
 error       The downloaded update has no version number, so it cannot be installed.
 error       There is no downloaded update to install.
 error       The downloaded update changed since it was shown. Review it again.
 error       The update is already set to install at the next restart.
 error       The downloaded version 45.20260920.1 is not newer than the installed version 45.20260924.117.
 error       There is no update to download.
-error       There is no update to cancel.
-error       The update is not set to install, so there is nothing to cancel.

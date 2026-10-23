@@ -13,20 +13,17 @@ use apex_dbus::zbus::object_server::SignalEmitter;
 use apex_dbus::zbus::proxy::CacheProperties;
 use apex_dbus::zbus::{self, Connection, connection};
 use apex_dbus::{
-    ApexError, BUS_NAME, Change, Channel, Deployment, ErrorKind, OBJECT_PATH, State,
-    UnknownValueError, Update1Proxy,
+    ApexError, BUS_NAME, Change, Channel, Deployment, ErrorKind, OBJECT_PATH, State, Update1Proxy,
 };
 use apexctl::service::DbusService;
 use apexctl::update;
 
 const BOOTED_DIGEST: &str =
     "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae";
-const TESTING_DIGEST: &str =
+const DOWNLOADED_DIGEST: &str =
     "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef";
 const STAGED_DIGEST: &str =
     "sha256:c3ab8ff13720e8ad9047dd39466b3c8974e592c2fa383d4a3960714caef0c4f2";
-const NEWER_DIGEST: &str =
-    "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
 
 struct PrivateBus {
     child: Child,
@@ -136,14 +133,12 @@ struct Shared {
     state: State,
     progress: f64,
     staged: Deployment,
-    followed: Channel,
     health_failure: String,
-    switch_channel_denial: Option<String>,
-    switch_channel_duration: Duration,
+    download_denial: Option<String>,
+    download_duration: Duration,
     automatic_error: Option<(ErrorKind, String)>,
     check_error: Option<(ErrorKind, String)>,
     changes_error: Option<(ErrorKind, String)>,
-    staged_by_discard: Deployment,
     /// `Member(argument)`, and whether interactive authorization was allowed.
     calls: Vec<(String, bool)>,
     state_reads: Vec<State>,
@@ -158,14 +153,12 @@ impl Mock {
             state: State::UpToDate,
             progress: -1.0,
             staged: Deployment::default(),
-            followed: Channel::Stable,
             health_failure: String::new(),
-            switch_channel_denial: None,
-            switch_channel_duration: Duration::ZERO,
+            download_denial: None,
+            download_duration: Duration::ZERO,
             automatic_error: None,
             check_error: None,
             changes_error: None,
-            staged_by_discard: Deployment::default(),
             calls: Vec::new(),
             state_reads: Vec::new(),
         })))
@@ -228,22 +221,6 @@ impl Mock {
         }
     }
 
-    /// Signals the change before it replies, like the daemon.
-    async fn discard_staged(
-        &self,
-        #[zbus(header)] header: Header<'_>,
-        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-    ) -> Result<(), ApexError> {
-        self.record(&header, "DiscardStaged".to_owned());
-        {
-            let mut shared = self.lock();
-            shared.staged = shared.staged_by_discard.clone();
-            shared.state = State::Staged;
-        }
-        self.staged_changed(&emitter).await.map_err(update1_error)?;
-        self.state_changed(&emitter).await.map_err(update1_error)
-    }
-
     #[zbus(out_args("changes"))]
     fn get_changes(&self, #[zbus(header)] header: Header<'_>) -> Result<Vec<Change>, ApexError> {
         self.record(&header, "GetChanges".to_owned());
@@ -263,28 +240,20 @@ impl Mock {
         ])
     }
 
-    /// Takes the raw string, like the daemon, so the test sees exactly what went on the wire.
-    async fn switch_channel(
+    /// Signals the change before it replies, like the daemon.
+    async fn download(
         &self,
-        channel: &str,
+        override_soft_gates: bool,
         #[zbus(header)] header: Header<'_>,
         #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> Result<(), ApexError> {
-        self.record(&header, format!("SwitchChannel({channel})"));
-        let channel: Channel = channel
-            .parse()
-            .map_err(|error: UnknownValueError| ApexError::InvalidArgument(error.to_string()))?;
-        let switch_channel_duration = {
+        self.record(&header, format!("Download({override_soft_gates})"));
+        let download_duration = {
             let shared = self.lock();
-            if let Some(reason) = &shared.switch_channel_denial {
+            if let Some(reason) = &shared.download_denial {
                 return Err(ApexError::PolicyDenied(reason.clone()));
             }
-            if shared.followed == channel {
-                return Err(ApexError::NothingToDo(format!(
-                    "This system already follows the {channel} channel."
-                )));
-            }
-            shared.switch_channel_duration
+            shared.download_duration
         };
         {
             let mut shared = self.lock();
@@ -295,21 +264,14 @@ impl Mock {
         self.progress_changed(&emitter)
             .await
             .map_err(update1_error)?;
-        tokio::time::sleep(switch_channel_duration).await;
+        tokio::time::sleep(download_duration).await;
         {
             let mut shared = self.lock();
             shared.state = State::Staged;
             shared.progress = -1.0;
-            shared.followed = channel;
             shared.staged = Deployment {
-                image: Some(
-                    match channel {
-                        Channel::Stable => "ghcr.io/apex-linux/apex:45",
-                        Channel::Testing => "ghcr.io/apex-linux/apex-testing:45",
-                    }
-                    .to_owned(),
-                ),
-                digest: Some(TESTING_DIGEST.to_owned()),
+                image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
+                digest: Some(DOWNLOADED_DIGEST.to_owned()),
                 version: Some("45.20260925.7".to_owned()),
                 download_only: Some(true),
                 ..Deployment::default()
@@ -380,7 +342,6 @@ impl Mock {
         Deployment::default()
     }
 
-    /// The booted image's channel, which a switch does not change until it boots.
     #[zbus(property)]
     fn channel(&self) -> Channel {
         Channel::Stable
@@ -399,11 +360,6 @@ impl Mock {
     #[zbus(property)]
     fn last_error(&self) -> String {
         String::new()
-    }
-
-    #[zbus(property)]
-    fn stale(&self) -> bool {
-        false
     }
 
     #[zbus(property)]
@@ -448,26 +404,16 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
         )
     );
 
-    let (code, stdout, stderr) = bus.apexctl(&["update", "channel", "testing"]).await;
+    let (code, stdout, stderr) = bus.apexctl(&["update", "download"]).await;
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(
         stdout,
-        "Apex now follows the testing channel. Its image 45.20260925.7 (sha256:5f70bf18a086) \
-         is downloaded and stays locked until you apply it.\n\
-         To finish the switch, run: apexctl update apply\n\
-         Then restart the computer; apexctl never restarts it by itself.\n\
-         Testing images are signed with the CI key and have not been qualified for stable.\n"
-    );
-    let (code, stdout, stderr) = bus.apexctl(&["update", "channel", "testing"]).await;
-    assert_eq!(code, 3, "already followed: {stderr}");
-    assert!(stdout.is_empty());
-    assert_eq!(
-        stderr,
-        "apexctl: This system already follows the testing channel.\n"
+        "Downloaded 45.20260925.7 (sha256:5f70bf18a086). It stays locked until you apply it.\n\
+         Use it at the next restart with: apexctl update apply\n"
     );
 
-    mock.lock().switch_channel_denial = Some("Not enough free space in /sysroot".to_owned());
-    let (code, _, stderr) = bus.apexctl(&["update", "channel", "stable"]).await;
+    mock.lock().download_denial = Some("Not enough free space in /sysroot".to_owned());
+    let (code, _, stderr) = bus.apexctl(&["update", "download", "--force"]).await;
     assert_eq!(code, 2, "{stderr}");
     assert_eq!(
         stderr,
@@ -492,22 +438,21 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
         mock.calls(),
         [
             ("GetChanges".to_owned(), false),
-            ("SwitchChannel(testing)".to_owned(), true),
-            ("SwitchChannel(testing)".to_owned(), true),
-            ("SwitchChannel(stable)".to_owned(), true),
+            ("Download(false)".to_owned(), true),
+            ("Download(true)".to_owned(), true),
             ("AcknowledgeHealthFailure".to_owned(), true),
         ]
     );
 }
 
 #[tokio::test]
-async fn the_progress_loop_polls_while_a_switch_runs() {
+async fn the_progress_loop_polls_while_a_download_runs() {
     let Some(bus) = PrivateBus::start() else {
         return;
     };
     let mock = Mock::new();
     // Longer than two 500 ms progress ticks.
-    mock.lock().switch_channel_duration = Duration::from_millis(1_200);
+    mock.lock().download_duration = Duration::from_millis(1_200);
     let _server = bus.serve(mock.clone()).await;
     let client = bus.connect().await;
     // Without a property cache every read is a call the mock sees.
@@ -518,13 +463,8 @@ async fn the_progress_loop_polls_while_a_switch_runs() {
         .expect("proxy");
     let service = DbusService::from_proxy(proxy, true);
 
-    let out = update::channel(&service, Channel::Testing)
-        .await
-        .expect("switch");
-    assert!(
-        out.starts_with("Apex now follows the testing channel. Its image 45.20260925.7"),
-        "{out}"
-    );
+    let out = update::download(&service, false).await.expect("download");
+    assert!(out.starts_with("Downloaded 45.20260925.7"), "{out}");
     let reads = mock.lock().state_reads.clone();
     assert!(reads.contains(&State::Downloading), "{reads:?}");
     assert_eq!(reads.last(), Some(&State::Staged), "{reads:?}");
@@ -642,47 +582,4 @@ async fn busy_and_unknown_state_replies_are_reported_plainly() {
             ("GetChanges".to_owned(), false),
         ]
     );
-}
-
-#[tokio::test]
-async fn discard_names_the_build_the_relock_left_behind() {
-    let Some(bus) = PrivateBus::start() else {
-        return;
-    };
-    let mock = Mock::new();
-    {
-        let mut shared = mock.lock();
-        shared.state = State::ReadyForReboot;
-        shared.staged = Deployment {
-            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
-            digest: Some(STAGED_DIGEST.to_owned()),
-            version: Some("45.20260925.118".to_owned()),
-            download_only: Some(false),
-            ..Deployment::default()
-        };
-        shared.staged_by_discard = Deployment {
-            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
-            digest: Some(NEWER_DIGEST.to_owned()),
-            version: Some("45.20260926.119".to_owned()),
-            download_only: Some(true),
-            ..Deployment::default()
-        };
-    }
-    let _server = bus.serve(mock.clone()).await;
-
-    let (code, stdout, stderr) = bus.apexctl(&["update", "discard"]).await;
-    assert_eq!(code, 0, "{stderr}");
-    assert_eq!(
-        stdout,
-        format!(
-            "45.20260925.118 will not be installed at the next restart.\n\
-             The update channel has moved on: cancelling downloaded its current build, which \
-             replaced it and is locked:\n\
-             \x20 45.20260926.119  {NEWER_DIGEST}\n\
-             Review it with: apexctl update changes\n\
-             To install exactly this build later: apexctl update apply --digest {NEWER_DIGEST}\n\
-             An automatic download may replace it with a newer build before then.\n"
-        )
-    );
-    assert_eq!(mock.calls(), [("DiscardStaged".to_owned(), true)]);
 }

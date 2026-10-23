@@ -1,12 +1,9 @@
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
 
 use apex_bootc::CancelToken;
-use apex_dbus::{ApexError, Channel, ErrorKind};
+use apex_dbus::{ApexError, ErrorKind};
 use tokio::sync::{Notify, oneshot};
-use tokio::time::Instant;
 
 pub const MAX_PENDING: usize = 8;
 
@@ -21,12 +18,10 @@ pub enum Op {
     Apply {
         expected_digest: String,
     },
-    Discard,
     Rollback {
         /// Denylist the booted digest.
         mark_bad: bool,
     },
-    SwitchChannel(Channel),
     Automatic,
     Fallback {
         /// The target GRUB fell back from.
@@ -40,9 +35,7 @@ pub enum OpKind {
     Check,
     Download,
     Apply,
-    Discard,
     Rollback,
-    SwitchChannel,
     Automatic,
     Fallback,
 }
@@ -54,9 +47,7 @@ impl Op {
             Self::Check => OpKind::Check,
             Self::Download { .. } => OpKind::Download,
             Self::Apply { .. } => OpKind::Apply,
-            Self::Discard => OpKind::Discard,
             Self::Rollback { .. } => OpKind::Rollback,
-            Self::SwitchChannel(_) => OpKind::SwitchChannel,
             Self::Automatic => OpKind::Automatic,
             Self::Fallback { .. } => OpKind::Fallback,
         }
@@ -64,13 +55,9 @@ impl Op {
 }
 
 impl OpKind {
-    /// Up to bootc's two-hour download timeout each. `Discard` is one: its re-lock is a
-    /// `bootc upgrade --download-only`, which pulls the channel's image.
+    /// Up to bootc's two-hour download timeout each.
     pub const fn is_download_class(self) -> bool {
-        matches!(
-            self,
-            Self::Download | Self::SwitchChannel | Self::Automatic | Self::Discard
-        )
+        matches!(self, Self::Download | Self::Automatic)
     }
 
     pub const fn changes_next_boot(self) -> bool {
@@ -83,9 +70,7 @@ impl OpKind {
             Self::Check => "check",
             Self::Download => "download",
             Self::Apply => "apply",
-            Self::Discard => "discard",
             Self::Rollback => "rollback",
-            Self::SwitchChannel => "switch-channel",
             Self::Automatic => "automatic",
             Self::Fallback => "fallback",
         }
@@ -352,61 +337,6 @@ fn stopping_error() -> ApexError {
     ApexError::Busy("The update service is stopping. Try again in a moment.".to_owned())
 }
 
-/// Only calls and property reads count: a client that only listens for signals sees the
-/// name vanish, and its next call activates the service again.
-#[derive(Debug)]
-pub struct Activity {
-    last: Mutex<Instant>,
-    in_flight: AtomicUsize,
-}
-
-impl Default for Activity {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Activity {
-    pub fn new() -> Self {
-        Self {
-            last: Mutex::new(Instant::now()),
-            in_flight: AtomicUsize::new(0),
-        }
-    }
-
-    pub fn touch(&self) {
-        *self.last.lock().unwrap_or_else(PoisonError::into_inner) = Instant::now();
-    }
-
-    pub fn call(&self) -> CallGuard<'_> {
-        self.touch();
-        self.in_flight.fetch_add(1, Ordering::SeqCst);
-        CallGuard { activity: self }
-    }
-
-    pub fn is_quiet(&self, timeout: Duration) -> bool {
-        self.in_flight.load(Ordering::SeqCst) == 0
-            && self
-                .last
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .elapsed()
-                >= timeout
-    }
-}
-
-#[derive(Debug)]
-pub struct CallGuard<'a> {
-    activity: &'a Activity,
-}
-
-impl Drop for CallGuard<'_> {
-    fn drop(&mut self) {
-        self.activity.touch();
-        self.activity.in_flight.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,9 +352,7 @@ mod tests {
             OpKind::Apply => Op::Apply {
                 expected_digest: "sha256:d".into(),
             },
-            OpKind::Discard => Op::Discard,
             OpKind::Rollback => Op::Rollback { mark_bad: false },
-            OpKind::SwitchChannel => Op::SwitchChannel(Channel::Testing),
             OpKind::Automatic => Op::Automatic,
             OpKind::Fallback => Op::Fallback {
                 digest: "sha256:f".into(),
@@ -432,14 +360,12 @@ mod tests {
         }
     }
 
-    const ALL: [OpKind; 9] = [
+    const ALL: [OpKind; 7] = [
         OpKind::Refresh,
         OpKind::Check,
         OpKind::Download,
         OpKind::Apply,
-        OpKind::Discard,
         OpKind::Rollback,
-        OpKind::SwitchChannel,
         OpKind::Automatic,
         OpKind::Fallback,
     ];
@@ -546,7 +472,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn admission_invariants(ops in proptest::collection::vec((0usize..9, 0u8..3), 0..40)) {
+        fn admission_invariants(ops in proptest::collection::vec((0usize..7, 0u8..3), 0..40)) {
             let mut running: Option<Op> = None;
             let mut pending: Vec<Op> = Vec::new();
             for (index, variant) in ops {
@@ -619,8 +545,8 @@ mod tests {
             queue.submit(Op::Rollback { mark_bad: false }),
             Submission::Done(Err(ApexError::Busy(_)))
         ));
-        let Submission::Queued(third) = queue.submit(Op::Discard) else {
-            panic!("discard queues behind apply")
+        let Submission::Queued(third) = queue.submit(Op::Automatic) else {
+            panic!("automatic queues behind apply")
         };
         queue.close();
         assert!(cancel.is_cancelled());
@@ -640,7 +566,7 @@ mod tests {
             queue.submit(Op::Apply {
                 expected_digest: "sha256:a".into(),
             }),
-            queue.submit(Op::Discard),
+            queue.submit(Op::Automatic),
             queue.submit(Op::Fallback {
                 digest: "sha256:1".into(),
             }),
@@ -675,7 +601,7 @@ mod tests {
                 Op::Apply {
                     expected_digest: "sha256:a".into()
                 },
-                Op::Discard,
+                Op::Automatic,
             ]
         );
     }
@@ -690,7 +616,7 @@ mod tests {
         let Submission::Queued(joined) = queue.submit(Op::Check) else {
             panic!("joined")
         };
-        let Submission::Queued(waiting) = queue.submit(Op::Discard) else {
+        let Submission::Queued(waiting) = queue.submit(Op::Automatic) else {
             panic!("queued")
         };
         // As when the worker panics: the job is dropped, never finished.
@@ -714,20 +640,5 @@ mod tests {
         assert_eq!(error.message(), "changed");
         let foreign = duplicate(&Err(ApexError::ZBus(zbus::Error::Failure("x".into()))));
         assert_eq!(foreign.unwrap_err().kind(), Some(ErrorKind::Internal));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn activity_goes_quiet() {
-        let activity = Activity::new();
-        assert!(!activity.is_quiet(Duration::from_secs(60)));
-        tokio::time::advance(Duration::from_secs(61)).await;
-        assert!(activity.is_quiet(Duration::from_secs(60)));
-        let guard = activity.call();
-        tokio::time::advance(Duration::from_secs(61)).await;
-        assert!(!activity.is_quiet(Duration::from_secs(60)), "in flight");
-        drop(guard);
-        assert!(!activity.is_quiet(Duration::from_secs(60)), "just finished");
-        tokio::time::advance(Duration::from_secs(61)).await;
-        assert!(activity.is_quiet(Duration::from_secs(60)));
     }
 }

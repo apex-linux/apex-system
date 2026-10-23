@@ -1,6 +1,6 @@
 use apex_bootc::{BootcError, CommandKind};
 use apex_dbus::{ApexError, ErrorKind};
-use apex_update::{ApplyError, Deferral, DiscardError, DownloadError, StoreError};
+use apex_update::{ApplyError, Deferral, DownloadError, StoreError};
 
 pub fn from_bootc(error: &BootcError) -> ApexError {
     let message = error.to_string();
@@ -51,20 +51,10 @@ pub fn from_apply(error: &ApplyError) -> ApexError {
         ApplyError::DigestMismatch { expected, staged } => ApexError::DigestMismatch(format!(
             "{error} (reviewed {expected}, downloaded {staged})"
         )),
-        // A downgrade needs the `downgrade` polkit action, which no method uses yet.
         ApplyError::Downgrade { .. } => ApexError::PolicyDenied(format!(
             "{error} Installing an older version is not supported."
         )),
         ApplyError::Gate(deferral) => from_deferral(deferral),
-    }
-}
-
-pub fn from_discard(error: &DiscardError) -> ApexError {
-    match error {
-        DiscardError::NothingStaged | DiscardError::NotApplied => {
-            ApexError::NothingToDo(error.to_string())
-        }
-        DiscardError::Gate(deferral) => from_deferral(deferral),
     }
 }
 
@@ -194,10 +184,6 @@ mod tests {
         );
         assert_eq!(
             from_apply(&ApplyError::AlreadyApplied).kind(),
-            Some(ErrorKind::NothingToDo)
-        );
-        assert_eq!(
-            from_discard(&DiscardError::NotApplied).kind(),
             Some(ErrorKind::NothingToDo)
         );
     }

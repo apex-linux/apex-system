@@ -43,10 +43,8 @@ pub fn describe(action: PolkitAction) -> &'static str {
         PolkitAction::Check => "check for updates",
         PolkitAction::Download => "download updates",
         PolkitAction::Apply => "install updates",
-        PolkitAction::Discard => "cancel updates or dismiss update warnings",
+        PolkitAction::Discard => "dismiss update warnings",
         PolkitAction::Rollback => "go back to the previous version",
-        PolkitAction::SwitchChannel => "change the update channel",
-        PolkitAction::Downgrade => "install an older version",
     }
 }
 
@@ -182,8 +180,8 @@ mod tests {
             }
         }
         assert_eq!(
-            refusal(PolkitAction::SwitchChannel, true, true).message(),
-            "Authentication to change the update channel was cancelled."
+            refusal(PolkitAction::Rollback, true, true).message(),
+            "Authentication to go back to the previous version was cancelled."
         );
     }
 }
