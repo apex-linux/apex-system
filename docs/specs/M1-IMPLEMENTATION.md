@@ -13,7 +13,7 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 | Version string | `<fedora>.<yyyymmdd>.<run>`, e.g. `45.20260924.117`; compared numerically field by field |
 | System bus name / object | `io.github.apex_linux.Apex.Update1` at `/io/github/apex_linux/Apex/Update1` |
 | Interface XML | `crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml` (authoritative) |
-| Polkit action ids (lowercase) | `io.github.apex-linux.apex.update.{check,download,apply,discard,rollback,switch-channel,downgrade}` |
+| Polkit action ids (lowercase) | `io.github.apex-linux.apex.update.{check,download,apply,discard,rollback}` |
 | OCI label prefix | `io.github.apex-linux.apex.` (`degraded`, `content-key`, `fedora`) plus standard `org.opencontainers.image.{version,revision,source,created}` |
 | GSettings schema prefix | `io.github.apex_linux.Apex` (M2) |
 | State directory | `/var/lib/apex` (0700 root) |
@@ -103,7 +103,7 @@ sharing those names would let a login mark a failed armed boot as good.
 
 | Variable | Set by | Meaning |
 |---|---|---|
-| `apex_target` | set by `apex-updated` on `Apply`; unset by `apex-boot-assess` (green, inconsistent, fallback after the report) and by `apex-updated` (`DiscardStaged`, after its own fallback rollback) | digest of the deployment that must prove itself |
+| `apex_target` | set by `apex-updated` on `Apply`; unset by `apex-boot-assess` (green, inconsistent, fallback after the report) and by `apex-updated` (after its own fallback rollback) | digest of the deployment that must prove itself |
 | `apex_counter` | 3 from `apex-updated` on `Apply`; decremented by the GRUB snippet; 3 again as the fallback hedge written by `apex-boot-assess`; unset together with `apex_target` | remaining attempts; `-1` after GRUB fell back |
 | `apex_ok` | 1 from `apex-boot-assess` on green; 0 from `apex-boot-assess` before a red reboot; reset to 0 by the GRUB snippet at every boot, after the counting | userspace confirmation |
 
@@ -119,9 +119,7 @@ Arming precondition (the daemon's arming precondition plus `apex_boot::check_arm
 After finalization ostree makes the staged deployment entry 0 and keeps only the booted
 one as entry 1. Entry 1 therefore always exists, and it must be a confirmed deployment.
 
-A stage made by `SwitchChannel` is applied even when it is not newer, because the
-auth_admin prompt of the switch is the explicit confirmation. An origin-only switch (the
-same digest) is unlocked without arming.
+`Apply` never installs the running build or an older one, and it always arms.
 
 Writes use `grub2-editenv /boot/grub2/grubenv set|unset …`. bootc mounts `/boot`
 read-only, so every write runs in a private mount namespace:
@@ -138,24 +136,19 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
   `status --format=json --format-version=1`, `upgrade --check`,
   `upgrade --download-only [--progress-fd 3]`, `upgrade --from-downloaded`,
   `rollback`, `switch --enforce-container-sigpolicy --download-only <compile-time ref>`.
-- Re-locking (`DiscardStaged`) uses `upgrade --download-only`, which pulls the channel tag.
-  It therefore needs the network, and it may stage a newer build, still locked. The
-  daemon accepts the result only when bootc reports a locked stage.
 - Timeouts: status 30 s, check 5 min, download 2 h, others 10 min. Cancellation
   kills the process group.
 
 ## 7. `apexctl` command surface (M1)
 
 ```
-apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, stale
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded; JSON schema 2
 apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"
-apexctl update discard
 apexctl update rollback [--mark-bad]
 apexctl update changes                    package diff booted → staged
 apexctl update acknowledge                clear HealthFailure after reading it
-apexctl update channel stable|testing     follow another channel (auth_admin)
 apexctl update automatic                  (root, used by the timer)
 apexctl hw report [--json]                read-only: audio init_verbs, charge threshold, dGPU runtime PM, fingerprint device
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
@@ -171,13 +164,12 @@ measurements exist. `--check` exits 1 and prints a diff when committed files dif
 
 | Action | allow_any | allow_inactive | allow_active |
 |---|---|---|---|
-| check, download, apply, discard (also AcknowledgeHealthFailure) | no | no | yes |
-| rollback, switch-channel, downgrade | no | no | auth_admin |
+| check, download, apply, discard (AcknowledgeHealthFailure) | no | no | yes |
+| rollback | no | no | auth_admin |
 
 `Automatic` and `ReportBoot` are accepted only from uid 0 (checked with the bus
-credentials, not polkit). uid 0 is allowed every action without polkit. `downgrade` is
-reserved: no method checks it at M1, a same-channel downgrade is refused, and a channel
-switch is confirmed by the `switch-channel` prompt.
+credentials, not polkit). uid 0 is allowed every action without polkit. No action
+installs a downgrade: `Apply` refuses one, and `Rollback` is the way back.
 
 ## 9. Crate ownership and boundaries
 
