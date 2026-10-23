@@ -360,7 +360,7 @@ check_true "every file of apex and apex-desktop by its digest, not their commit-
     grep -qF "rpm -q --qf '[file %{FILEDIGESTS} %{FILENAMES}\n]' apex apex-desktop" <<<"$key_script"
 overlay_line=$(grep '^sha256sum ' <<<"$key_script")
 overlay_line=${overlay_line%%|*}
-for overlay_file in /usr/lib/bootc/install/10-apex.toml /usr/share/glib-2.0/schemas/90_apex.gschema.override \
+for overlay_file in /usr/lib/bootc/install/10-apex.toml \
     /usr/lib/systemd/system-preset/80-apex.preset /usr/share/polkit-1/rules.d/50-apex-no-layering.rules \
     /usr/lib/systemd/journald.conf.d/10-apex-persistent.conf \
     /usr/lib/systemd/system/bootloader-update.service.d/10-apex-after-green-boot.conf; do

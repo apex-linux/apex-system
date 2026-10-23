@@ -34,6 +34,9 @@ BOOT_DATA      := crates/apex-boot/data
 XML_DATA := $(DBUS_IFACE_XML) \
 	$(UPDATED_DATA)/io.github.apex_linux.Apex.Update1.conf \
 	$(UPDATED_DATA)/io.github.apex-linux.apex.update.policy
+DESKTOP_XML := desktop/schemas/io.github.apex_linux.Apex.Desktop.gschema.xml \
+	desktop/keybindings/60-apex.xml desktop/wallpapers/apex-facets.xml \
+	desktop/fontconfig/60-apex-adwaita-sans-ss03.conf
 UNITS := apex-updated.service apex-update-auto.service apex-update-auto.timer \
 	apex-boot-assess.service
 SYSTEMD_UNITS_WITH_APEX_DROPIN := emergency.service rescue.service
@@ -136,10 +139,16 @@ install-data:
 # The units name /usr paths: the staged root (stub binaries, no cargo build) needs PREFIX=/usr.
 check-data:
 	@if command -v xmllint >/dev/null 2>&1; then \
-		echo "xmllint --noout --nonet $(XML_DATA)"; \
-		xmllint --noout --nonet $(XML_DATA); \
+		echo "xmllint --noout --nonet $(XML_DATA) $(DESKTOP_XML)"; \
+		xmllint --noout --nonet $(XML_DATA) $(DESKTOP_XML); \
 	else \
 		echo "skip: xmllint not found (Fedora: libxml2)"; \
+	fi
+	@if command -v glib-compile-schemas >/dev/null 2>&1; then \
+		echo "glib-compile-schemas --strict --dry-run desktop/schemas"; \
+		glib-compile-schemas --strict --dry-run desktop/schemas; \
+	else \
+		echo "skip: glib-compile-schemas not found (Fedora: glib2)"; \
 	fi
 	@set -e; \
 	desktop=$$(find crates -path '*/data/*' -name '*.desktop' | sort); \
