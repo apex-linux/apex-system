@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Enabled by 80-apex.preset through `systemctl --user --global preset-all` in the image.
+[Unit]
+Description=Apex session agent: window radius and the crash-guard offer
+Documentation=https://github.com/apex-linux/apex-system/blob/main/docs/ARCHITECTURE.md
+PartOf=graphical-session.target
+After=graphical-session.target
+# The greeter's gdm user has a graphical session too, and nothing to set.
+ConditionUser=!@system
+
+[Service]
+ExecStart=/usr/libexec/apex/apex-session-agent
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=graphical-session.target

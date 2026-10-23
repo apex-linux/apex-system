@@ -33,10 +33,12 @@ jobs:
       RUST_BACKTRACE: "1"
     steps:
       - name: Tools for checkout, the cache and the tests
-        # dbus-daemon: the D-Bus tests' private buses.
+        # dbus-daemon: the D-Bus tests' private buses; glib2-devel: apex-session-agent links GIO,
+        # and its test compiles the Apex schema.
         run: >-
           dnf5 -y --setopt=install_weak_deps=False --repo=fedora --repo=updates install
-          git-core tar gzip zstd xz findutils curl python3 dbus-daemon diffutils
+          git-core tar gzip zstd xz findutils curl python3 dbus-daemon diffutils glib2-devel
+          pkgconf-pkg-config
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
