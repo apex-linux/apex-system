@@ -296,9 +296,12 @@ drift does not warrant a rebuild.
 - **N** in `.apexN` is `git rev-list --count HEAD` over `pkgs/PKG`, the Source1
   directory, `crates/apex-lane/src`, `crates/apex-lane/Cargo.toml` and
   `packaging/rebuild.sh`, the Bash lane `apex-lane` replaced: git still counts a
-  deleted path's history, so N never drops below a Bash-built release. Every committed
-  change to an input moves it. In the builder VM a snapshot commit of a dirty tree
-  adds one. A dependency bump in `Cargo.lock` alone changes the key but not N, and
+  deleted path's history, so N never drops below a Bash-built release. When the recipe
+  sits in another checkout (`APEX_LANE_RECIPES`, ':'-separated), N is the count of its
+  checkout over `pkgs/PKG` and the Source1 directory plus the count of the lane's
+  checkout over the rest, which is never lower than the one count over both. Every
+  committed change to an input moves it. In the builder VM a snapshot commit of a dirty
+  tree adds one. A dependency bump in `Cargo.lock` alone changes the key but not N, and
   takes `.apexN.M`.
 - **M** in `.apexN.M`: a key can change without a commit, when a Fedora update moves only
   the pin (a mutter-only update). The first key of a stock NVR at `.apexN` gets it bare;

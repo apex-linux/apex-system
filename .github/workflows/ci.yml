@@ -123,6 +123,9 @@ jobs:
       - name: Script self-tests
         run: .github/scripts/selftest.sh
 
+      - name: Contracts between the image and its components
+        run: .github/scripts/contracts.sh
+
       - name: The dev loop's host side, against a fake ssh
         run: tests/devloop/run.sh
 

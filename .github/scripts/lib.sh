@@ -13,6 +13,9 @@ readonly APEX_LABEL_PREFIX=io.github.apex-linux.apex
 
 APEX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly APEX_ROOT
+# The component checkouts; until the split, this one holds them all.
+: "${APEX_SYSTEM_SRC:=$APEX_ROOT}"
+: "${APEX_DESKTOP_SRC:=$APEX_ROOT}"
 
 in_github_actions() { [[ ${GITHUB_ACTIONS:-} == true ]]; }
 

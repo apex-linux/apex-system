@@ -184,7 +184,6 @@ fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyho
         || render::default_output_dir(profile_path),
         Path::to_path_buf,
     );
-    let firmware_list_drifted = report_firmware_list_drift(profile_path, &profile)?;
 
     if let AudioOutcome::NotMeasured = rendered.audio {
         eprintln!(
@@ -199,18 +198,16 @@ fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyho
         for difference in &differences {
             eprint!("{}", difference.diff);
         }
-        if differences.is_empty() && !firmware_list_drifted {
+        if differences.is_empty() {
             emit(&format!("{} is up to date.\n", out_dir.display()))?;
             return Ok(Exit::Ok);
         }
-        if !differences.is_empty() {
-            eprintln!(
-                "apexctl: {} does not match {}; run `apexctl profile render` (or `just render`) \
-                 and commit the result.",
-                out_dir.display(),
-                profile_path.display()
-            );
-        }
+        eprintln!(
+            "apexctl: {} does not match {}; run `apexctl profile render` (or `just render`) \
+             and commit the result.",
+            out_dir.display(),
+            profile_path.display()
+        );
         return Ok(Exit::Error);
     }
 
@@ -226,28 +223,7 @@ fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyho
         text.push_str(&line);
     }
     emit(&text)?;
-    Ok(if firmware_list_drifted {
-        Exit::Error
-    } else {
-        Exit::Ok
-    })
-}
-
-fn report_firmware_list_drift(profile_path: &Path, profile: &Profile) -> anyhow::Result<bool> {
-    let Some(list_path) = render::firmware_list_path(profile_path).filter(|p| p.is_file()) else {
-        return Ok(false);
-    };
-    let text = std::fs::read_to_string(&list_path)
-        .with_context(|| format!("cannot read {}", list_path.display()))?;
-    let Some(diff) = render::compare_firmware_list(profile, &text) else {
-        return Ok(false);
-    };
-    eprintln!(
-        "apexctl: {} differs from [firmware].required_files in {}:\n{diff}",
-        list_path.display(),
-        profile_path.display()
-    );
-    Ok(true)
+    Ok(Exit::Ok)
 }
 
 fn build_manifest(root: &Path, input: &ManifestInput) -> anyhow::Result<Exit> {

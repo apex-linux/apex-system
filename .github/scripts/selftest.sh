@@ -1127,7 +1127,23 @@ if [[ -d $APEX_ROOT/desktop/shell ]]; then
         [[ $(head -n 3 -- "$f") == *'SPDX-License-Identifier: GPL-2.0-or-later'* ]] || printf '%s ' "$f"
     done)
     check "desktop/shell: every file is GPL-2.0-or-later (SPDX)" "" "$unlicensed"
+    read -ra allowed <<<"$(sed -n 's/^source1_paths=//p' "$APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env")"
+    outside=$(cd "$APEX_ROOT/desktop/shell" && find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do
+        for p in "${allowed[@]}"; do
+            [[ $f == "$p" || ($p == */ && $f == "$p"*) ]] && continue 2
+        done
+        printf '%s ' "$f"
+    done)
+    check "desktop/shell: every file is in the gnome-shell recipe's source1_paths" "" "$outside"
 fi
+
+# --- contracts.sh: the image against the hardware profile -------------------------------
+check "contracts: this checkout keeps them" 0 "$(rc_of "$APEX_ROOT/.github/scripts/contracts.sh" 2>/dev/null)"
+mkdir -p "$TMP/contracts/hardware/m7400qc"
+sed 's/^packages = \[/packages = ["x-firmware", /' "$APEX_ROOT/hardware/m7400qc/profile.toml" \
+    >"$TMP/contracts/hardware/m7400qc/profile.toml"
+check "contracts: a profile firmware package that base.txt lacks" 1 \
+    "$(APEX_SYSTEM_SRC="$TMP/contracts" rc_of "$APEX_ROOT/.github/scripts/contracts.sh" 2>/dev/null)"
 
 # --- image.sh: the rebuild lane's lock in the image context ------------------------------
 image_sh() { bash -c '. "$1"; shift; eval "$1"' _ "$APEX_ROOT/.github/scripts/image.sh" "$@"; }
@@ -1148,6 +1164,11 @@ check "lane lock: no held family" "" "$(image_sh "lane_lock_states '$IL/rpms.loc
 if [[ -f $APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env ]]; then
     check "lane families: the committed pkg.env files" gnome-shell "$(image_sh lane_families | paste -sd' ' -)"
 fi
+mkdir -p "$IL/r1/packaging/pkgs/a" "$IL/r2/packaging/pkgs/b"
+printf 'family=fa\n' >"$IL/r1/packaging/pkgs/a/pkg.env"
+printf 'family=fb\n' >"$IL/r2/packaging/pkgs/b/pkg.env"
+check "lane families: every checkout in APEX_LANE_RECIPES" "fa fb" \
+    "$(APEX_LANE_RECIPES="$IL/r1:$IL/r2" image_sh lane_families | paste -sd' ' -)"
 bad_lane() {
     local name=$1 sed_script=$2
     shift 2

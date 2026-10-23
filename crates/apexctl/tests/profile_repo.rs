@@ -18,54 +18,6 @@ fn profile() -> Profile {
     Profile::load(&profile_path()).expect("hardware/m7400qc/profile.toml is valid")
 }
 
-fn package_list(text: &str) -> Vec<&str> {
-    text.lines()
-        .map(|line| line.split('#').next().unwrap_or("").trim())
-        .filter(|name| !name.is_empty())
-        .collect()
-}
-
-#[test]
-fn base_packages_install_every_profile_firmware_package() {
-    let base = repo().join("image/packages/base.txt");
-    let Ok(text) = std::fs::read_to_string(&base) else {
-        eprintln!("{} not found; nothing to compare", base.display());
-        return;
-    };
-    let listed = package_list(&text);
-    let profile = profile();
-    let missing: Vec<&String> = profile
-        .firmware
-        .packages
-        .iter()
-        .filter(|package| !listed.contains(&package.as_str()))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "image/packages/base.txt must install every [firmware].packages entry; missing: {missing:?}"
-    );
-}
-
-#[test]
-fn firmware_list_mirrors_the_profile() {
-    let list = render::firmware_list_path(&profile_path())
-        .expect("the profile sits in hardware/<machine>/");
-    let Ok(text) = std::fs::read_to_string(&list) else {
-        eprintln!("{} not found; nothing to compare", list.display());
-        return;
-    };
-    let profile = profile();
-    assert_eq!(
-        render::compare_firmware_list(&profile, &text),
-        None,
-        "image/checks/firmware-files.txt must list exactly [firmware].required_files, in order"
-    );
-    assert_eq!(
-        render::parse_firmware_list(&text),
-        profile.firmware.required_files
-    );
-}
-
 #[test]
 fn compiled_in_machine_facts_match_the_profile() {
     let profile = profile();
