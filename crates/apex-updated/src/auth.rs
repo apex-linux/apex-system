@@ -35,7 +35,7 @@ pub fn allows_interaction(header: &Header<'_>) -> bool {
     header
         .primary()
         .flags()
-        .contains(Flags::AllowInteractiveAuth)
+        .contains(Flags::ALLOW_INTERACTIVE_AUTH)
 }
 
 pub fn describe(action: PolkitAction) -> &'static str {
@@ -87,12 +87,10 @@ impl PolkitAuthorizer {
         let subject = Subject::new_for_message_header(header).map_err(|e| {
             ApexError::NotAuthorized(format!("The caller cannot be identified: {e}"))
         })?;
-        // Naming the empty `BitFlags` would need a direct enumflags2 dependency.
-        #[allow(clippy::default_trait_access)]
         let flags = if allows_interaction(header) {
-            CheckAuthorizationFlags::AllowUserInteraction.into()
+            CheckAuthorizationFlags::ALLOW_USER_INTERACTION
         } else {
-            Default::default()
+            CheckAuthorizationFlags::empty()
         };
         let details: HashMap<&str, &str> = HashMap::new();
         let unavailable = |e: zbus::Error| {
@@ -153,10 +151,9 @@ mod tests {
     use apex_dbus::ErrorKind;
 
     fn call(interactive: bool) -> zbus::Message {
-        let builder =
-            zbus::Message::method_call("/io/github/apex_linux/Apex/Update1", "Apply").unwrap();
+        let builder = zbus::Message::method_call("/io/github/apex_linux/Apex/Update1", "Apply");
         let builder = if interactive {
-            builder.with_flags(Flags::AllowInteractiveAuth).unwrap()
+            builder.with_flags(Flags::ALLOW_INTERACTIVE_AUTH)
         } else {
             builder
         };

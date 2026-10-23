@@ -316,7 +316,6 @@ mod tests {
 
     fn method_error(name: &str, description: &str) -> zbus::Error {
         let message = zbus::message::Message::method_call("/", "Ping")
-            .unwrap()
             .build(&())
             .unwrap();
         zbus::Error::MethodError(

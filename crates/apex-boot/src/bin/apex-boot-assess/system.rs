@@ -16,8 +16,8 @@ use apex_dbus::{ApexError, BootVerdict, Update1Proxy};
 use nix::time::{ClockId, clock_gettime};
 use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
+use zbus::OwnedObjectPath;
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::OwnedObjectPath;
 
 use crate::ports::{BootedImage, Clock, HostStatus, Rebooter, SessionInfo, Sessions, Updater};
 
@@ -74,8 +74,7 @@ fn describe(err: &ApexError) -> String {
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Manager",
     default_service = "org.freedesktop.login1",
-    default_path = "/org/freedesktop/login1",
-    gen_blocking = false
+    default_path = "/org/freedesktop/login1"
 )]
 trait LoginManager {
     fn list_sessions(&self) -> zbus::Result<Vec<(String, u32, String, String, OwnedObjectPath)>>;
@@ -83,8 +82,7 @@ trait LoginManager {
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Session",
-    default_service = "org.freedesktop.login1",
-    gen_blocking = false
+    default_service = "org.freedesktop.login1"
 )]
 trait LoginSession {
     #[zbus(property)]
@@ -116,7 +114,7 @@ impl Sessions for Logind {
             let mut sessions = Vec::with_capacity(listed.len());
             for (id, _uid, _user, seat, path) in listed {
                 let session = LoginSessionProxy::builder(&connection)
-                    .path(path)?
+                    .path(path)
                     .cache_properties(CacheProperties::No)
                     .build()
                     .await?;

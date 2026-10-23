@@ -15,8 +15,8 @@ use apex_update::manifest::MANIFEST_PATH;
 use apex_update::{Manifest, ManifestError, Power};
 use tokio::io::AsyncReadExt;
 use zbus::Connection;
+use zbus::OwnedObjectPath;
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::OwnedObjectPath;
 
 use crate::BoxFuture;
 
@@ -201,8 +201,7 @@ pub fn metered_from_nm(value: u32) -> Option<bool> {
 #[zbus::proxy(
     interface = "org.freedesktop.UPower",
     default_service = "org.freedesktop.UPower",
-    default_path = "/org/freedesktop/UPower",
-    gen_blocking = false
+    default_path = "/org/freedesktop/UPower"
 )]
 trait UPowerManager {
     #[zbus(property)]
@@ -212,8 +211,7 @@ trait UPowerManager {
 #[zbus::proxy(
     interface = "org.freedesktop.UPower.Device",
     default_service = "org.freedesktop.UPower",
-    default_path = "/org/freedesktop/UPower/devices/DisplayDevice",
-    gen_blocking = false
+    default_path = "/org/freedesktop/UPower/devices/DisplayDevice"
 )]
 trait UPowerDevice {
     #[zbus(property)]
@@ -225,8 +223,7 @@ trait UPowerDevice {
 #[zbus::proxy(
     interface = "org.freedesktop.NetworkManager",
     default_service = "org.freedesktop.NetworkManager",
-    default_path = "/org/freedesktop/NetworkManager",
-    gen_blocking = false
+    default_path = "/org/freedesktop/NetworkManager"
 )]
 trait NetworkManagerRoot {
     #[zbus(property)]
@@ -236,8 +233,7 @@ trait NetworkManagerRoot {
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Manager",
     default_service = "org.freedesktop.systemd1",
-    default_path = "/org/freedesktop/systemd1",
-    gen_blocking = false
+    default_path = "/org/freedesktop/systemd1"
 )]
 trait SystemdManager {
     fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
@@ -245,8 +241,7 @@ trait SystemdManager {
 
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Unit",
-    default_service = "org.freedesktop.systemd1",
-    gen_blocking = false
+    default_service = "org.freedesktop.systemd1"
 )]
 trait SystemdUnit {
     #[zbus(property)]
@@ -353,7 +348,7 @@ impl Systemd {
             .get_unit(unit)
             .await?;
         SystemdUnitProxy::builder(&self.connection)
-            .path(path)?
+            .path(path)
             .cache_properties(CacheProperties::No)
             .build()
             .await?

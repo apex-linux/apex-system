@@ -1,5 +1,5 @@
 //! Tokio clients build the [`zbus::Connection`] inside the runtime. `GLib` main-loop clients
-//! enable the `async-io` feature: zbus 5.19 then drives connections built outside tokio itself.
+//! enable the `async-io` feature: zbus then drives connections built outside tokio on zruntime.
 
 mod deployment;
 mod error;

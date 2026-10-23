@@ -88,7 +88,6 @@ impl PrivateBus {
 
     async fn connect(&self) -> Connection {
         connection::Builder::address(self.address.as_str())
-            .expect("address")
             .build()
             .await
             .expect("client connection")
@@ -96,11 +95,8 @@ impl PrivateBus {
 
     async fn serve(&self, mock: Mock) -> Connection {
         connection::Builder::address(self.address.as_str())
-            .expect("address")
             .name(BUS_NAME)
-            .expect("bus name")
             .serve_at(OBJECT_PATH, mock)
-            .expect("serve")
             .build()
             .await
             .expect("server connection")
@@ -172,7 +168,7 @@ impl Mock {
         let interactive = header
             .primary()
             .flags()
-            .contains(Flags::AllowInteractiveAuth);
+            .contains(Flags::ALLOW_INTERACTIVE_AUTH);
         self.lock().calls.push((call, interactive));
     }
 
