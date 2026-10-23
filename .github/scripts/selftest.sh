@@ -89,7 +89,7 @@ check "the apex key covers every crate of the workspace" "100644 blob 1111	crate
 if command -v make >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     L="$TMP/layout"
     mkdir -p "$L/target/release"
-    for b in apexctl apex-updated apex-boot-assess; do
+    for b in apexctl apex-updated apex-boot-assess apex-session-agent; do
         printf '#!/bin/sh\n' >"$L/target/release/$b"
         chmod +x "$L/target/release/$b"
     done
@@ -140,6 +140,7 @@ for d in sorted(got - dests):
 
 macros = {"_bindir": "/usr/bin", "_libexecdir": "/usr/libexec", "_datadir": "/usr/share",
           "_unitdir": "/usr/lib/systemd/system", "_tmpfilesdir": "/usr/lib/tmpfiles.d",
+          "_userunitdir": "/usr/lib/systemd/user", "_userpresetdir": "/usr/lib/systemd/user-preset",
           "_prefix": "/usr"}
 spec = open(f"{root}/packaging/apex.spec", encoding="utf-8").read()
 files = re.search(r"^%files\s*$(.*?)^%changelog", spec, re.M | re.S)

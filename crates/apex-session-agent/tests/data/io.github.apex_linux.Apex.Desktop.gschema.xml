@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Only keys with no upstream home. Without this schema the shell runs in safe mode. -->
+<schemalist>
+  <schema id="io.github.apex_linux.Apex.Desktop" path="/io/github/apex_linux/apex/desktop/">
+    <child name="keybindings" schema="io.github.apex_linux.Apex.Desktop.Keybindings"/>
+    <key name="translucent-top-bar" type="b">
+      <default>true</default>
+      <summary>Translucent top bar</summary>
+      <description>
+        Draw the top bar as glass over the wallpaper. It turns solid while a window
+        is maximized.
+      </description>
+    </key>
+    <key name="show-focused-app-name" type="b">
+      <default>true</default>
+      <summary>Show the focused app's name</summary>
+      <description>Show the name of the focused app in the top bar.</description>
+    </key>
+    <key name="dock-icon-size" type="s">
+      <choices>
+        <choice value="small"/>
+        <choice value="medium"/>
+        <choice value="large"/>
+      </choices>
+      <default>'medium'</default>
+      <summary>Dock icon size</summary>
+      <description>
+        The size of the dock's icons: small, medium or large, drawn at 46, 54 and
+        62 px.
+      </description>
+    </key>
+    <key name="dock-intellihide" type="b">
+      <default>true</default>
+      <summary>Hide the dock behind maximized windows</summary>
+      <description>
+        Hide the dock while a window overlaps it. Moving the pointer to the bottom
+        edge reveals it.
+      </description>
+    </key>
+    <key name="dock-running-indicators" type="b">
+      <default>true</default>
+      <summary>Show running indicators</summary>
+      <description>Mark the dock's icons of apps that have open windows.</description>
+    </key>
+    <key name="dock-show-trash" type="b">
+      <default>true</default>
+      <summary>Show the trash in the dock</summary>
+      <description>Show the trash at the end of the dock.</description>
+    </key>
+    <key name="window-corner-radius" type="u">
+      <range min="0" max="20"/>
+      <default>14</default>
+      <summary>Window corner radius</summary>
+      <description>
+        The corner radius of app windows, in logical pixels. Maximized, fullscreen
+        and tiled windows are always square. apex-session-agent applies it to GTK 4
+        apps.
+      </description>
+    </key>
+    <key name="reduce-transparency" type="b">
+      <default>false</default>
+      <summary>Reduce transparency</summary>
+      <description>Replace the glass surfaces of the shell with solid colours.</description>
+    </key>
+    <key name="layer-enabled" type="b">
+      <default>true</default>
+      <summary>Run the Apex desktop layer</summary>
+      <description>
+        When false, gnome-shell runs without the Apex layer in this user's sessions:
+        every hook gives its stock value, upstream's stylesheets load, and the colour
+        scheme is stock. It takes effect at the next login. The greeter ignores it.
+        The shell crash guard sets it to false.
+      </description>
+    </key>
+    <key name="disabled-features" type="as">
+      <default>[]</default>
+      <summary>Apex features to turn off</summary>
+      <description>
+        Features of the Apex layer to leave off without a rebuild, by name: glass,
+        dock, spotlight, lock, motion, notifications, overview, panel, quick-settings,
+        shadows. A disabled feature's hooks give their stock values. It takes effect
+        at the next login.
+      </description>
+    </key>
+    <key name="files-details-pane" type="b">
+      <default>false</default>
+      <summary>Show the details pane in Files</summary>
+      <description>Show the details of the selected item beside the Files view.</description>
+    </key>
+    <key name="files-recent-strip" type="b">
+      <default>true</default>
+      <summary>Show recent files in Files</summary>
+      <description>Show a strip of recent files above the Files view.</description>
+    </key>
+  </schema>
+  <schema id="io.github.apex_linux.Apex.Desktop.Keybindings"
+          path="/io/github/apex_linux/apex/desktop/keybindings/">
+    <key name="toggle-spotlight" type="as">
+      <default>['&lt;Super&gt;space']</default>
+      <summary>Open Spotlight</summary>
+      <description>
+        Open or close Spotlight. Until Spotlight exists it opens the overview's
+        search.
+      </description>
+    </key>
+  </schema>
+</schemalist>

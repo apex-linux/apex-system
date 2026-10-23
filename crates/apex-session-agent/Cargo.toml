@@ -1,0 +1,30 @@
+[package]
+name = "apex-session-agent"
+description = "Apex user service: the GTK window radius file and the offer to turn the Apex desktop back on after the shell crash guard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "apex_session_agent"
+
+[[bin]]
+name = "apex-session-agent"
+path = "src/main.rs"
+
+[dependencies]
+gio.workspace = true
+glib.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

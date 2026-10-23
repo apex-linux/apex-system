@@ -8,6 +8,8 @@ BINDIR      ?= $(PREFIX)/bin
 LIBEXECDIR  ?= $(PREFIX)/libexec/apex
 DATADIR     ?= $(PREFIX)/share
 UNITDIR     ?= $(PREFIX)/lib/systemd/system
+USERUNITDIR ?= $(PREFIX)/lib/systemd/user
+USERPRESETDIR ?= $(PREFIX)/lib/systemd/user-preset
 TMPFILESDIR ?= $(PREFIX)/lib/tmpfiles.d
 DBUSDIR     ?= $(DATADIR)/dbus-1
 POLKITDIR   ?= $(DATADIR)/polkit-1/actions
@@ -25,11 +27,12 @@ CARGO_TARGET_DIR ?= target
 RELEASE_DIR      := $(CARGO_TARGET_DIR)/release
 
 # --bin, not --workspace or --bins: keeps the GUI crates and their GTK dependency out.
-APEX_BINS := apexctl apex-updated apex-boot-assess
+APEX_BINS := apexctl apex-updated apex-boot-assess apex-session-agent
 
 DBUS_IFACE_XML := crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml
 UPDATED_DATA   := crates/apex-updated/data
 BOOT_DATA      := crates/apex-boot/data
+AGENT_DATA     := crates/apex-session-agent/data
 
 XML_DATA := $(DBUS_IFACE_XML) \
 	$(UPDATED_DATA)/io.github.apex_linux.Apex.Update1.conf \
@@ -97,6 +100,7 @@ install-bin:
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apexctl '$(DESTDIR)$(BINDIR)/apexctl'
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-updated '$(DESTDIR)$(LIBEXECDIR)/apex-updated'
 	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-boot-assess '$(DESTDIR)$(LIBEXECDIR)/apex-boot-assess'
+	$(INSTALL) -Dm0755 $(RELEASE_DIR)/apex-session-agent '$(DESTDIR)$(LIBEXECDIR)/apex-session-agent'
 
 define install_data
 	$(INSTALL) -Dm0644 $(DBUS_IFACE_XML) \
@@ -123,6 +127,10 @@ define install_data
 		'$(1)$(UNITDIR)/emergency.service.d/50-apex-bootcount.conf'
 	$(INSTALL) -Dm0644 $(BOOT_DATA)/rescue.service.d/50-apex-bootcount.conf \
 		'$(1)$(UNITDIR)/rescue.service.d/50-apex-bootcount.conf'
+	$(INSTALL) -Dm0644 $(AGENT_DATA)/apex-session-agent.service \
+		'$(1)$(USERUNITDIR)/apex-session-agent.service'
+	$(INSTALL) -Dm0644 $(AGENT_DATA)/80-apex.preset \
+		'$(1)$(USERPRESETDIR)/80-apex.preset'
 endef
 
 install-data:

@@ -25,6 +25,7 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 | `target/release/apexctl` | `/usr/bin/apexctl` |
 | `target/release/apex-updated` | `/usr/libexec/apex/apex-updated` |
 | `target/release/apex-boot-assess` | `/usr/libexec/apex/apex-boot-assess` |
+| `target/release/apex-session-agent` | `/usr/libexec/apex/apex-session-agent` |
 | `crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml` | `/usr/share/dbus-1/interfaces/` |
 | `crates/apex-updated/data/apex-updated.service` | `/usr/lib/systemd/system/` |
 | `crates/apex-updated/data/apex-update-auto.service`, `.timer` | `/usr/lib/systemd/system/` |
@@ -36,6 +37,8 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 | `crates/apex-boot/data/08_apex-bootcount.cfg` | `/usr/lib/bootupd/grub2-static/configs.d/08_apex-bootcount.cfg` |
 | `crates/apex-boot/data/emergency.service.d/50-apex-bootcount.conf` | `/usr/lib/systemd/system/emergency.service.d/` |
 | `crates/apex-boot/data/rescue.service.d/50-apex-bootcount.conf` | `/usr/lib/systemd/system/rescue.service.d/` |
+| `crates/apex-session-agent/data/apex-session-agent.service` | `/usr/lib/systemd/user/` |
+| `crates/apex-session-agent/data/80-apex.preset` | `/usr/lib/systemd/user-preset/` |
 
 Image-owned files (not in the RPM) live under `image/system_files/` and are copied into
 the rootfs by the Containerfile. The strict bootc policy is one of them:

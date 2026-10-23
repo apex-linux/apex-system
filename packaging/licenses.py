@@ -24,7 +24,7 @@ from collections import deque
 from pathlib import Path
 
 APEX_LICENSE = "GPL-3.0-or-later"
-DEFAULT_BINS = ("apexctl", "apex-updated", "apex-boot-assess")
+DEFAULT_BINS = ("apexctl", "apex-updated", "apex-boot-assess", "apex-session-agent")
 DEFAULT_TARGET = "x86_64-unknown-linux-gnu"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
