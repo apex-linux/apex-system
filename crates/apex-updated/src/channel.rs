@@ -81,18 +81,18 @@ mod tests {
     #[test]
     fn repositories() {
         let cases = [
-            ("ghcr.io/sekirokenjii/apex:45", "ghcr.io/sekirokenjii/apex"),
+            ("ghcr.io/apex-linux/apex:45", "ghcr.io/apex-linux/apex"),
             (
-                "ghcr.io/sekirokenjii/apex-testing:45",
-                "ghcr.io/sekirokenjii/apex-testing",
+                "ghcr.io/apex-linux/apex-testing:45",
+                "ghcr.io/apex-linux/apex-testing",
             ),
             (
-                "ghcr.io/sekirokenjii/apex-testing@sha256:00",
-                "ghcr.io/sekirokenjii/apex-testing",
+                "ghcr.io/apex-linux/apex-testing@sha256:00",
+                "ghcr.io/apex-linux/apex-testing",
             ),
             (
-                "ghcr.io/sekirokenjii/apex:45@sha256:00",
-                "ghcr.io/sekirokenjii/apex",
+                "ghcr.io/apex-linux/apex:45@sha256:00",
+                "ghcr.io/apex-linux/apex",
             ),
             ("localhost:5000/apex", "localhost:5000/apex"),
             ("localhost:5000/apex:dev", "localhost:5000/apex"),
@@ -107,19 +107,19 @@ mod tests {
     #[test]
     fn channels() {
         assert_eq!(
-            channel_of_image("ghcr.io/sekirokenjii/apex:45"),
+            channel_of_image("ghcr.io/apex-linux/apex:45"),
             Channel::Stable
         );
         assert_eq!(
-            channel_of_image("ghcr.io/sekirokenjii/apex-testing:45"),
+            channel_of_image("ghcr.io/apex-linux/apex-testing:45"),
             Channel::Testing
         );
         assert_eq!(
-            channel_of_image("ghcr.io/sekirokenjii/apex-testing:sha-0123456789ab-7"),
+            channel_of_image("ghcr.io/apex-linux/apex-testing:sha-0123456789ab-7"),
             Channel::Testing
         );
         assert_eq!(
-            channel_of_image("ghcr.io/sekirokenjii/apex-testing-evil:45"),
+            channel_of_image("ghcr.io/apex-linux/apex-testing-evil:45"),
             Channel::Stable
         );
     }
@@ -158,25 +158,25 @@ mod tests {
         assert!(!is_channel_switch(&host(&stable, None)));
         assert!(!is_channel_switch(&host(
             &stable,
-            Some("ghcr.io/sekirokenjii/apex-testing:sha-0123456789ab-7")
+            Some("ghcr.io/apex-linux/apex-testing:sha-0123456789ab-7")
         )));
         assert!(!is_channel_switch(&host(
             &stable,
             Some("quay.io/other/os:45")
         )));
         assert!(is_channel_reference(&stable));
-        assert!(!is_channel_reference("ghcr.io/sekirokenjii/apex:46"));
+        assert!(!is_channel_reference("ghcr.io/apex-linux/apex:46"));
     }
 
     #[test]
     fn targets_are_the_compile_time_constants() {
         assert_eq!(
             channel_target(Channel::Stable, 45).map(|r| r.to_string()),
-            Some("ghcr.io/sekirokenjii/apex:45".to_owned())
+            Some("ghcr.io/apex-linux/apex:45".to_owned())
         );
         assert_eq!(
             channel_target(Channel::Testing, 45).map(|r| r.to_string()),
-            Some("ghcr.io/sekirokenjii/apex-testing:45".to_owned())
+            Some("ghcr.io/apex-linux/apex-testing:45".to_owned())
         );
         assert_eq!(channel_target(Channel::Stable, 46), None);
         assert_eq!(channel_target(Channel::Testing, 0), None);

@@ -190,7 +190,7 @@ impl Mock {
 
 fn booted() -> Deployment {
     Deployment {
-        image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+        image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
         digest: Some(BOOTED_DIGEST.to_owned()),
         version: Some("45.20260924.117".to_owned()),
         ..Deployment::default()
@@ -218,10 +218,7 @@ fn update1_error(error: zbus::Error) -> ApexError {
     reason = "zbus hands the header over by value, handlers keep the contract's Result shape, \
               and constant property getters must still be methods"
 )]
-#[zbus::interface(
-    name = "io.github.sekirokenjii.Apex.Update1",
-    crate = "apex_dbus::zbus"
-)]
+#[zbus::interface(name = "io.github.apex_linux.Apex.Update1", crate = "apex_dbus::zbus")]
 impl Mock {
     fn check(&self, #[zbus(header)] header: Header<'_>) -> Result<(), ApexError> {
         self.record(&header, "Check".to_owned());
@@ -307,8 +304,8 @@ impl Mock {
             shared.staged = Deployment {
                 image: Some(
                     match channel {
-                        Channel::Stable => "ghcr.io/sekirokenjii/apex:45",
-                        Channel::Testing => "ghcr.io/sekirokenjii/apex-testing:45",
+                        Channel::Stable => "ghcr.io/apex-linux/apex:45",
+                        Channel::Testing => "ghcr.io/apex-linux/apex-testing:45",
                     }
                     .to_owned(),
                 ),
@@ -426,7 +423,7 @@ async fn the_binary_drives_the_new_update_commands_over_the_bus() {
         shared.health_failure = BOOTED_DIGEST.to_owned();
         shared.state = State::Staged;
         shared.staged = Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
             digest: Some(STAGED_DIGEST.to_owned()),
             version: Some("45.20260925.118".to_owned()),
             download_only: Some(true),
@@ -657,14 +654,14 @@ async fn discard_names_the_build_the_relock_left_behind() {
         let mut shared = mock.lock();
         shared.state = State::ReadyForReboot;
         shared.staged = Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
             digest: Some(STAGED_DIGEST.to_owned()),
             version: Some("45.20260925.118".to_owned()),
             download_only: Some(false),
             ..Deployment::default()
         };
         shared.staged_by_discard = Deployment {
-            image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
             digest: Some(NEWER_DIGEST.to_owned()),
             version: Some("45.20260926.119".to_owned()),
             download_only: Some(true),

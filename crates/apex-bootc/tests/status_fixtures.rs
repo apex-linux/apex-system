@@ -186,10 +186,7 @@ fn synthetic_apex_download_only_stage() {
     let h = load("synthetic", "apex-staged-download-only");
     let (booted, image) = h.require_bootc_host().unwrap();
     assert_eq!(image.version.as_deref(), Some("45.20260923.114"));
-    assert_eq!(
-        booted.image_reference(),
-        Some("ghcr.io/sekirokenjii/apex:45")
-    );
+    assert_eq!(booted.image_reference(), Some("ghcr.io/apex-linux/apex:45"));
     assert_eq!(h.status.host_type, Some(HostType::BootcHost));
     assert_eq!(h.staged_download_only(), Some(true));
     assert_eq!(

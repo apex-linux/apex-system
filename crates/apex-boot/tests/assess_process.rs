@@ -243,7 +243,7 @@ struct FakeUpdated {
     ping_delay: Duration,
 }
 
-#[zbus::interface(name = "io.github.sekirokenjii.Apex.Update1")]
+#[zbus::interface(name = "io.github.apex_linux.Apex.Update1")]
 impl FakeUpdated {
     async fn ping(&self) {
         tokio::time::sleep(self.ping_delay).await;
@@ -312,10 +312,10 @@ fn dry_run_with(
             .unwrap();
         let _updated = zbus::connection::Builder::address(address.as_str())
             .unwrap()
-            .name("io.github.sekirokenjii.Apex.Update1")
+            .name("io.github.apex_linux.Apex.Update1")
             .unwrap()
             .serve_at(
-                "/io/github/sekirokenjii/Apex/Update1",
+                "/io/github/apex_linux/Apex/Update1",
                 FakeUpdated { ping_delay },
             )
             .unwrap()

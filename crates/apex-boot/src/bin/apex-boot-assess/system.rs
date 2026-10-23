@@ -339,7 +339,7 @@ mod tests {
         let busy = ApexError::Busy("downloading".to_owned());
         assert_eq!(
             describe(&busy),
-            "io.github.sekirokenjii.Apex.Update1.Error.Busy: downloading"
+            "io.github.apex_linux.Apex.Update1.Error.Busy: downloading"
         );
     }
 
@@ -388,13 +388,13 @@ mod tests {
           "apiVersion": "org.containers.bootc/v1",
           "kind": "BootcHost",
           "metadata": { "name": "host" },
-          "spec": { "image": { "image": "ghcr.io/sekirokenjii/apex:45", "transport": "registry",
+          "spec": { "image": { "image": "ghcr.io/apex-linux/apex:45", "transport": "registry",
                                "signature": "containerPolicy" } },
           "status": {
             "staged": null,
             "booted": {
               "image": {
-                "image": { "image": "ghcr.io/sekirokenjii/apex:45", "transport": "registry",
+                "image": { "image": "ghcr.io/apex-linux/apex:45", "transport": "registry",
                            "signature": "containerPolicy" },
                 "version": "45.20260923.114",
                 "timestamp": "2026-09-23T03:10:02Z",
@@ -416,7 +416,7 @@ mod tests {
                     "sha256:9f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
                         .to_owned()
                 ),
-                image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+                image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
                 transport: Some("registry".to_owned()),
                 signature: Some(ImageSignature::ContainerPolicy),
                 rollback_digest: None,
@@ -432,7 +432,7 @@ mod tests {
             "staged": null,
             "booted": {
               "image": {
-                "image": { "image": "ghcr.io/sekirokenjii/apex:45", "transport": "registry" },
+                "image": { "image": "ghcr.io/apex-linux/apex:45", "transport": "registry" },
                 "imageDigest": "sha256:9f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
               },
               "cachedUpdate": null, "incompatible": false, "pinned": false,
@@ -440,7 +440,7 @@ mod tests {
             },
             "rollback": {
               "image": {
-                "image": { "image": "ghcr.io/sekirokenjii/apex:45", "transport": "registry" },
+                "image": { "image": "ghcr.io/apex-linux/apex:45", "transport": "registry" },
                 "imageDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
               },
               "cachedUpdate": null, "incompatible": false, "pinned": false,

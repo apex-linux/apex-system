@@ -7,8 +7,6 @@ node_modules/
 **/__pycache__/
 
 /_build/
-# Derived mockup renders, about 32 MB (`just design-render`).
-/design/renders/
 /out/
 *.qcow2
 *.raw

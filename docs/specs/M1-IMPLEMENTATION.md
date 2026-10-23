@@ -8,14 +8,14 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 
 | What | Value |
 |---|---|
-| Image repositories | `ghcr.io/sekirokenjii/apex` (stable, release key), `ghcr.io/sekirokenjii/apex-testing` (CI key) |
+| Image repositories | `ghcr.io/apex-linux/apex` (stable, release key), `ghcr.io/apex-linux/apex-testing` (CI key) |
 | Channel tags | `45` in both repositories; immutable `45.YYYYMMDD.RUN` in `apex`; `sha-<git12>-<run>` in `apex-testing` |
 | Version string | `<fedora>.<yyyymmdd>.<run>`, e.g. `45.20260924.117`; compared numerically field by field |
-| System bus name / object | `io.github.sekirokenjii.Apex.Update1` at `/io/github/sekirokenjii/Apex/Update1` |
-| Interface XML | `crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml` (authoritative) |
-| Polkit action ids (lowercase) | `io.github.sekirokenjii.apex.update.{check,download,apply,discard,rollback,switch-channel,downgrade}` |
-| OCI label prefix | `io.github.sekirokenjii.apex.` (`degraded`, `content-key`, `fedora`) plus standard `org.opencontainers.image.{version,revision,source,created}` |
-| GSettings schema prefix | `io.github.sekirokenjii.Apex` (M2) |
+| System bus name / object | `io.github.apex_linux.Apex.Update1` at `/io/github/apex_linux/Apex/Update1` |
+| Interface XML | `crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml` (authoritative) |
+| Polkit action ids (lowercase) | `io.github.apex-linux.apex.update.{check,download,apply,discard,rollback,switch-channel,downgrade}` |
+| OCI label prefix | `io.github.apex-linux.apex.` (`degraded`, `content-key`, `fedora`) plus standard `org.opencontainers.image.{version,revision,source,created}` |
+| GSettings schema prefix | `io.github.apex_linux.Apex` (M2) |
 | State directory | `/var/lib/apex` (0700 root) |
 
 ## 2. Installed files (produced by `make install DESTDIR=… PREFIX=/usr`)
@@ -25,12 +25,12 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 | `target/release/apexctl` | `/usr/bin/apexctl` |
 | `target/release/apex-updated` | `/usr/libexec/apex/apex-updated` |
 | `target/release/apex-boot-assess` | `/usr/libexec/apex/apex-boot-assess` |
-| `crates/apex-dbus/data/io.github.sekirokenjii.Apex.Update1.xml` | `/usr/share/dbus-1/interfaces/` |
+| `crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml` | `/usr/share/dbus-1/interfaces/` |
 | `crates/apex-updated/data/apex-updated.service` | `/usr/lib/systemd/system/` |
 | `crates/apex-updated/data/apex-update-auto.service`, `.timer` | `/usr/lib/systemd/system/` |
-| `crates/apex-updated/data/io.github.sekirokenjii.Apex.Update1.service` | `/usr/share/dbus-1/system-services/` |
-| `crates/apex-updated/data/io.github.sekirokenjii.Apex.Update1.conf` | `/usr/share/dbus-1/system.d/` |
-| `crates/apex-updated/data/io.github.sekirokenjii.apex.update.policy` | `/usr/share/polkit-1/actions/` |
+| `crates/apex-updated/data/io.github.apex_linux.Apex.Update1.service` | `/usr/share/dbus-1/system-services/` |
+| `crates/apex-updated/data/io.github.apex_linux.Apex.Update1.conf` | `/usr/share/dbus-1/system.d/` |
+| `crates/apex-updated/data/io.github.apex-linux.apex.update.policy` | `/usr/share/polkit-1/actions/` |
 | `crates/apex-updated/data/apex.tmpfiles.conf` | `/usr/lib/tmpfiles.d/apex.conf` |
 | `crates/apex-boot/data/apex-boot-assess.service` | `/usr/lib/systemd/system/` |
 | `crates/apex-boot/data/08_apex-bootcount.cfg` | `/usr/lib/bootupd/grub2-static/configs.d/08_apex-bootcount.cfg` |
@@ -78,7 +78,7 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
   reads as empty.
 - Consumers must ignore unknown fields. `schema` increases only on breaking change.
 - The image build copies `degraded` and `held` into the
-  `io.github.sekirokenjii.apex.degraded` and `io.github.sekirokenjii.apex.held` labels
+  `io.github.apex-linux.apex.degraded` and `io.github.apex-linux.apex.held` labels
   (comma-separated) at rechunk time. `held` and `shell` come from the rebuild lane's
   lock, which the image also carries as `/usr/share/apex/rpms.lock` (packaging/README.md,
   "The image").

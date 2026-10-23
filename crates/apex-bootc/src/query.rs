@@ -247,7 +247,7 @@ mod tests {
     fn image(digest: &str, version: &str) -> ImageStatus {
         ImageStatus {
             image: crate::status::ImageReference {
-                image: "ghcr.io/sekirokenjii/apex:45".into(),
+                image: "ghcr.io/apex-linux/apex:45".into(),
                 transport: "registry".into(),
                 signature: None,
             },

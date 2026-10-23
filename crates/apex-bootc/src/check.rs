@@ -57,7 +57,7 @@ mod tests {
     fn up_to_date() {
         assert_eq!(
             parse_check_output(
-                "No changes in: ostree-image-signed:docker://ghcr.io/sekirokenjii/apex:45\n"
+                "No changes in: ostree-image-signed:docker://ghcr.io/apex-linux/apex:45\n"
             ),
             CheckOutcome::UpToDate
         );
@@ -66,7 +66,7 @@ mod tests {
     #[test]
     fn available_with_version_and_diff() {
         let out = format!(
-            "Update available for: ostree-image-signed:docker://ghcr.io/sekirokenjii/apex:45\n  Version: 45.20260924.117\n  Digest: {D}\nTotal new layers: 3    Size: 1.2 GB\nRemoved layers:   2    Size: 1.1 GB\n"
+            "Update available for: ostree-image-signed:docker://ghcr.io/apex-linux/apex:45\n  Version: 45.20260924.117\n  Digest: {D}\nTotal new layers: 3    Size: 1.2 GB\nRemoved layers:   2    Size: 1.1 GB\n"
         );
         assert_eq!(
             parse_check_output(&out),

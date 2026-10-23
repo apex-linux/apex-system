@@ -10,7 +10,7 @@ expression: json
     ],
     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "download_only": null,
-    "image": "ghcr.io/sekirokenjii/apex:45",
+    "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
     "timestamp": 1790208000,
     "version": "45.20260924.117"
@@ -30,7 +30,7 @@ expression: json
     ],
     "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "download_only": null,
-    "image": "ghcr.io/sekirokenjii/apex:45",
+    "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
     "timestamp": 1790208000,
     "version": "45.20260920.110"
@@ -40,7 +40,7 @@ expression: json
     "degraded": [],
     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "download_only": true,
-    "image": "ghcr.io/sekirokenjii/apex:45",
+    "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
     "timestamp": 1790208000,
     "version": "45.20260925.118"

@@ -315,7 +315,7 @@ async fn a_full_or_closed_sink_never_blocks_bootc() {
 const FAKE_BOOTC: &str = r#"#!/bin/sh
 case "$*" in
   "status --format=json --format-version=1")
-    printf '%s' '{"apiVersion":"org.containers.bootc/v1","kind":"BootcHost","spec":{"image":{"image":"ghcr.io/sekirokenjii/apex:45","transport":"registry"}},"status":{"booted":{"image":{"image":{"image":"ghcr.io/sekirokenjii/apex:45","transport":"registry"},"version":"45.20260924.117","timestamp":"2026-09-24T03:00:00Z","imageDigest":"sha256:736b359467c9437c1ac915acaae952aad854e07eb4a16a94999a48af08c83c34","architecture":"amd64"},"incompatible":false,"pinned":false,"downloadOnly":false,"ostree":{"checksum":"26836632adf6228d64ef07a26fd3efaf177104efd1f341a2cf7909a3e4e2c72c","deploySerial":0,"stateroot":"default"}},"rollbackQueued":false,"type":"bootcHost"}}'
+    printf '%s' '{"apiVersion":"org.containers.bootc/v1","kind":"BootcHost","spec":{"image":{"image":"ghcr.io/apex-linux/apex:45","transport":"registry"}},"status":{"booted":{"image":{"image":{"image":"ghcr.io/apex-linux/apex:45","transport":"registry"},"version":"45.20260924.117","timestamp":"2026-09-24T03:00:00Z","imageDigest":"sha256:736b359467c9437c1ac915acaae952aad854e07eb4a16a94999a48af08c83c34","architecture":"amd64"},"incompatible":false,"pinned":false,"downloadOnly":false,"ostree":{"checksum":"26836632adf6228d64ef07a26fd3efaf177104efd1f341a2cf7909a3e4e2c72c","deploySerial":0,"stateroot":"default"}},"rollbackQueued":false,"type":"bootcHost"}}'
     ;;
   "upgrade --download-only --progress-fd 3")
     echo "error: unexpected argument '--progress-fd' found" >&2

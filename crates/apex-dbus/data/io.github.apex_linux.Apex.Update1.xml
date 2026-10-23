@@ -2,7 +2,7 @@
  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <!--
   Apex update service: apex-updated is the only process that runs bootc.
-  System bus name io.github.sekirokenjii.Apex.Update1, object /io/github/sekirokenjii/Apex/Update1;
+  System bus name io.github.apex_linux.Apex.Update1, object /io/github/apex_linux/Apex/Update1;
   D-Bus activated (SystemdService=apex-updated.service), exits when idle.
 
   No property is writable: every mutation is a method guarded by polkit (subject: the caller's
@@ -24,7 +24,7 @@
     "degraded"       as  components shipped degraded, from the deployment's own manifest,
                          so absent for Available
 
-  Errors io.github.sekirokenjii.Apex.Update1.Error.<Kind>:
+  Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting
     NotAuthorized    polkit, or the uid 0 check of Automatic and ReportBoot, refused
     PolicyDenied     an update gate refused; the message is fit for display
@@ -36,16 +36,16 @@
     Internal
 
   Polkit actions, default for an active local session:
-    io.github.sekirokenjii.apex.update.check           yes
-    io.github.sekirokenjii.apex.update.download        yes
-    io.github.sekirokenjii.apex.update.apply           yes
-    io.github.sekirokenjii.apex.update.discard         yes         also AcknowledgeHealthFailure
-    io.github.sekirokenjii.apex.update.rollback        auth_admin
-    io.github.sekirokenjii.apex.update.switch-channel  auth_admin
-    io.github.sekirokenjii.apex.update.downgrade       auth_admin  reserved: no method checks it
+    io.github.apex-linux.apex.update.check           yes
+    io.github.apex-linux.apex.update.download        yes
+    io.github.apex-linux.apex.update.apply           yes
+    io.github.apex-linux.apex.update.discard         yes         also AcknowledgeHealthFailure
+    io.github.apex-linux.apex.update.rollback        auth_admin
+    io.github.apex-linux.apex.update.switch-channel  auth_admin
+    io.github.apex-linux.apex.update.downgrade       auth_admin  reserved: no method checks it
 -->
 <node>
-  <interface name="io.github.sekirokenjii.Apex.Update1">
+  <interface name="io.github.apex_linux.Apex.Update1">
 
     <!-- "up-to-date", "available", "downloading", "staged", "ready-for-reboot",
          "rollback-queued", "incompatible", "usr-overlay", "finalize-failed",

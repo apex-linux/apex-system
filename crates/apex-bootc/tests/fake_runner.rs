@@ -27,7 +27,7 @@ async fn check_download_apply_flow() {
     let fake = Arc::new(FakeRunner::new());
     fake.push(Scripted::new(BootcCommand::Status).stdout(fixture("status/bootc-upstream/spec-only-booted.json")))
         .push(Scripted::new(BootcCommand::UpgradeCheck).stdout(format!(
-            "Update available for: ostree-image-signed:docker://ghcr.io/sekirokenjii/apex:45\n  Version: 45.20260924.117\n  Digest: {DIGEST}\n"
+            "Update available for: ostree-image-signed:docker://ghcr.io/apex-linux/apex:45\n  Version: 45.20260924.117\n  Digest: {DIGEST}\n"
         )))
         .push(
             Scripted::new(BootcCommand::UpgradeDownloadOnly { progress: true })
@@ -37,7 +37,7 @@ async fn check_download_apply_flow() {
                 .progress_bytes(200, 400)
                 .progress_line("garbage that must be ignored")
                 .progress_bytes(400, 400)
-                .stdout("Staged but not queued for next boot: ghcr.io/sekirokenjii/apex:45\n"),
+                .stdout("Staged but not queued for next boot: ghcr.io/apex-linux/apex:45\n"),
         )
         .push(
             Scripted::new(BootcCommand::Status)
@@ -107,13 +107,13 @@ async fn relocking_is_reported_not_assumed() {
         )
         .with(
             Scripted::new(BootcCommand::UpgradeDownloadOnly { progress: false }).stdout(format!(
-                "No changes in ghcr.io/sekirokenjii/apex:45 => {DIGEST}\n\
+                "No changes in ghcr.io/apex-linux/apex:45 => {DIGEST}\n\
                  Image downloaded, but will not be applied on reboot\n"
             )),
         )
         .with(
             Scripted::new(BootcCommand::UpgradeDownloadOnly { progress: false }).stdout(format!(
-                "Staged but not queued for next boot: ghcr.io/sekirokenjii/apex:45\n  \
+                "Staged but not queued for next boot: ghcr.io/apex-linux/apex:45\n  \
                  Version: 45.20260925.1\n  Digest: {DIGEST}\n"
             )),
         )
@@ -304,7 +304,7 @@ async fn switch_passes_exactly_the_requested_reference() {
     let argv = calls[0].argv();
     assert_eq!(
         argv.last().unwrap(),
-        &std::ffi::OsString::from(format!("ghcr.io/sekirokenjii/apex-testing@{DIGEST}"))
+        &std::ffi::OsString::from(format!("ghcr.io/apex-linux/apex-testing@{DIGEST}"))
     );
     fake.assert_finished();
 }

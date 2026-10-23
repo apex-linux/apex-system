@@ -9,7 +9,7 @@ edition = "2024"
 rust-version = "1.93"
 license = "GPL-3.0-or-later"
 authors = ["Thuong Vo <66083331+SekiroKenjii@users.noreply.github.com>"]
-repository = "https://github.com/SekiroKenjii/apex-fedora"
+repository = "https://github.com/apex-linux/apex-system"
 publish = false
 
 [workspace.dependencies]

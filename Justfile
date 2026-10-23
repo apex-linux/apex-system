@@ -116,8 +116,8 @@ qualify-local:
     @echo ''
     @echo '  sudo dnf install qemu-system-x86 edk2-ovmf dosfstools btrfs-progs openssh-clients jq skopeo podman openssl'
     @echo '  test -w /dev/kvm   # nested KVM must be on (kvm_amd nested=1 on the host)'
-    @echo '  .github/scripts/qualify.sh fresh ghcr.io/sekirokenjii/apex-testing@sha256:<digest>'
-    @echo '  .github/scripts/qualify.sh all   ghcr.io/sekirokenjii/apex-testing@sha256:<digest>'
+    @echo '  .github/scripts/qualify.sh fresh ghcr.io/apex-linux/apex-testing@sha256:<digest>'
+    @echo '  .github/scripts/qualify.sh all   ghcr.io/apex-linux/apex-testing@sha256:<digest>'
     @echo ''
     @echo 'The counted rollback on its own (FROM boots first; CANDIDATE is forced red through'
     @echo '/var/lib/apex/force-red, must reboot itself 3 times, and GRUB must fall back to FROM):'
@@ -269,17 +269,3 @@ shell-c:
     @echo '  tar -C ~/apex-shell-c/root -cf - usr | sudo tar -C / --no-same-owner --no-overwrite-dir -xf -'
     @echo ''
     @echo 'Then just shell-dev on this host (the nested shell), or log out and in (the session shell), runs it.'
-
-# ---- Design reference (design/SPEC.md) --------------------------------------------------
-
-# Render every mockup screen to design/renders at 2x, light and dark (node, playwright-core, Chromium).
-design-render:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # The mockup loads React, fonts and Hugeicons from CDNs, so it needs HTTP, not file://.
-    port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-    python3 -m http.server --bind 127.0.0.1 --directory design/mockup "$port" >/dev/null 2>&1 &
-    server=$!
-    trap 'kill "$server"' EXIT
-    sleep 1
-    node tools/design/render-mockup.cjs "http://127.0.0.1:$port/Apex%20Fedora%20Desktop.dc.html" design/renders

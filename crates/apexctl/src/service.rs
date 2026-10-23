@@ -401,13 +401,13 @@ mod tests {
     #[test]
     fn contract_replies_keep_their_kind_and_message() {
         let error = ClientError::from(method_error(
-            "io.github.sekirokenjii.Apex.Update1.Error.PolicyDenied",
+            "io.github.apex_linux.Apex.Update1.Error.PolicyDenied",
             "On battery below 50 %",
         ));
         assert_eq!(error.exit(), Exit::PolicyDenied);
         assert_eq!(error.to_string(), "not now: On battery below 50 %");
         let nothing = ClientError::from(method_error(
-            "io.github.sekirokenjii.Apex.Update1.Error.NothingToDo",
+            "io.github.apex_linux.Apex.Update1.Error.NothingToDo",
             "Nothing is staged.",
         ));
         assert_eq!(nothing.to_string(), "Nothing is staged.");

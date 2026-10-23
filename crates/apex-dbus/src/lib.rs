@@ -22,13 +22,13 @@ pub use values::{
 /// different, zbus dependency.
 pub use zbus;
 
-pub const BUS_NAME: &str = "io.github.sekirokenjii.Apex.Update1";
+pub const BUS_NAME: &str = "io.github.apex_linux.Apex.Update1";
 
-pub const OBJECT_PATH: &str = "/io/github/sekirokenjii/Apex/Update1";
+pub const OBJECT_PATH: &str = "/io/github/apex_linux/Apex/Update1";
 
-pub const INTERFACE: &str = "io.github.sekirokenjii.Apex.Update1";
+pub const INTERFACE: &str = "io.github.apex_linux.Apex.Update1";
 
-pub const ERROR_PREFIX: &str = "io.github.sekirokenjii.Apex.Update1.Error";
+pub const ERROR_PREFIX: &str = "io.github.apex_linux.Apex.Update1.Error";
 
 /// Authoritative: the proxy and every server must match it.
-pub const INTROSPECTION_XML: &str = include_str!("../data/io.github.sekirokenjii.Apex.Update1.xml");
+pub const INTROSPECTION_XML: &str = include_str!("../data/io.github.apex_linux.Apex.Update1.xml");

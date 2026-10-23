@@ -14,7 +14,6 @@ pub const FIRMWARE_SUBDIR: &str = "apex";
 /// so every slot names the same file.
 pub const PATCH_SLOTS: usize = 4;
 pub const GENERATED_DIR: &str = "generated";
-pub const FIRMWARE_LIST: &str = "image/checks/firmware-files.txt";
 
 pub fn firmware_file_name(profile: &Profile) -> String {
     format!(
@@ -403,40 +402,6 @@ pub fn default_output_dir(profile_path: &Path) -> PathBuf {
         .join(GENERATED_DIR)
 }
 
-pub fn firmware_list_path(profile_path: &Path) -> Option<PathBuf> {
-    let machine_dir = profile_path.parent()?;
-    let hardware_dir = machine_dir.parent()?;
-    if hardware_dir.file_name()? != "hardware" {
-        return None;
-    }
-    Some(hardware_dir.parent()?.join(FIRMWARE_LIST))
-}
-
-pub fn parse_firmware_list(text: &str) -> Vec<String> {
-    text.lines()
-        .map(|line| line.split('#').next().unwrap_or_default().trim())
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-pub fn compare_firmware_list(profile: &Profile, list_text: &str) -> Option<String> {
-    let listed = parse_firmware_list(list_text);
-    if listed == profile.firmware.required_files {
-        return None;
-    }
-    let mut from_profile = profile.firmware.required_files.join("\n");
-    from_profile.push('\n');
-    let mut from_list = listed.join("\n");
-    from_list.push('\n');
-    Some(unified_diff(
-        &from_profile,
-        &from_list,
-        "profile.toml [firmware].required_files",
-        FIRMWARE_LIST,
-    ))
-}
-
 pub fn unified_diff(old: &str, new: &str, old_label: &str, new_label: &str) -> String {
     similar::TextDiff::from_lines(old, new)
         .unified_diff()
@@ -601,16 +566,6 @@ mod tests {
             default_output_dir(Path::new("hardware/m7400qc/profile.toml")),
             Path::new("hardware/m7400qc/generated")
         );
-        assert_eq!(
-            firmware_list_path(Path::new("hardware/m7400qc/profile.toml")),
-            Some(PathBuf::from("image/checks/firmware-files.txt"))
-        );
-        assert_eq!(
-            firmware_list_path(Path::new("/r/hardware/m7400qc/profile.toml")),
-            Some(PathBuf::from("/r/image/checks/firmware-files.txt"))
-        );
-        assert_eq!(firmware_list_path(Path::new("profile.toml")), None);
-        assert_eq!(firmware_list_path(Path::new("x/m/profile.toml")), None);
     }
 
     #[test]
@@ -748,18 +703,6 @@ mod tests {
         let xml = monitors_xml(&measured());
         let comment_end = xml.find("-->").unwrap();
         assert!(!xml[4..comment_end].contains("--"));
-    }
-
-    #[test]
-    fn firmware_list_comparison() {
-        let profile = Profile::parse(BASE).unwrap();
-        assert_eq!(
-            compare_firmware_list(&profile, "# c\n\namdgpu/green_sardine_*   # the iGPU\n"),
-            None
-        );
-        let diff = compare_firmware_list(&profile, "amdgpu/renoir_*\n").unwrap();
-        assert!(diff.contains("-amdgpu/green_sardine_*"));
-        assert!(diff.contains("+amdgpu/renoir_*"));
     }
 
     #[test]

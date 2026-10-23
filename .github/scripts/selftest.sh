@@ -95,14 +95,14 @@ fi
 
 # --- policy transforms -----------------------------------------------------------------
 policy='{"default":[{"type":"reject"}],"transports":{"docker":{
-  "ghcr.io/sekirokenjii/apex":[{"type":"sigstoreSigned","keyPaths":["/usr/share/apex/keys/release.pub","/usr/share/apex/keys/release-backup.pub"],"signedIdentity":{"type":"matchRepository"}}],
-  "ghcr.io/sekirokenjii/apex-testing":[{"type":"sigstoreSigned","keyPath":"/usr/share/apex/keys/ci.pub","signedIdentity":{"type":"matchRepository"}}],
+  "ghcr.io/apex-linux/apex":[{"type":"sigstoreSigned","keyPaths":["/usr/share/apex/keys/release.pub","/usr/share/apex/keys/release-backup.pub"],"signedIdentity":{"type":"matchRepository"}}],
+  "ghcr.io/apex-linux/apex-testing":[{"type":"sigstoreSigned","keyPath":"/usr/share/apex/keys/ci.pub","signedIdentity":{"type":"matchRepository"}}],
   "example.com/data":[{"type":"sigstoreSigned","keyData":"AAAA","signedIdentity":{"type":"matchRepository"}}]}}}'
 rooted=$(policy_key_root /repo/image/system_files <<<"$policy")
 check "keyPaths rooted" '["/repo/image/system_files/usr/share/apex/keys/release.pub","/repo/image/system_files/usr/share/apex/keys/release-backup.pub"]' \
-    "$(jq -c '.transports.docker["ghcr.io/sekirokenjii/apex"][0].keyPaths' <<<"$rooted")"
+    "$(jq -c '.transports.docker["ghcr.io/apex-linux/apex"][0].keyPaths' <<<"$rooted")"
 check "keyPath rooted" '/repo/image/system_files/usr/share/apex/keys/ci.pub' \
-    "$(jq -r '.transports.docker["ghcr.io/sekirokenjii/apex-testing"][0].keyPath' <<<"$rooted")"
+    "$(jq -r '.transports.docker["ghcr.io/apex-linux/apex-testing"][0].keyPath' <<<"$rooted")"
 check "keyData untouched" AAAA "$(jq -r '.transports.docker["example.com/data"][0].keyData' <<<"$rooted")"
 check_true "rooted policy still rejects by default" policy_rejects_by_default <<<"$rooted"
 
@@ -126,9 +126,9 @@ fi
 
 # --- trust mapping: policy.json and image/checks/keys.sh agree exactly ---------------------
 # Trust changes only in one reviewed change of this, keys.sh's TRUST_MAP and policy.json.
-EXPECTED_TRUST_MAP=$'ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release-backup.pub
-ghcr.io/sekirokenjii/apex\t/usr/share/apex/keys/release.pub
-ghcr.io/sekirokenjii/apex-testing\t/usr/share/apex/keys/ci.pub'
+EXPECTED_TRUST_MAP=$'ghcr.io/apex-linux/apex\t/usr/share/apex/keys/release-backup.pub
+ghcr.io/apex-linux/apex\t/usr/share/apex/keys/release.pub
+ghcr.io/apex-linux/apex-testing\t/usr/share/apex/keys/ci.pub'
 keys_sh="$APEX_ROOT/image/checks/keys.sh"
 if [[ -f $keys_sh ]]; then
     keys_map=$(sed -n "/^TRUST_MAP='/,/'\$/p" "$keys_sh" | sed -e "s/^TRUST_MAP='//" -e "s/'\$//" |
@@ -143,9 +143,9 @@ check "policy_trust_map of the fixture policy without its extra scope" "$EXPECTE
     "$(jq 'del(.transports.docker["example.com/data"])' <<<"$policy" | policy_trust_map)"
 check "key order in keyPaths does not matter" "$EXPECTED_TRUST_MAP" \
     "$(jq 'del(.transports.docker["example.com/data"])
-        | .transports.docker["ghcr.io/sekirokenjii/apex"][0].keyPaths |= reverse' <<<"$policy" | policy_trust_map)"
-A='.transports.docker["ghcr.io/sekirokenjii/apex"]'
-TT='.transports.docker["ghcr.io/sekirokenjii/apex-testing"]'
+        | .transports.docker["ghcr.io/apex-linux/apex"][0].keyPaths |= reverse' <<<"$policy" | policy_trust_map)"
+A='.transports.docker["ghcr.io/apex-linux/apex"]'
+TT='.transports.docker["ghcr.io/apex-linux/apex-testing"]'
 while IFS='|' read -r name edit; do
     [[ -n $name ]] || continue
     if ! edited=$(jq -c "$edit" "$committed") || [[ -z $edited ]]; then
@@ -1127,7 +1127,23 @@ if [[ -d $APEX_ROOT/desktop/shell ]]; then
         [[ $(head -n 3 -- "$f") == *'SPDX-License-Identifier: GPL-2.0-or-later'* ]] || printf '%s ' "$f"
     done)
     check "desktop/shell: every file is GPL-2.0-or-later (SPDX)" "" "$unlicensed"
+    read -ra allowed <<<"$(sed -n 's/^source1_paths=//p' "$APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env")"
+    outside=$(cd "$APEX_ROOT/desktop/shell" && find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r f; do
+        for p in "${allowed[@]}"; do
+            [[ $f == "$p" || ($p == */ && $f == "$p"*) ]] && continue 2
+        done
+        printf '%s ' "$f"
+    done)
+    check "desktop/shell: every file is in the gnome-shell recipe's source1_paths" "" "$outside"
 fi
+
+# --- contracts.sh: the image against the hardware profile -------------------------------
+check "contracts: this checkout keeps them" 0 "$(rc_of "$APEX_ROOT/.github/scripts/contracts.sh" 2>/dev/null)"
+mkdir -p "$TMP/contracts/hardware/m7400qc"
+sed 's/^packages = \[/packages = ["x-firmware", /' "$APEX_ROOT/hardware/m7400qc/profile.toml" \
+    >"$TMP/contracts/hardware/m7400qc/profile.toml"
+check "contracts: a profile firmware package that base.txt lacks" 1 \
+    "$(APEX_SYSTEM_SRC="$TMP/contracts" rc_of "$APEX_ROOT/.github/scripts/contracts.sh" 2>/dev/null)"
 
 # --- image.sh: the rebuild lane's lock in the image context ------------------------------
 image_sh() { bash -c '. "$1"; shift; eval "$1"' _ "$APEX_ROOT/.github/scripts/image.sh" "$@"; }
@@ -1148,6 +1164,11 @@ check "lane lock: no held family" "" "$(image_sh "lane_lock_states '$IL/rpms.loc
 if [[ -f $APEX_ROOT/packaging/pkgs/gnome-shell/pkg.env ]]; then
     check "lane families: the committed pkg.env files" gnome-shell "$(image_sh lane_families | paste -sd' ' -)"
 fi
+mkdir -p "$IL/r1/packaging/pkgs/a" "$IL/r2/packaging/pkgs/b"
+printf 'family=fa\n' >"$IL/r1/packaging/pkgs/a/pkg.env"
+printf 'family=fb\n' >"$IL/r2/packaging/pkgs/b/pkg.env"
+check "lane families: every checkout in APEX_LANE_RECIPES" "fa fb" \
+    "$(APEX_LANE_RECIPES="$IL/r1:$IL/r2" image_sh lane_families | paste -sd' ' -)"
 bad_lane() {
     local name=$1 sed_script=$2
     shift 2
@@ -1395,9 +1416,9 @@ run_json() { # EVENT BRANCH HEAD_REPO [PATH]
     jq -n --arg e "$1" --arg b "$2" --arg h "$3" --arg p "${4:-.github/workflows/image.yml}" \
         '{path: $p, event: $e, head_branch: $b, head_sha: "abc", status: "completed",
           conclusion: "success", head_repository: {full_name: $h},
-          repository: {full_name: "SekiroKenjii/apex-fedora"}}'
+          repository: {full_name: "apex-linux/apex-image"}}'
 }
-R=SekiroKenjii/apex-fedora
+R=apex-linux/apex-image
 check_true "a scheduled main run may be replayed" replay_run_ok "$R" <<<"$(run_json schedule main "$R")"
 check_true "a push to main may be replayed" replay_run_ok "$R" <<<"$(run_json push main "$R")"
 check_false "a pull request run may not" replay_run_ok "$R" <<<"$(run_json pull_request main "$R")"
@@ -1510,7 +1531,7 @@ case $ref in
     *missing*) echo "Error: reading manifest x in y: manifest unknown" >&2; exit 1 ;;
 esac
 if [[ " $* " == *" --raw "* ]]; then cat "$FAKE_MANIFEST"; exit 0; fi
-printf '{"Digest":"%s","Labels":{"io.github.sekirokenjii.apex.content-key":"%s"}}\n' "$FAKE_DIGEST" "$FAKE_LABEL"
+printf '{"Digest":"%s","Labels":{"io.github.apex-linux.apex.content-key":"%s"}}\n' "$FAKE_DIGEST" "$FAKE_LABEL"
 EOF
 cat >"$O/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -1527,7 +1548,7 @@ lookup_rc() {
 : >"$O/gh.log"
 check "an attested artifact with its key is a hit" 0 "$(lookup_rc k1 k1 1)"
 check_true "gh checks the rpms.yml identity on main" \
-    grep -qF -- "--cert-identity https://github.com/SekiroKenjii/apex-fedora/.github/workflows/rpms.yml@refs/heads/main" "$O/gh.log"
+    grep -qF -- "--cert-identity https://github.com/apex-linux/apex-image/.github/workflows/rpms.yml@refs/heads/main" "$O/gh.log"
 check_true "gh checks the source ref and hosted runners" \
     grep -qE -- "--source-ref refs/heads/main .*--deny-self-hosted-runners" "$O/gh.log"
 check "an unattested artifact is a miss" 5 "$(lookup_rc k1 k1 0)"

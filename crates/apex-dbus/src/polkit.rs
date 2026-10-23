@@ -98,13 +98,13 @@ impl fmt::Display for PolkitAction {
     }
 }
 
-pub const POLKIT_CHECK: &str = "io.github.sekirokenjii.apex.update.check";
-pub const POLKIT_DOWNLOAD: &str = "io.github.sekirokenjii.apex.update.download";
-pub const POLKIT_APPLY: &str = "io.github.sekirokenjii.apex.update.apply";
-pub const POLKIT_DISCARD: &str = "io.github.sekirokenjii.apex.update.discard";
-pub const POLKIT_ROLLBACK: &str = "io.github.sekirokenjii.apex.update.rollback";
-pub const POLKIT_SWITCH_CHANNEL: &str = "io.github.sekirokenjii.apex.update.switch-channel";
-pub const POLKIT_DOWNGRADE: &str = "io.github.sekirokenjii.apex.update.downgrade";
+pub const POLKIT_CHECK: &str = "io.github.apex-linux.apex.update.check";
+pub const POLKIT_DOWNLOAD: &str = "io.github.apex-linux.apex.update.download";
+pub const POLKIT_APPLY: &str = "io.github.apex-linux.apex.update.apply";
+pub const POLKIT_DISCARD: &str = "io.github.apex-linux.apex.update.discard";
+pub const POLKIT_ROLLBACK: &str = "io.github.apex-linux.apex.update.rollback";
+pub const POLKIT_SWITCH_CHANNEL: &str = "io.github.apex-linux.apex.update.switch-channel";
+pub const POLKIT_DOWNGRADE: &str = "io.github.apex-linux.apex.update.downgrade";
 
 #[cfg(test)]
 mod tests {
@@ -115,7 +115,7 @@ mod tests {
         for action in PolkitAction::ALL {
             let id = action.id();
             let suffix = id
-                .strip_prefix("io.github.sekirokenjii.apex.update.")
+                .strip_prefix("io.github.apex-linux.apex.update.")
                 .expect("contract prefix");
             assert!(!suffix.is_empty() && !suffix.contains('.'), "{id}");
             assert!(
@@ -129,7 +129,7 @@ mod tests {
             assert_eq!(action.to_string(), id);
         }
         assert_eq!(
-            PolkitAction::from_id("io.github.sekirokenjii.apex.update"),
+            PolkitAction::from_id("io.github.apex-linux.apex.update"),
             None
         );
     }

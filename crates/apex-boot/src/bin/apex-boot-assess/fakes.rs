@@ -281,7 +281,7 @@ pub(crate) fn booted_image(booted: &Digest, first: Option<&Digest>) -> BootedIma
     let queued = first.filter(|f| *f != booted);
     BootedImage {
         digest: Some(booted.as_str().to_owned()),
-        image: Some("ghcr.io/sekirokenjii/apex:45".to_owned()),
+        image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
         transport: Some("registry".to_owned()),
         signature: Some(apex_bootc::ImageSignature::ContainerPolicy),
         rollback_digest: queued.map(|d| d.as_str().to_owned()),

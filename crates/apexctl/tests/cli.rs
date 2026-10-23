@@ -33,12 +33,6 @@ fn scratch_repo(dir: &Path) -> std::path::PathBuf {
         machine.join("profile.toml"),
     )
     .expect("copy");
-    fs::create_dir_all(dir.join("image/checks")).expect("mkdir");
-    fs::write(
-        dir.join("image/checks/firmware-files.txt"),
-        "# mirror\namdgpu/green_sardine_*\niwlwifi-cc-a0-*.ucode*\nintel/ibt-20-1-3.*\namd-ucode/microcode_amd_fam19h.bin*\n",
-    )
-    .expect("write");
     machine.join("profile.toml")
 }
 
@@ -108,31 +102,6 @@ fn render_then_check_then_drift() {
         "--check",
     ]));
     assert_eq!(code, 0);
-}
-
-#[test]
-fn firmware_list_drift_fails_the_check() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let profile = scratch_repo(dir.path());
-    let profile = profile.to_str().expect("utf-8");
-    assert_eq!(
-        run(&mut apexctl(&["profile", "render", "--profile", profile])).0,
-        0
-    );
-    fs::write(
-        dir.path().join("image/checks/firmware-files.txt"),
-        "amdgpu/green_sardine_*\n",
-    )
-    .expect("write");
-    let (code, _, stderr) = run(&mut apexctl(&[
-        "profile",
-        "render",
-        "--profile",
-        profile,
-        "--check",
-    ]));
-    assert_eq!(code, 1);
-    assert!(stderr.contains("-iwlwifi-cc-a0-*.ucode*"), "{stderr}");
 }
 
 #[test]

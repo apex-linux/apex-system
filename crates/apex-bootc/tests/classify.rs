@@ -32,7 +32,7 @@ const CASES: &[(ExitState, &str, ErrorKind)] = &[
     ),
     (
         ONE,
-        "error: Upgrading: Pulling: Insufficient free space for ghcr.io/sekirokenjii/apex:45 (available: 1.2 GB required: 3.4 GB)",
+        "error: Upgrading: Pulling: Insufficient free space for ghcr.io/apex-linux/apex:45 (available: 1.2 GB required: 3.4 GB)",
         ErrorKind::NoSpace,
     ),
     (
@@ -62,7 +62,7 @@ const CASES: &[(ExitState, &str, ErrorKind)] = &[
     ),
     (
         ONE,
-        r#"error: Upgrading: Pulling: failed to invoke method OpenImage: Signature for identity "ghcr.io/sekirokenjii/apex:45" is not accepted"#,
+        r#"error: Upgrading: Pulling: failed to invoke method OpenImage: Signature for identity "ghcr.io/apex-linux/apex:45" is not accepted"#,
         ErrorKind::SignatureRejected,
     ),
     (
@@ -87,7 +87,7 @@ const CASES: &[(ExitState, &str, ErrorKind)] = &[
     ),
     (
         ONE,
-        "error: Upgrading: Pulling: failed to invoke method OpenImage: reading manifest 45 in ghcr.io/sekirokenjii/apex: too many requests to registry",
+        "error: Upgrading: Pulling: failed to invoke method OpenImage: reading manifest 45 in ghcr.io/apex-linux/apex: too many requests to registry",
         ErrorKind::Network,
     ),
     (

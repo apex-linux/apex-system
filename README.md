@@ -15,12 +15,15 @@ ELAN fingerprint reader, Samsung 2880×1800 OLED at 90 Hz).
   upstream.
 - **Components:** everything Apex writes itself is Rust.
 
-> Status: **M0, foundation.** Nothing here is ready to install yet. See
+> Status: **S1a done; step M in progress**: the design reset and the move to the
+> `apex-linux` GitHub organisation. Nothing here is ready to install yet. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Read first
 
 - [Architecture](docs/ARCHITECTURE.md): how the pieces fit, and why.
+- [Design direction](docs/DESIGN.md): the look, the product rules and the settings
+  contract.
 - [Decisions](docs/adr/): one ADR per non-obvious choice.
 - [M1 contract](docs/specs/M1-IMPLEMENTATION.md): names, paths and formats shared
   between components.
@@ -33,7 +36,9 @@ ELAN fingerprint reader, Samsung 2880×1800 OLED at 90 Hz).
 ## Layout
 
 ```
-crates/     Rust: apex-bootc, apex-update, apex-boot, apex-dbus, apex-updated, apexctl
+crates/     Rust: apex-bootc, apex-update, apex-boot, apex-dbus, apex-updated, apexctl,
+            apex-lane, apex-lint
+desktop/    the Apex layer in gnome-shell, the apex-desktop schema, units and wallpapers
 hardware/   machine profile (single source of truth) and rendered drop-ins
 image/      Containerfile, package lists, rootfs overlay, image checks
 packaging/  RPM spec, libfprint patch series, the kernel lane's patches (S1c)
