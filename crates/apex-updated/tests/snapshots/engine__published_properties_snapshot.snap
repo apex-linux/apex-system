@@ -79,6 +79,5 @@ Properties {
     last_check: 1790299880,
     deferred_reason: "",
     last_error: "",
-    stale: false,
     health_failure: "",
 }

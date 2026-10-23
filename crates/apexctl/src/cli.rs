@@ -1,7 +1,5 @@
 use std::path::PathBuf;
 
-use apex_dbus::Channel;
-use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{Args, Parser, Subcommand};
 
 use crate::profile::DEFAULT_PROFILE;
@@ -30,10 +28,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     #[command(
-        about = concat!(
-            "Show the update state: booted, staged and rollback images, degraded parts, ",
-            "staleness"
-        ),
+        about = "Show the update state: booted, staged and rollback images, degraded parts",
         after_long_help = STATUS_JSON_HELP
     )]
     Status {
@@ -95,16 +90,6 @@ pub enum UpdateCommand {
         )]
         digest: Option<String>,
     },
-    #[command(
-        about = "Lock an applied update again so the next boot keeps the current version",
-        long_about = concat!(
-            "Lock an applied update again so the next boot keeps the current version.\n\n",
-            "Locking again downloads from the update channel, so it needs the network. When the ",
-            "channel has a newer build by then, that build is downloaded and locked in place of ",
-            "the applied one; the output names the build that is locked now."
-        )
-    )]
-    Discard,
     #[command(about = "Boot the previous version next time (asks for an administrator password)")]
     Rollback {
         #[arg(
@@ -132,27 +117,6 @@ pub enum UpdateCommand {
     )]
     Acknowledge,
     #[command(
-        about = "Follow another update channel (asks for an administrator password)",
-        long_about = concat!(
-            "Follow another update channel (asks for an administrator password).\n\n",
-            "The channel's image is downloaded and kept locked, like `update download`. To finish ",
-            "the switch, run `apexctl update apply` and restart. The image is installed even when ",
-            "it is older than the running one; when it is the same build, only the channel ",
-            "changes and no boot check is armed. Exits 3 when the channel is already followed."
-        )
-    )]
-    Channel {
-        #[arg(
-            value_name = "CHANNEL",
-            value_parser = channel_parser(),
-            help = concat!(
-                "stable: qualified builds signed with the release key; testing: every CI build, ",
-                "signed with the CI key"
-            )
-        )]
-        channel: Channel,
-    },
-    #[command(
         about = "Automatic run for the systemd timer: check, then download if allowed (root only)",
         long_about = concat!(
             "Automatic run for the systemd timer: check, then download if allowed (root only).\n\n",
@@ -167,11 +131,6 @@ pub enum UpdateCommand {
 /// which can take 30 s before a typo would be reported.
 fn digest_arg(text: &str) -> Result<String, apex_bootc::DigestError> {
     apex_bootc::Digest::parse(text).map(|digest| digest.as_str().to_owned())
-}
-
-fn channel_parser() -> impl TypedValueParser<Value = Channel> {
-    PossibleValuesParser::new(Channel::ALL.iter().copied().map(Channel::as_str))
-        .try_map(|name| name.parse::<Channel>())
 }
 
 #[derive(Debug, Subcommand)]
@@ -325,12 +284,9 @@ mod tests {
             &["update", "download", "--force"],
             &["update", "apply"],
             &["update", "apply", "--digest", &VALID_DIGEST],
-            &["update", "discard"],
             &["update", "rollback", "--mark-bad"],
             &["update", "changes"],
             &["update", "acknowledge"],
-            &["update", "channel", "stable"],
-            &["update", "channel", "testing"],
             &["update", "automatic"],
             &["hw", "report", "--json"],
             &["hw", "audio", "snapshot", "--proc", "/tmp/codec", "--json"],
@@ -386,44 +342,8 @@ mod tests {
         let render = parse(&["profile", "render"]).unwrap();
         assert!(render.contains("hardware/m7400qc/profile.toml"));
         assert!(parse(&["update", "reboot"]).is_err());
-    }
-
-    #[test]
-    fn the_channel_is_typed_and_limited_to_the_contract_values() {
-        let channel = |args: &[&str]| {
-            let args = ["apexctl", "update", "channel"]
-                .into_iter()
-                .chain(args.iter().copied());
-            match Cli::try_parse_from(args).map(|cli| cli.command) {
-                Ok(Command::Update(UpdateCommand::Channel { channel })) => Ok(channel),
-                Ok(other) => panic!("parsed as {other:?}"),
-                Err(error) => Err(error),
-            }
-        };
-        assert_eq!(channel(&["stable"]).unwrap(), Channel::Stable);
-        assert_eq!(channel(&["testing"]).unwrap(), Channel::Testing);
-        for bad in [
-            &["beta"][..],
-            &["Stable"],
-            &[" stable"],
-            &[],
-            &["stable", "testing"],
-        ] {
-            assert!(channel(bad).is_err(), "{bad:?}");
-        }
-        let error = channel(&["beta"]).unwrap_err().to_string();
-        assert!(
-            error.contains("[possible values: stable, testing]"),
-            "{error}"
-        );
-        let help = Cli::command()
-            .find_subcommand_mut("update")
-            .and_then(|update| update.find_subcommand_mut("channel"))
-            .map(|channel| channel.render_long_help().to_string())
-            .unwrap();
-        assert!(help.contains("administrator password"), "{help}");
-        assert!(help.contains("stable"), "{help}");
-        assert!(help.contains("testing"), "{help}");
+        assert!(parse(&["update", "discard"]).is_err());
+        assert!(parse(&["update", "channel", "stable"]).is_err());
     }
 
     static VALID_DIGEST: std::sync::LazyLock<String> =
@@ -495,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn update_help_documents_the_busy_and_channel_behaviour() {
+    fn update_help_documents_the_busy_behaviour() {
         let check = unwrapped_update_help("check");
         assert!(
             check.contains("Exits 0 without checking when the update service is busy"),
@@ -506,14 +426,6 @@ mod tests {
             changes.contains("Fails (exit 1) while the update service"),
             "{changes}"
         );
-        let channel = unwrapped_update_help("channel");
-        assert!(
-            channel.contains("run `apexctl update apply` and restart"),
-            "{channel}"
-        );
-        assert!(channel.contains("no boot check is armed"), "{channel}");
-        let discard = unwrapped_update_help("discard");
-        assert!(discard.contains("needs the network"), "{discard}");
     }
 
     #[test]

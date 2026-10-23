@@ -128,13 +128,6 @@ pub fn is_available(snapshot: &SystemSnapshot) -> bool {
         .is_ok()
 }
 
-pub const STALE_AFTER_SECS: u64 = 7 * 24 * 60 * 60;
-
-/// `latest_remote_build_time` is the remote's, or the booted image's when nothing is newer.
-pub fn is_stale(latest_remote_build_time: u64, now: u64) -> bool {
-    now.saturating_sub(latest_remote_build_time) > STALE_AFTER_SECS
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,18 +299,5 @@ mod tests {
             State::Available,
             "nothing booted to compare"
         );
-    }
-
-    #[test]
-    fn staleness_boundary() {
-        let built = 1_790_000_000;
-        assert!(!is_stale(built, built));
-        assert!(!is_stale(built, built + STALE_AFTER_SECS));
-        assert!(is_stale(built, built + STALE_AFTER_SECS + 1));
-        assert!(
-            !is_stale(built, built - 5),
-            "future build time is not stale"
-        );
-        assert!(is_stale(0, u64::MAX));
     }
 }

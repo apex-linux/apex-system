@@ -32,22 +32,20 @@ pub enum PolkitAction {
     Check,
     Download,
     Apply,
-    /// Also guards `AcknowledgeHealthFailure`: dismissing a failure warning weighs the same.
+    /// Guards `AcknowledgeHealthFailure`.
     Discard,
     Rollback,
-    SwitchChannel,
     /// Reserved: no method checks it yet.
     Downgrade,
 }
 
 impl PolkitAction {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 6] = [
         Self::Check,
         Self::Download,
         Self::Apply,
         Self::Discard,
         Self::Rollback,
-        Self::SwitchChannel,
         Self::Downgrade,
     ];
 
@@ -58,7 +56,6 @@ impl PolkitAction {
             Self::Apply => POLKIT_APPLY,
             Self::Discard => POLKIT_DISCARD,
             Self::Rollback => POLKIT_ROLLBACK,
-            Self::SwitchChannel => POLKIT_SWITCH_CHANNEL,
             Self::Downgrade => POLKIT_DOWNGRADE,
         }
     }
@@ -73,9 +70,8 @@ impl PolkitAction {
             "Check" => Some(Self::Check),
             "Download" => Some(Self::Download),
             "Apply" => Some(Self::Apply),
-            "DiscardStaged" | "AcknowledgeHealthFailure" => Some(Self::Discard),
+            "AcknowledgeHealthFailure" => Some(Self::Discard),
             "Rollback" => Some(Self::Rollback),
-            "SwitchChannel" => Some(Self::SwitchChannel),
             _ => None,
         }
     }
@@ -87,7 +83,7 @@ impl PolkitAction {
     pub const fn allow_active(self) -> PolkitDefault {
         match self {
             Self::Check | Self::Download | Self::Apply | Self::Discard => PolkitDefault::Yes,
-            Self::Rollback | Self::SwitchChannel | Self::Downgrade => PolkitDefault::AuthAdmin,
+            Self::Rollback | Self::Downgrade => PolkitDefault::AuthAdmin,
         }
     }
 }
@@ -103,7 +99,6 @@ pub const POLKIT_DOWNLOAD: &str = "io.github.apex-linux.apex.update.download";
 pub const POLKIT_APPLY: &str = "io.github.apex-linux.apex.update.apply";
 pub const POLKIT_DISCARD: &str = "io.github.apex-linux.apex.update.discard";
 pub const POLKIT_ROLLBACK: &str = "io.github.apex-linux.apex.update.rollback";
-pub const POLKIT_SWITCH_CHANNEL: &str = "io.github.apex-linux.apex.update.switch-channel";
 pub const POLKIT_DOWNGRADE: &str = "io.github.apex-linux.apex.update.downgrade";
 
 #[cfg(test)]
@@ -143,7 +138,6 @@ mod tests {
             (PolkitAction::Apply, Yes),
             (PolkitAction::Discard, Yes),
             (PolkitAction::Rollback, AuthAdmin),
-            (PolkitAction::SwitchChannel, AuthAdmin),
             (PolkitAction::Downgrade, AuthAdmin),
         ];
         assert_eq!(PolkitAction::ALLOW_ANY, No);
@@ -161,10 +155,8 @@ mod tests {
             ("Check", Some(PolkitAction::Check)),
             ("Download", Some(PolkitAction::Download)),
             ("Apply", Some(PolkitAction::Apply)),
-            ("DiscardStaged", Some(PolkitAction::Discard)),
             ("Rollback", Some(PolkitAction::Rollback)),
             ("GetChanges", None),
-            ("SwitchChannel", Some(PolkitAction::SwitchChannel)),
             ("AcknowledgeHealthFailure", Some(PolkitAction::Discard)),
             ("Automatic", None),
             ("ReportBoot", None),

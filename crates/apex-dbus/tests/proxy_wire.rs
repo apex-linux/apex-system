@@ -87,16 +87,11 @@ async fn every_method_matches_the_contract_on_the_wire() {
     proxy.check().await.expect("Check");
     proxy.download(true).await.expect("Download");
     proxy.apply(STAGED_DIGEST).await.expect("Apply");
-    proxy.discard_staged().await.expect("DiscardStaged");
     proxy.rollback(true).await.expect("Rollback");
     assert_eq!(
         proxy.get_changes().await.expect("GetChanges"),
         common::changes()
     );
-    proxy
-        .switch_channel(Channel::Testing)
-        .await
-        .expect("SwitchChannel");
     proxy
         .acknowledge_health_failure()
         .await
@@ -127,9 +122,7 @@ async fn every_method_matches_the_contract_on_the_wire() {
         "Check",
         "Download",
         "Apply",
-        "DiscardStaged",
         "Rollback",
-        "SwitchChannel",
         "AcknowledgeHealthFailure",
     ]
     .into();
@@ -165,7 +158,6 @@ async fn every_property_matches_the_contract_on_the_wire() {
         "Metered network"
     );
     assert_eq!(proxy.last_error().await.expect("LastError"), "");
-    assert!(proxy.stale().await.expect("Stale"));
     assert_eq!(proxy.health_failure().await.expect("HealthFailure"), "");
 
     let read: BTreeSet<String> = log.properties().into_iter().collect();
@@ -226,13 +218,13 @@ async fn invalid_strings_are_the_daemons_to_reject() {
         .await
         .expect("raw proxy");
     let error: ApexError = raw
-        .call::<_, _, ()>("SwitchChannel", &("beta",))
+        .call::<_, _, ()>("ReportBoot", &("beta", STAGED_DIGEST))
         .await
-        .expect_err("invalid channel")
+        .expect_err("invalid verdict")
         .into();
     match error {
         ApexError::InvalidArgument(message) => {
-            assert_eq!(message, "\"beta\" is not a valid Channel");
+            assert_eq!(message, "\"beta\" is not a valid BootVerdict");
         }
         other => panic!("unexpected {other:?}"),
     }

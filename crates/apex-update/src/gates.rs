@@ -208,7 +208,7 @@ pub(crate) fn bootc_flags(
     Err(Deferral::new(Gate::BootcFlags, reason))
 }
 
-/// A downgrade needs the separate, admin-authenticated path. A user may download an image of
+/// Nothing downloads a downgrade; `Rollback` is the way back. A user may download an image of
 /// unknown version: it is only staged, and [`crate::validate_apply`] checks its manifest.
 pub fn gate_version(
     booted: Option<&Version>,
@@ -252,7 +252,7 @@ pub fn gate_intent(
     let reason = match trigger {
         Trigger::Automatic => "An update is already set to install at the next restart.",
         Trigger::User => {
-            "An update is already set to install at the next restart. Cancel it first to \
+            "An update is already set to install at the next restart. Restart first to \
              download a different one."
         }
     };
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(err.gate, Gate::Intent);
         assert!(
             err.reason
-                .ends_with("Cancel it first to download a different one.")
+                .ends_with("Restart first to download a different one.")
         );
     }
 }

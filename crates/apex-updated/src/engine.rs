@@ -11,23 +11,20 @@ use apex_boot::{
     ArmingRefused, BootVars, Editenv, EnvOp, GrubEnvWriter, WriteError, apply_ops, arm_ops,
     check_arming, disarm_ops,
 };
-use apex_bootc::{BootEntry, Bootc, BootcError, CancelToken, CommandRunner, DownloadOutcome, Host};
+use apex_bootc::{BootEntry, Bootc, CancelToken, CommandRunner, DownloadOutcome, Host};
 use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind};
-use apex_update::gates::{
-    Operation, check_download_resources, gate_boot_space, gate_bootc_flags, gate_disk_headroom,
-    gate_intent, gate_power,
-};
 use apex_update::state::is_available;
 use apex_update::{
     AfterCheck, ApplyError, AutomaticPlan, DenyEntry, HealthFailureRecord, HostView, Intent,
     LastCheck, Manifest, RemoteView, SystemSnapshot, Trigger, Version, diff, intent_is_orphaned,
-    plan_after_check, plan_automatic, validate_apply, validate_discard, validate_download,
+    plan_after_check, plan_automatic, validate_apply, validate_download,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use crate::channel::{channel_of_image, channel_target, is_channel_switch};
-use crate::errors::{self, from_bootc, from_deferral, from_store};
+use crate::REFRESH_MAX_AGE;
+use crate::channel::channel_of_image;
+use crate::errors::{self, from_bootc, from_store};
 use crate::properties::{self, Properties, Work};
 use crate::providers::{
     ASSESS_UNIT, BOOT, BOOT_COMPLETE_UNIT, FileError, GrubEnvSource, ManifestSource, Providers,
@@ -36,7 +33,6 @@ use crate::providers::{
 use crate::queue::Op;
 use crate::store::{Store, unflushed_is_done};
 use crate::view::{self, Manifests, RemoteImage, deployment_dict, image_timestamp};
-use crate::{CHECK_RATE_LIMIT_SECS, REFRESH_MAX_AGE};
 
 // apex-boot-assess's DAEMON_PING_WAIT must equal this; its test reads this line.
 pub const PING_WAIT: Duration = Duration::from_secs(20);
@@ -148,8 +144,6 @@ struct HostSummary {
     rollback: apex_dbus::Deployment,
     channel: Option<Channel>,
     spec_image: Option<String>,
-    build_times: Vec<Option<u64>>,
-    booted_version: Option<Version>,
 }
 
 #[derive(Debug, Clone)]
@@ -290,17 +284,8 @@ impl<R: CommandRunner> Engine<R> {
             .is_none_or(|at| at.elapsed() >= REFRESH_MAX_AGE)
     }
 
-    /// Only a successful check counts, so a retry after a failure reaches the registry; a
-    /// clock that went backwards cannot block checks.
-    pub fn check_is_recent(&self) -> bool {
-        let now = self.now();
-        let last = self.lock().last_check.at;
-        last != 0 && now >= last && now - last < CHECK_RATE_LIMIT_SECS
-    }
-
     fn publish(&self) {
-        let now = self.now();
-        let properties = build_properties(&self.lock(), now).sanitized();
+        let properties = build_properties(&self.lock()).sanitized();
         self.published.send_if_modified(|current| {
             if *current == properties {
                 false
@@ -377,9 +362,7 @@ impl<R: CommandRunner> Engine<R> {
                 override_soft_gates,
             } => self.download_op(*override_soft_gates, cancel).await,
             Op::Apply { expected_digest } => self.apply(expected_digest, cancel).await,
-            Op::Discard => self.discard(cancel).await,
             Op::Rollback { mark_bad } => self.rollback(*mark_bad, cancel).await,
-            Op::SwitchChannel(channel) => self.switch_channel(*channel, cancel).await,
             Op::Automatic => self.automatic(cancel).await,
             Op::Fallback { digest } => self.fallback(digest, cancel).await,
         };
@@ -501,7 +484,7 @@ impl<R: CommandRunner> Engine<R> {
             rollback: rollback.as_deref(),
         };
         let host_view = view::host_view(&host, &manifests, probes.finalize_failed);
-        let summary = summarize(&host, &manifests, &host_view);
+        let summary = summarize(&host, &manifests);
 
         let mut state = self.lock();
         let records = match read_records(self.store.as_ref()) {
@@ -634,10 +617,6 @@ impl<R: CommandRunner> Engine<R> {
     }
 
     async fn check(&self, cancel: &CancelToken) -> Result<(), ApexError> {
-        if self.check_is_recent() {
-            tracing::debug!("check skipped: the last one is less than a minute old");
-            return Ok(());
-        }
         let now = self.now();
         let outcome = self
             .marking_bootc_busy(self.bootc.check(cancel))
@@ -780,11 +759,7 @@ impl<R: CommandRunner> Engine<R> {
         if unlocked {
             self.relock_unexpected(cancel).await;
         }
-        let refusal = {
-            let state = self.lock();
-            let switch = state.host.as_ref().is_some_and(is_channel_switch);
-            properties::stage_refusal(state.snapshot.as_ref()?, switch)
-        };
+        let refusal = properties::stage_refusal(self.lock().snapshot.as_ref()?);
         if let Some(reason) = &refusal {
             tracing::warn!(reason, "the downloaded update will not be installed");
         }
@@ -921,31 +896,9 @@ impl<R: CommandRunner> Engine<R> {
                 .and_then(|m| m.parsed_version()),
             _ => None,
         };
-        let switch = is_channel_switch(&host);
-        match validate_apply(&snapshot, expected, staged_version.as_ref()) {
-            Ok(()) => {}
-            // The administrator confirmed the switch (`auth_admin`), which is the confirmation
-            // a downgrade needs; the channels are often at the same build.
-            Err(ApplyError::Downgrade { booted, staged }) if switch => {
-                tracing::info!(
-                    %booted,
-                    %staged,
-                    "installing a channel switch to the same or an older build"
-                );
-                // What validate_apply checks after the version.
-                gate_boot_space(snapshot.boot_free, snapshot.boot_payload)
-                    .and_then(|()| gate_disk_headroom(snapshot.sysroot_free))
-                    .and_then(|()| gate_power(snapshot.power, Operation::Apply))
-                    .map_err(|d| from_deferral(&d))?;
-            }
-            Err(error) => return Err(errors::from_apply(&error)),
-        }
-        // The running image under the other channel's reference: nothing new boots.
-        let origin_only = switch && host.booted_digest() == Some(expected);
-        if !origin_only {
-            arming_precondition(&snapshot.host)
-                .map_err(|e| ApexError::PolicyDenied(e.to_string()))?;
-        }
+        validate_apply(&snapshot, expected, staged_version.as_ref())
+            .map_err(|e| errors::from_apply(&e))?;
+        arming_precondition(&snapshot.host).map_err(|e| ApexError::PolicyDenied(e.to_string()))?;
         // apex-boot-assess reads grubenv and later clears it; an arming in between is lost.
         if self
             .providers
@@ -961,16 +914,11 @@ impl<R: CommandRunner> Engine<R> {
         }
 
         // Before unlocking, so the stage can never boot unprotected.
-        let armed = if origin_only {
-            None
-        } else {
-            let booted = snapshot.host.booted_digest().unwrap_or_default();
-            self.confirm_arming(booted, expected).await?;
-            self.write_grubenv(arm_ops(&target))
-                .await
-                .map_err(|e| errors::internal("The boot counter could not be armed", &e))?;
-            Some(target)
-        };
+        let booted = snapshot.host.booted_digest().unwrap_or_default();
+        self.confirm_arming(booted, expected).await?;
+        self.write_grubenv(arm_ops(&target))
+            .await
+            .map_err(|e| errors::internal("The boot counter could not be armed", &e))?;
         let unlocked = self
             .marking_bootc_busy(self.bootc.apply_downloaded(cancel))
             .await;
@@ -980,11 +928,7 @@ impl<R: CommandRunner> Engine<R> {
         let outcome = apply_outcome(expected, unlocked.is_ok(), &next);
         match &outcome {
             ApplyOutcome::Applied => {}
-            ApplyOutcome::NotApplied => {
-                if armed.is_some() {
-                    self.disarm().await;
-                }
-            }
+            ApplyOutcome::NotApplied => self.disarm().await,
             ApplyOutcome::Other(other) => self.rearm_for(other, host.booted_digest()).await,
             ApplyOutcome::Unconfirmed => {
                 tracing::warn!("keeping the boot counter armed: the stage may be unlocked");
@@ -1035,59 +979,6 @@ impl<R: CommandRunner> Engine<R> {
         if let Err(error) = self.write_grubenv(arm_ops(&digest)).await {
             tracing::error!(error = %errors::with_sources(&error), "cannot arm the boot counter");
         }
-    }
-
-    /// bootc cannot lock a stage in place, so the re-lock is `bootc upgrade --download-only`,
-    /// which pulls the tag first. It comes before disarming, so no stage boots unprotected.
-    async fn discard(&self, cancel: &CancelToken) -> Result<(), ApexError> {
-        self.refresh(cancel).await?;
-        let snapshot = self.snapshot()?;
-        validate_discard(&snapshot).map_err(|e| errors::from_discard(&e))?;
-        let applied = snapshot
-            .host
-            .staged
-            .as_ref()
-            .map(|staged| staged.digest.clone())
-            .unwrap_or_default();
-
-        let relock = self
-            .marking_bootc_busy(self.bootc.upgrade_download_only(None, cancel))
-            .await;
-        let status = self.status_after_change().await;
-        let bootc_locked = relock.as_ref().is_ok_and(DownloadOutcome::stage_locked);
-        let next = status.as_ref().map_or(NextBoot::Unknown, next_boot);
-        let outcome = discard_outcome(&applied, bootc_locked, &next);
-        match &outcome {
-            DiscardOutcome::Cancelled => {
-                self.disarm().await;
-                self.clear_intent();
-            }
-            DiscardOutcome::Kept => {
-                tracing::warn!(
-                    ?relock,
-                    ?next,
-                    "keeping the boot counter armed and the intent: the cancellation is not confirmed"
-                );
-            }
-            DiscardOutcome::Other(other) => {
-                self.rearm_for(other, snapshot.host.booted_digest()).await;
-            }
-        }
-        let status = match status {
-            Ok(host) => {
-                if let Ok(reported) = &relock
-                    && *reported != DownloadOutcome::Unknown
-                {
-                    self.follow_tag(reported, &host);
-                }
-                if let Err(error) = self.rebuild(host).await {
-                    tracing::warn!(error = %error.message(), "refresh after the re-lock failed");
-                }
-                None
-            }
-            Err(error) => Some(error),
-        };
-        discard_result(relock, &next, status, &outcome)
     }
 
     async fn rollback(&self, mark_bad: bool, cancel: &CancelToken) -> Result<(), ApexError> {
@@ -1147,63 +1038,6 @@ impl<R: CommandRunner> Engine<R> {
             tracing::info!(digest, reason, "digest denied");
         }
         Ok(())
-    }
-
-    async fn fedora_release(&self) -> Option<u32> {
-        let from_manifest = logged(self.running_manifest().await, "the running image")
-            .map(|m| m.fedora)
-            .filter(|&fedora| fedora != 0);
-        from_manifest.or_else(|| self.providers.files.fedora_release())
-    }
-
-    async fn switch_channel(
-        &self,
-        channel: Channel,
-        cancel: &CancelToken,
-    ) -> Result<(), ApexError> {
-        self.refresh(cancel).await?;
-        let snapshot = self.snapshot()?;
-        let fedora = self.fedora_release().await.ok_or_else(|| {
-            ApexError::PolicyDenied(
-                "The Fedora release of this system is unknown, so the channel cannot be changed."
-                    .to_owned(),
-            )
-        })?;
-        let target = channel_target(channel, fedora).ok_or_else(|| {
-            ApexError::PolicyDenied(format!(
-                "Changing the channel is not available on Fedora {fedora} with this version of Apex."
-            ))
-        })?;
-        let following = self.host().and_then(|h| h.spec.image.map(|i| i.image));
-        if following.as_deref() == Some(target.to_string().as_str()) {
-            return Err(ApexError::NothingToDo(format!(
-                "This system already follows the {channel} channel."
-            )));
-        }
-        // Hard gates only: the call is admin-authenticated and has no override argument.
-        gate_bootc_flags(&snapshot.host).map_err(|d| from_deferral(&d))?;
-        gate_intent(snapshot.intent.as_ref(), &snapshot.host, Trigger::User)
-            .map_err(|d| from_deferral(&d))?;
-        check_download_resources(&snapshot, true).map_err(|d| from_deferral(&d))?;
-
-        self.set_work(Some(Work::Downloading { progress: None }));
-        let result = self
-            .marking_bootc_busy(self.bootc.switch_download_only(target.clone(), cancel))
-            .await;
-        // bootc switch reports nothing; the stage is what the new channel's tag points at.
-        let reported = DownloadOutcome::Unknown;
-        let refreshed = self
-            .after_staging(result.as_ref().ok().map(|()| &reported), cancel)
-            .await;
-        let refused = if result.is_ok() && refreshed {
-            self.screen_stage(cancel).await
-        } else {
-            None
-        };
-        self.set_work(None);
-        result.map_err(|e| from_bootc(&e))?;
-        tracing::info!(%target, "switched channel; the new image is downloaded");
-        self.refused_stage_result(refused, Trigger::User)
     }
 
     /// A deferral is a success: the timer did its job, and `DeferredReason` explains it.
@@ -1453,90 +1287,6 @@ pub fn next_boot(status: &Host) -> NextBoot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DiscardOutcome {
-    Cancelled,
-    Kept,
-    Other(String),
-}
-
-/// Success needs both: "No update available." leaves an applied stage applied while bootc
-/// exits 0, and a status alone may be stale or unreadable.
-pub fn discard_outcome(applied: &str, bootc_locked: bool, next: &NextBoot) -> DiscardOutcome {
-    match next {
-        NextBoot::NothingApplied if bootc_locked => DiscardOutcome::Cancelled,
-        NextBoot::Applied(other) if other != applied && !other.is_empty() => {
-            DiscardOutcome::Other(other.clone())
-        }
-        NextBoot::NothingApplied | NextBoot::Applied(_) | NextBoot::Unknown => DiscardOutcome::Kept,
-    }
-}
-
-pub fn discard_result(
-    relock: Result<DownloadOutcome, BootcError>,
-    next: &NextBoot,
-    status_error: Option<ApexError>,
-    outcome: &DiscardOutcome,
-) -> Result<(), ApexError> {
-    let still = match next {
-        NextBoot::Applied(_) => "The update is still set to install at the next restart.",
-        NextBoot::NothingApplied | NextBoot::Unknown => {
-            "It may still be installed at the next restart, so the startup check stays armed."
-        }
-    };
-    match (outcome, relock) {
-        (DiscardOutcome::Cancelled, relock) => {
-            tracing::info!(
-                ?relock,
-                "the update will not be installed at the next restart"
-            );
-            Ok(())
-        }
-        (DiscardOutcome::Other(other), _) => Err(ApexError::Bootc(format!(
-            "bootc set another update ({other}) to install at the next restart instead of cancelling. It is protected by the startup check; cancel again to stop it."
-        ))),
-        (DiscardOutcome::Kept, Err(error)) => {
-            let mapped = from_bootc(&error);
-            let kind = mapped.kind().unwrap_or(ErrorKind::Internal);
-            let reason = if kind == ErrorKind::Network {
-                tracing::warn!(error = %error, "cancelling failed: no connection to the registry");
-                "Cancelling needs a network connection.".to_owned()
-            } else {
-                sentence(&mapped.message())
-            };
-            Err(ApexError::new(kind, format!("{reason} {still}")))
-        }
-        (DiscardOutcome::Kept, Ok(DownloadOutcome::NoUpdate)) => Err(ApexError::Bootc(format!(
-            "The update channel now points at the installed version, so the update could not be cancelled. {still}"
-        ))),
-        (DiscardOutcome::Kept, Ok(reported)) if reported.stage_locked() => match status_error {
-            Some(error) => Err(ApexError::new(
-                error.kind().unwrap_or(ErrorKind::Internal),
-                format!(
-                    "bootc reported the update as cancelled, but this could not be confirmed: {} {still}",
-                    sentence(&error.message())
-                ),
-            )),
-            None => Err(ApexError::Bootc(
-                "bootc reported the update as cancelled, but it is still set to install at the next restart. The startup check stays armed."
-                    .to_owned(),
-            )),
-        },
-        (DiscardOutcome::Kept, Ok(_)) => Err(ApexError::Bootc(format!(
-            "bootc did not report the update as cancelled. {still}"
-        ))),
-    }
-}
-
-fn sentence(text: &str) -> String {
-    let text = text.trim_end();
-    if text.ends_with(['.', '!', '?']) {
-        text.to_owned()
-    } else {
-        format!("{text}.")
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
     Applied,
     NotApplied,
@@ -1621,7 +1371,7 @@ struct Probes {
     boot_payload: Option<u64>,
 }
 
-fn summarize(host: &Host, manifests: &Manifests<'_>, view: &HostView) -> HostSummary {
+fn summarize(host: &Host, manifests: &Manifests<'_>) -> HostSummary {
     HostSummary {
         booted: deployment_dict(host.booted(), manifests.booted, false),
         staged: deployment_dict(host.staged(), manifests.staged, true),
@@ -1631,12 +1381,6 @@ fn summarize(host: &Host, manifests: &Manifests<'_>, view: &HostView) -> HostSum
             .and_then(BootEntry::image_reference)
             .map(channel_of_image),
         spec_image: host.spec.image.as_ref().map(|i| i.image.clone()),
-        build_times: [host.booted(), host.staged()]
-            .into_iter()
-            .flatten()
-            .map(|e| e.image.as_ref().and_then(image_timestamp))
-            .collect(),
-        booted_version: view.booted_version().cloned(),
     }
 }
 
@@ -1647,7 +1391,7 @@ fn logged<T>(result: Result<Option<T>, FileError>, what: &str) -> Option<T> {
     })
 }
 
-fn build_properties(state: &EngineState, now: u64) -> Properties {
+fn build_properties(state: &EngineState) -> Properties {
     let snapshot = state.snapshot.as_ref();
     let work = state.work.unwrap_or(Work::Idle);
     let summary = &state.summary;
@@ -1666,18 +1410,6 @@ fn build_properties(state: &EngineState, now: u64) -> Properties {
             ..apex_dbus::Deployment::default()
         })
         .unwrap_or_default();
-    let remote_time = state.remote_timestamp.as_ref().map(|(_, t)| *t);
-    let newest = properties::newest_build_time(
-        summary.build_times.iter().copied().chain([remote_time]),
-        [
-            summary.booted_version.clone(),
-            state
-                .last_check
-                .remote_version
-                .as_deref()
-                .and_then(Version::parse),
-        ],
-    );
     Properties {
         state: properties::state(snapshot, work, state.refresh_failure.is_some()),
         progress: properties::progress(work),
@@ -1687,12 +1419,8 @@ fn build_properties(state: &EngineState, now: u64) -> Properties {
         available,
         channel: summary.channel.unwrap_or(Channel::Stable),
         last_check: state.last_check.at,
-        deferred_reason: properties::deferred_reason_or_stage(
-            snapshot,
-            state.host.as_ref().is_some_and(is_channel_switch),
-        ),
+        deferred_reason: properties::deferred_reason_or_stage(snapshot),
         last_error: state.last_error.clone(),
-        stale: properties::stale(state.last_check.at, newest, now),
         health_failure: snapshot
             .and_then(|s| s.health_failure.clone())
             .unwrap_or_default(),
@@ -1837,118 +1565,6 @@ mod tests {
             ]
         );
         assert!(changes_reply(&booted, &booted).is_empty());
-    }
-
-    #[test]
-    fn discard_succeeds_only_when_bootc_and_the_status_agree_the_stage_is_locked() {
-        let applied = "sha256:s";
-        assert_eq!(
-            discard_outcome(applied, true, &NextBoot::NothingApplied),
-            DiscardOutcome::Cancelled
-        );
-        assert_eq!(
-            discard_outcome(applied, false, &NextBoot::NothingApplied),
-            DiscardOutcome::Kept
-        );
-        for locked in [true, false] {
-            assert_eq!(
-                discard_outcome(applied, locked, &NextBoot::Applied(applied.into())),
-                DiscardOutcome::Kept
-            );
-            assert_eq!(
-                discard_outcome(applied, locked, &NextBoot::Unknown),
-                DiscardOutcome::Kept
-            );
-            assert_eq!(
-                discard_outcome(applied, locked, &NextBoot::Applied("sha256:n".into())),
-                DiscardOutcome::Other("sha256:n".into())
-            );
-            assert_eq!(
-                discard_outcome(applied, locked, &NextBoot::Applied(String::new())),
-                DiscardOutcome::Kept
-            );
-        }
-    }
-
-    fn network_error() -> BootcError {
-        BootcError::Network {
-            detail: "dial tcp: connect: network is unreachable".into(),
-        }
-    }
-
-    #[test]
-    fn a_discard_that_did_not_happen_says_why_in_plain_words() {
-        let still = NextBoot::Applied("sha256:s".into());
-        let kept = DiscardOutcome::Kept;
-        let error = discard_result(Ok(DownloadOutcome::NoUpdate), &still, None, &kept)
-            .expect_err("not cancelled");
-        assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-        assert_eq!(
-            error.message(),
-            "The update channel now points at the installed version, so the update could not be cancelled. The update is still set to install at the next restart."
-        );
-
-        let error = discard_result(Err(network_error()), &still, None, &kept).expect_err("offline");
-        assert_eq!(error.kind(), Some(ErrorKind::Network));
-        assert_eq!(
-            error.message(),
-            "Cancelling needs a network connection. The update is still set to install at the next restart."
-        );
-
-        let busy = ApexError::Busy("The sysroot is locked by another process".into());
-        let error = discard_result(
-            Ok(DownloadOutcome::Relocked),
-            &NextBoot::Unknown,
-            Some(busy),
-            &kept,
-        )
-        .expect_err("not confirmed");
-        assert_eq!(error.kind(), Some(ErrorKind::Busy));
-        assert!(
-            error.message().contains("could not be confirmed: The sysroot is locked by another process. It may still be installed"),
-            "{}",
-            error.message()
-        );
-
-        let error = discard_result(Ok(DownloadOutcome::Relocked), &still, None, &kept)
-            .expect_err("still applied");
-        assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-        assert!(
-            error.message().contains("still set to install"),
-            "{}",
-            error.message()
-        );
-
-        let error = discard_result(
-            Ok(DownloadOutcome::Unknown),
-            &NextBoot::NothingApplied,
-            None,
-            &kept,
-        )
-        .expect_err("not reported");
-        assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-        assert!(
-            error
-                .message()
-                .starts_with("bootc did not report the update as cancelled.")
-        );
-
-        let error = discard_result(
-            Ok(DownloadOutcome::Unknown),
-            &NextBoot::Applied("sha256:n".into()),
-            None,
-            &DiscardOutcome::Other("sha256:n".into()),
-        )
-        .expect_err("another update");
-        assert!(error.message().contains("sha256:n"), "{}", error.message());
-
-        discard_result(
-            Ok(DownloadOutcome::Relocked),
-            &NextBoot::NothingApplied,
-            None,
-            &DiscardOutcome::Cancelled,
-        )
-        .expect("cancelled");
     }
 
     #[test]

@@ -35,7 +35,7 @@ expression: json
     "timestamp": 1790208000,
     "version": "45.20260920.110"
   },
-  "schema": 1,
+  "schema": 2,
   "staged": {
     "degraded": [],
     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -45,6 +45,5 @@ expression: json
     "timestamp": 1790208000,
     "version": "45.20260925.118"
   },
-  "stale": false,
   "state": "staged"
 }

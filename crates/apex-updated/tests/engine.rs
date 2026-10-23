@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use apex_boot::writer::EditenvCall;
 use apex_bootc::{
-    APEX_TESTING, BootEntry, BootcCommand, BootcError, CancelToken, CommandOutput, CommandRunner,
-    ImageRef, Invocation, Scripted,
+    BootEntry, BootcCommand, BootcError, CancelToken, CommandOutput, CommandRunner, Invocation,
+    Scripted,
 };
-use apex_dbus::{BootVerdict, Channel, ErrorKind, State};
+use apex_dbus::{BootVerdict, ErrorKind, State};
 use apex_update::{HealthFailureRecord, Intent, StateDir, StateStore, StoreError};
 use apex_updated::REFRESH_MAX_AGE;
 use apex_updated::daemon::Daemon;
@@ -637,72 +637,6 @@ async fn apply_arms_over_an_arming_for_another_update() {
 
 const RELOCKED: &str = "Image downloaded, but will not be applied on reboot\n";
 
-fn applied_intent(h: &Harness) {
-    h.store
-        .write_intent(&Intent {
-            digest: STAGED.into(),
-            created: NOW - 60,
-        })
-        .unwrap();
-}
-
-#[tokio::test(start_paused = true)]
-async fn discard_relocks_then_disarms_and_forgets_the_intent() {
-    let h = Harness::with(fake_state(), armed_for(STAGED));
-    applied_intent(&h);
-    h.push(status(&host(booted(), Some(staged(false)), None)))
-        .push(Scripted::new(download_only(false)).stdout(RELOCKED))
-        .push(status(&host(booted(), Some(staged(true)), None)));
-    h.run(Op::Discard).await.expect("discard");
-    assert_eq!(h.grub.calls(), [disarm_call()]);
-    assert_eq!(h.grub.env().get_str("apex_target").unwrap(), None);
-    assert_eq!(h.grub.env().get_str("apex_counter").unwrap(), None);
-    assert_eq!(h.intent(), None);
-    assert_eq!(h.properties().state, State::Staged);
-    assert!(
-        !h.fake.calls().contains(&BootcCommand::Rollback),
-        "discarding never rolls back"
-    );
-
-    h.push(status(&host(booted(), Some(staged(true)), None)));
-    assert_eq!(kind(h.run(Op::Discard).await), Some(ErrorKind::NothingToDo));
-    assert_eq!(h.grub.calls(), [disarm_call()]);
-    h.fake.assert_finished();
-}
-
-#[tokio::test(start_paused = true)]
-async fn discard_that_stages_a_newer_locked_digest_still_disarms() {
-    // The re-lock pulls the tag, which has moved on: bootc stages the newer image locked.
-    let h = Harness::new();
-    applied_intent(&h);
-    h.last_check(STAGED, STAGED_VERSION, 3600);
-    let newer = "45.20260925.1";
-    let replaced = host(
-        booted(),
-        Some(BootEntry {
-            download_only: true,
-            ..entry(REMOTE, newer, STAGED_CSUM)
-        }),
-        None,
-    );
-    h.push(status(&host(booted(), Some(staged(false)), None)))
-        .push(Scripted::new(download_only(false)).stdout(format!(
-            "Staged but not queued for next boot: ostree-image-signed:docker://{STABLE_IMAGE}\n  Version: {newer}\n  Digest: {REMOTE}\n"
-        )))
-        .push(status(&replaced));
-    h.run(Op::Discard).await.expect("discard");
-    assert_eq!(h.grub.calls(), [disarm_call()]);
-    assert_eq!(h.intent(), None);
-    let properties = h.properties();
-    assert_eq!(properties.state, State::Staged);
-    assert_eq!(properties.staged.digest.as_deref(), Some(REMOTE));
-    assert_eq!(properties.staged.download_only, Some(true));
-    let check = h.store.read_last_check().unwrap();
-    assert_eq!(check.remote_digest.as_deref(), Some(REMOTE));
-    assert_eq!(check.remote_version.as_deref(), Some(newer));
-    h.fake.assert_finished();
-}
-
 fn armed_for(digest: &str) -> SharedGrubWriter {
     let grub = SharedGrubWriter::new();
     let mut env = grub.env();
@@ -720,145 +654,6 @@ fn assert_still_armed(h: &Harness, digest: &str) {
     let env = h.grub.env();
     assert_eq!(env.get_str("apex_target").unwrap(), Some(digest));
     assert_eq!(env.get_str("apex_counter").unwrap(), Some("3"));
-}
-
-/// With the tag back at the running image, bootc prints "No update available.", changes
-/// nothing and exits 0: the applied stage still installs at the next restart.
-#[tokio::test(start_paused = true)]
-async fn no_update_available_keeps_the_update_applied_and_armed() {
-    let applied = host(booted(), Some(staged(false)), None);
-    let relocked = host(booted(), Some(staged(true)), None);
-    // Applied (what bootc does) or locked (a stale status): unconfirmed either way.
-    for after in [&applied, &relocked] {
-        let h = Harness::with(fake_state(), armed_for(STAGED));
-        applied_intent(&h);
-        h.push(status(&applied))
-            .push(Scripted::new(download_only(false)).stdout("No update available.\n"))
-            .push(status(after));
-        let error = h.run(Op::Discard).await.unwrap_err();
-        assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-        assert!(
-            error.message().starts_with(
-                "The update channel now points at the installed version, so the update could not be cancelled."
-            ),
-            "{}",
-            error.message()
-        );
-        assert!(h.grub.calls().is_empty(), "nothing disarmed");
-        assert_still_armed(&h, STAGED);
-        if after == &applied {
-            assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
-            assert_eq!(h.properties().state, State::ReadyForReboot);
-            assert!(h.properties().last_error.contains("could not be cancelled"));
-            assert_eq!(
-                h.store.read_last_check().unwrap().remote_digest.as_deref(),
-                Some(BOOTED)
-            );
-        }
-        h.fake.assert_finished();
-    }
-}
-
-#[tokio::test(start_paused = true)]
-async fn discard_offline_keeps_the_update_applied_and_armed() {
-    let h = Harness::with(fake_state(), armed_for(STAGED));
-    applied_intent(&h);
-    let applied = host(booted(), Some(staged(false)), None);
-    h.push(status(&applied))
-        .push(Scripted::new(download_only(false)).exit_code(1).stderr(
-            "error: Pulling: dial tcp 140.82.114.34:443: connect: network is unreachable\n",
-        ))
-        .push(status(&applied));
-    let error = h.run(Op::Discard).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::Network));
-    assert_eq!(
-        error.message(),
-        "Cancelling needs a network connection. The update is still set to install at the next restart."
-    );
-    assert!(h.grub.calls().is_empty());
-    assert_still_armed(&h, STAGED);
-    assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
-    let properties = h.properties();
-    assert_eq!(properties.state, State::ReadyForReboot);
-    assert_eq!(properties.last_error, error.message());
-    h.fake.assert_finished();
-}
-
-#[tokio::test(start_paused = true)]
-async fn discard_needs_both_bootcs_report_and_the_status() {
-    let busy = || {
-        Scripted::new(BootcCommand::Status).error(apex_bootc::BootcError::Busy {
-            detail: "lock held by another process".into(),
-        })
-    };
-    let applied = host(booted(), Some(staged(false)), None);
-    let relocked = host(booted(), Some(staged(true)), None);
-
-    let h = Harness::with(fake_state(), armed_for(STAGED));
-    applied_intent(&h);
-    h.push(status(&applied))
-        .push(Scripted::new(download_only(false)).stdout(RELOCKED))
-        .push(busy());
-    let error = h.run(Op::Discard).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::Busy));
-    assert!(
-        error.message().contains("could not be confirmed"),
-        "{}",
-        error.message()
-    );
-    assert!(h.grub.calls().is_empty());
-    assert_still_armed(&h, STAGED);
-    assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
-    h.fake.assert_finished();
-
-    let h = Harness::with(fake_state(), armed_for(STAGED));
-    applied_intent(&h);
-    h.push(status(&applied))
-        .push(Scripted::new(download_only(false)).stdout("Something new\n"))
-        .push(status(&relocked));
-    let error = h.run(Op::Discard).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-    assert!(
-        error
-            .message()
-            .contains("did not report the update as cancelled"),
-        "{}",
-        error.message()
-    );
-    assert!(h.grub.calls().is_empty());
-    assert_still_armed(&h, STAGED);
-    h.fake.assert_finished();
-
-    let h = Harness::with(fake_state(), armed_for(STAGED));
-    applied_intent(&h);
-    h.push(status(&applied))
-        .push(Scripted::new(download_only(false)).stdout(RELOCKED))
-        .push(status(&applied));
-    let error = h.run(Op::Discard).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-    assert!(h.grub.calls().is_empty());
-    assert_still_armed(&h, STAGED);
-    assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
-    h.fake.assert_finished();
-}
-
-#[tokio::test(start_paused = true)]
-async fn discard_arms_for_another_update_bootc_set_to_install() {
-    let h = Harness::with(fake_state(), armed_for(STAGED));
-    applied_intent(&h);
-    let newer = "45.20260925.1";
-    let other = host(booted(), Some(entry(REMOTE, newer, STAGED_CSUM)), None);
-    h.push(status(&host(booted(), Some(staged(false)), None)))
-        .push(Scripted::new(download_only(false)).stdout(format!(
-            "Queued for next boot: ostree-image-signed:docker://{STABLE_IMAGE}\n  Version: {newer}\n  Digest: {REMOTE}\n"
-        )))
-        .push(status(&other));
-    let error = h.run(Op::Discard).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::Bootc));
-    assert!(error.message().contains(REMOTE), "{}", error.message());
-    assert_eq!(h.grub.calls(), [arm_call(REMOTE)]);
-    assert_still_armed(&h, REMOTE);
-    h.fake.assert_finished();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1071,7 +866,7 @@ async fn green_and_red_reports_update_the_health_failure() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn check_is_rate_limited_to_once_a_minute() {
+async fn every_check_reaches_the_registry() {
     let h = Harness::new();
     let current = host(booted(), None, None);
     let check = || {
@@ -1084,14 +879,10 @@ async fn check_is_rate_limited_to_once_a_minute() {
     assert_eq!(h.properties().last_check, NOW);
     assert_eq!(h.properties().state, State::UpToDate);
 
-    h.system.update(|s| s.now = NOW + 59);
-    h.run(Op::Check).await.expect("rate-limited check");
-    assert_eq!(h.fake.calls().len(), 2);
-
-    h.system.update(|s| s.now = NOW + 60);
+    h.system.update(|s| s.now = NOW + 1);
     h.push(check()).push(status(&current));
-    h.run(Op::Check).await.expect("check after a minute");
-    assert_eq!(h.properties().last_check, NOW + 60);
+    h.run(Op::Check).await.expect("second check");
+    assert_eq!(h.properties().last_check, NOW + 1);
     h.fake.assert_finished();
 }
 
@@ -1106,7 +897,6 @@ async fn a_failed_check_is_reported_and_a_retry_runs_at_once() {
     );
     assert_eq!(kind(h.run(Op::Check).await), Some(ErrorKind::Network));
     assert!(h.properties().last_error.contains("no such host"));
-    assert!(!h.daemon.engine().check_is_recent());
 
     h.system.update(|s| s.now = NOW + 20);
     h.push(Scripted::new(BootcCommand::UpgradeCheck).stdout(format!(
@@ -1117,7 +907,6 @@ async fn a_failed_check_is_reported_and_a_retry_runs_at_once() {
     let properties = h.properties();
     assert_eq!(properties.last_check, NOW + 20);
     assert_eq!(properties.last_error, "", "cleared by the success");
-    h.run(Op::Check).await.expect("rate-limited");
     assert_eq!(
         h.fake
             .calls()
@@ -1301,15 +1090,13 @@ async fn a_download_makes_other_operations_busy() {
                 override_soft_gates: true,
             })
             .await;
-        let switch = h.run(Op::SwitchChannel(Channel::Testing)).await;
         let check = h.run(Op::Check).await;
-        (apply, second, switch, check)
+        (apply, second, check)
     };
-    let (result, (apply, second, switch, check)) = tokio::join!(download, others);
+    let (result, (apply, second, check)) = tokio::join!(download, others);
     result.expect("download");
     assert_eq!(kind(apply), Some(ErrorKind::Busy));
     assert_eq!(kind(second), Some(ErrorKind::Busy));
-    assert_eq!(kind(switch), Some(ErrorKind::Busy));
     assert_eq!(kind(check), Some(ErrorKind::Busy));
     h.fake.assert_finished();
 }
@@ -1356,71 +1143,6 @@ async fn no_status_is_read_while_the_daemons_own_bootc_command_runs() {
         ]
     );
     h.fake.assert_finished();
-}
-
-#[tokio::test(start_paused = true)]
-async fn switch_channel_uses_the_compile_time_reference() {
-    let h = Harness::new();
-    let current = host(booted(), None, None);
-    let mut switched = host(
-        booted(),
-        Some(entry(REMOTE, STAGED_VERSION, STAGED_CSUM)),
-        None,
-    );
-    if let Some(staged) = &mut switched.status.staged {
-        staged.download_only = true;
-        if let Some(image) = &mut staged.image {
-            image.image.image = APEX_TESTING.to_string();
-        }
-    }
-    switched.spec.image = switched
-        .status
-        .staged
-        .as_ref()
-        .and_then(|s| s.image.as_ref())
-        .map(|i| i.image.clone());
-    h.push(status(&current))
-        .push(Scripted::new(BootcCommand::SwitchDownloadOnly {
-            target: APEX_TESTING,
-        }))
-        .push(status(&switched));
-    h.run(Op::SwitchChannel(Channel::Testing))
-        .await
-        .expect("switch");
-    // The booted deployment still follows stable until the switch is applied and booted.
-    let properties = h.properties();
-    assert_eq!(properties.channel, Channel::Stable);
-    assert_eq!(properties.state, State::Staged);
-    assert_eq!(
-        h.store.read_last_check().unwrap().remote_digest.as_deref(),
-        Some(REMOTE)
-    );
-
-    h.push(status(&switched));
-    assert_eq!(
-        kind(h.run(Op::SwitchChannel(Channel::Testing)).await),
-        Some(ErrorKind::NothingToDo)
-    );
-
-    h.fake.assert_finished();
-
-    let fresh = Harness::with(
-        {
-            let mut state = fake_state();
-            state.fedora = Some(46);
-            if let Some(m) = &mut state.running_manifest {
-                m.fedora = 46;
-            }
-            state
-        },
-        SharedGrubWriter::new(),
-    );
-    fresh.push(status(&current));
-    assert_eq!(
-        kind(fresh.run(Op::SwitchChannel(Channel::Testing)).await),
-        Some(ErrorKind::PolicyDenied)
-    );
-    fresh.fake.assert_finished();
 }
 
 #[tokio::test(start_paused = true)]
@@ -1607,87 +1329,6 @@ async fn apply_disarms_when_bootc_claims_success_but_nothing_is_applied() {
     assert_eq!(error.kind(), Some(ErrorKind::Bootc));
     assert_eq!(h.grub.calls(), [arm_call(STAGED), disarm_call()]);
     assert_eq!(h.intent(), None);
-    h.fake.assert_finished();
-}
-
-fn following(mut entry: BootEntry, reference: &ImageRef) -> BootEntry {
-    if let Some(image) = &mut entry.image {
-        image.image.image = reference.to_string();
-    }
-    entry
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_channel_switch_to_the_running_build_installs_without_arming() {
-    let mut state = fake_state();
-    // A second deployment of the booted commit: same checksum, same manifest.
-    let running = state.running_manifest.clone().expect("running manifest");
-    state.manifests.insert(BOOTED_CSUM.into(), running);
-    let h = Harness::with(state, SharedGrubWriter::new());
-    let switched = BootEntry {
-        download_only: true,
-        ..following(booted(), &APEX_TESTING)
-    };
-    let applied = BootEntry {
-        download_only: false,
-        ..switched.clone()
-    };
-    h.push(status(&host(booted(), Some(switched), None)))
-        .push(Scripted::new(BootcCommand::UpgradeFromDownloaded))
-        .push(status(&host(booted(), Some(applied), None)));
-    h.run(Op::Apply {
-        expected_digest: BOOTED.into(),
-    })
-    .await
-    .expect("the switch is installed at the next restart");
-    assert!(
-        h.grub.calls().is_empty(),
-        "nothing new boots, nothing is armed"
-    );
-    assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(BOOTED));
-    assert_eq!(h.properties().staged.download_only, Some(false));
-    h.fake.assert_finished();
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_channel_switch_to_an_older_build_installs_behind_the_other_gates() {
-    let mut state = fake_state();
-    state
-        .manifests
-        .insert(STAGED_CSUM.into(), manifest(OLDER_VERSION, Vec::new()));
-    state.boot_free = Some(100 * 1024 * 1024);
-    let h = Harness::with(state, SharedGrubWriter::new());
-    let testing = following(booted(), &APEX_TESTING);
-    // `entry` follows the stable reference.
-    let stable = BootEntry {
-        download_only: true,
-        ..entry(STAGED, OLDER_VERSION, STAGED_CSUM)
-    };
-    let apply = || Op::Apply {
-        expected_digest: STAGED.into(),
-    };
-
-    h.push(status(&host(testing.clone(), Some(stable.clone()), None)));
-    let error = h.run(apply()).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::PolicyDenied));
-    assert!(
-        error.message().contains("boot partition"),
-        "{}",
-        error.message()
-    );
-    assert!(h.grub.calls().is_empty());
-
-    h.system.update(|s| s.boot_free = Some(600 * 1024 * 1024));
-    let applied = BootEntry {
-        download_only: false,
-        ..stable.clone()
-    };
-    h.push(status(&host(testing.clone(), Some(stable), None)))
-        .push(Scripted::new(BootcCommand::UpgradeFromDownloaded))
-        .push(status(&host(testing, Some(applied), None)));
-    h.run(apply()).await.expect("the switch is installed");
-    assert_eq!(h.grub.calls(), [arm_call(STAGED)]);
-    assert_eq!(h.intent().map(|i| i.digest).as_deref(), Some(STAGED));
     h.fake.assert_finished();
 }
 

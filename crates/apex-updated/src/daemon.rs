@@ -1,19 +1,17 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use apex_bootc::CommandRunner;
 use apex_dbus::ApexError;
 use tokio::task::JoinHandle;
 
 use crate::engine::Engine;
-use crate::queue::{Activity, Op, Queue, Submission};
+use crate::queue::{Op, Queue, Submission};
 
 #[derive(Debug)]
 pub struct Daemon<R> {
     engine: Arc<Engine<R>>,
     queue: Arc<Queue>,
-    activity: Arc<Activity>,
     worker_alive: Arc<AtomicBool>,
 }
 
@@ -22,7 +20,6 @@ impl<R> Clone for Daemon<R> {
         Self {
             engine: Arc::clone(&self.engine),
             queue: Arc::clone(&self.queue),
-            activity: Arc::clone(&self.activity),
             worker_alive: Arc::clone(&self.worker_alive),
         }
     }
@@ -47,7 +44,6 @@ impl<R: CommandRunner + 'static> Daemon<R> {
         Self {
             engine: Arc::new(engine),
             queue: Arc::new(Queue::new()),
-            activity: Arc::new(Activity::new()),
             worker_alive: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -58,10 +54,6 @@ impl<R: CommandRunner + 'static> Daemon<R> {
 
     pub fn queue(&self) -> &Queue {
         &self.queue
-    }
-
-    pub fn activity(&self) -> &Activity {
-        &self.activity
     }
 
     pub fn spawn_worker(&self) -> JoinHandle<()> {
@@ -82,7 +74,6 @@ impl<R: CommandRunner + 'static> Daemon<R> {
                         tracing::info!(op = kind.as_str(), error = %error, "operation failed");
                     }
                 }
-                this.activity.touch();
                 this.queue.finish(job, result);
             }
         })
@@ -103,10 +94,6 @@ impl<R: CommandRunner + 'static> Daemon<R> {
     }
 
     pub async fn submit(&self, op: Op) -> Result<(), ApexError> {
-        // Before queueing, so a client hammering Check never waits behind other work.
-        if op == Op::Check && self.engine.check_is_recent() {
-            return Ok(());
-        }
         match self.queue.submit(op) {
             Submission::Done(result) => result,
             Submission::Queued(reply) => reply.await.unwrap_or_else(|_| {
@@ -135,10 +122,6 @@ impl<R: CommandRunner + 'static> Daemon<R> {
         {
             tracing::debug!(error = %error, "refresh before the call failed");
         }
-    }
-
-    pub fn is_idle(&self, timeout: Duration) -> bool {
-        self.queue.is_idle() && self.activity.is_quiet(timeout)
     }
 
     pub fn shutdown(&self) {

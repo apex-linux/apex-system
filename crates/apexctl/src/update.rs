@@ -1,38 +1,25 @@
-use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 use apex_bootc::Digest;
-use apex_dbus::{ApexError, Channel, Deployment, ErrorKind, State};
+use apex_dbus::{ApexError, Deployment, ErrorKind, State};
 
 use crate::cli::UpdateCommand;
 use crate::exit::Exit;
 use crate::service::{ClientError, ServiceStatus, UpdateService};
 use crate::status::{
-    compare_age, other_origin, progress_line, queued_rollback_goes_back, render_changes,
-    short_digest, status_sentence, version_label,
+    other_origin, progress_line, queued_rollback_goes_back, render_changes, short_digest,
+    status_sentence,
 };
 
 const AUTOMATIC_ROOT_HINT: &str = "This command is for the system timer \
 (apex-update-auto.service) and runs as root: sudo apexctl update automatic";
 
-const DISCARD_NETWORK_HINT: &str = "The update is still set to install at the next restart. \
-Discarding locks it again by downloading from the update channel, which needs the network; \
-try again once online.";
-
-const DISCARD_STATUS_HINT: &str =
-    "Check with apexctl status whether the update is still set to install at the next restart.";
-
 pub fn hint(command: &UpdateCommand, error: &ClientError) -> Option<&'static str> {
-    match (command, daemon_kind(error)) {
-        // Root-only by uid, so the polkit advice of the generic hint would be wrong.
-        (UpdateCommand::Automatic, Some(ErrorKind::NotAuthorized)) => {
-            return Some(AUTOMATIC_ROOT_HINT);
-        }
-        (UpdateCommand::Discard, Some(ErrorKind::Network)) => return Some(DISCARD_NETWORK_HINT),
-        (UpdateCommand::Discard, Some(ErrorKind::Bootc | ErrorKind::Internal)) => {
-            return Some(DISCARD_STATUS_HINT);
-        }
-        _ => {}
+    // Root-only by uid, so the polkit advice of the generic hint would be wrong.
+    if matches!(command, UpdateCommand::Automatic)
+        && daemon_kind(error) == Some(ErrorKind::NotAuthorized)
+    {
+        return Some(AUTOMATIC_ROOT_HINT);
     }
     let force_advice_applies = matches!(command, UpdateCommand::Download { force: false });
     if error.exit() == Exit::PolicyDenied && !force_advice_applies {
@@ -55,13 +42,6 @@ fn digest_of(deployment: &Deployment) -> &str {
 fn origin_sentence(status: &ServiceStatus, deployment: &Deployment) -> Option<String> {
     other_origin(&status.booted, deployment).map(|origin| format!("It comes from {origin}."))
 }
-
-fn is_running_build(status: &ServiceStatus, deployment: &Deployment) -> bool {
-    deployment.digest.is_some() && deployment.digest == status.booted.digest
-}
-
-const SAME_BUILD_NOTE: &str = "It is the build that is running now, so only the channel \
-changes: the same build starts again, and no boot check is armed for that restart.";
 
 /// The `staged` and `ready-for-reboot` states rank before `available`, so the state alone
 /// hides a newer build.
@@ -143,7 +123,8 @@ pub async fn check<S: UpdateService>(service: &S) -> Result<String, ClientError>
                     if status.staged.download_only == Some(false) {
                         let _ = writeln!(
                             out,
-                            "To install it instead, first cancel the applied update: apexctl update discard"
+                            "Download it after the restart that installs {}.",
+                            version_of(&status.staged)
                         );
                     } else {
                         let _ = writeln!(
@@ -160,12 +141,6 @@ pub async fn check<S: UpdateService>(service: &S) -> Result<String, ClientError>
                 }
             }
         }
-    }
-    if status.stale {
-        let _ = writeln!(
-            out,
-            "No newer build was published on this channel for more than 7 days."
-        );
     }
     Ok(out)
 }
@@ -224,83 +199,10 @@ pub async fn apply<S: UpdateService>(
         "Applied {version} ({}). It will be used at the next boot.\n",
         short_digest(&target)
     );
-    if staged_is_target {
-        if let Some(origin) = origin_sentence(&before, &before.staged) {
-            let _ = writeln!(out, "{origin}");
-        }
-        if is_running_build(&before, &before.staged) {
-            let _ = writeln!(out, "{SAME_BUILD_NOTE}");
-        }
-    }
-    out.push_str("Reboot to finish the update. apexctl never reboots the computer by itself.\n");
-    Ok(out)
-}
-
-/// `DiscardStaged` re-locks by pulling the channel's tag again, so a newer build may replace
-/// the applied one; and the timer may replace a locked stage later, hence `apply --digest`.
-pub async fn discard<S: UpdateService>(service: &S) -> Result<String, ClientError> {
-    let before = service.status().await?;
-    service.discard_staged().await?;
-    let after = service.status().await?;
-    let applied_subject = before
-        .staged
-        .version
-        .clone()
-        .unwrap_or_else(|| "The update".to_owned());
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "{applied_subject} will not be installed at the next restart."
-    );
-    let staged = &after.staged;
-    if staged.is_empty() {
-        let _ = writeln!(
-            out,
-            "No update is downloaded now. Download one again with: apexctl update download"
-        );
-        return Ok(out);
-    }
-    let relocked_the_applied_build = match (&before.staged.digest, &staged.digest) {
-        (Some(applied), Some(locked)) => Some(applied == locked),
-        _ => None,
-    };
-    let _ = writeln!(
-        out,
-        "{}",
-        match relocked_the_applied_build {
-            Some(true) => "The update channel still offers it, so it is downloaded and locked:",
-            Some(false) => {
-                "The update channel has moved on: cancelling downloaded its current build, \
-                 which replaced it and is locked:"
-            }
-            None => "The update downloaded now is locked:",
-        }
-    );
-    let _ = writeln!(out, "  {}  {}", version_of(staged), digest_of(staged));
-    if let Some(origin) = origin_sentence(&after, staged) {
+    if staged_is_target && let Some(origin) = origin_sentence(&before, &before.staged) {
         let _ = writeln!(out, "{origin}");
     }
-    if relocked_the_applied_build != Some(true) {
-        let _ = writeln!(out, "Review it with: apexctl update changes");
-    }
-    match &staged.digest {
-        Some(digest) => {
-            let _ = writeln!(
-                out,
-                "To install exactly this build later: apexctl update apply --digest {digest}"
-            );
-        }
-        None => {
-            let _ = writeln!(
-                out,
-                "To install it later, check apexctl status, then: apexctl update apply"
-            );
-        }
-    }
-    let _ = writeln!(
-        out,
-        "An automatic download may replace it with a newer build before then."
-    );
+    out.push_str("Reboot to finish the update. apexctl never reboots the computer by itself.\n");
     Ok(out)
 }
 
@@ -452,52 +354,6 @@ pub async fn acknowledge<S: UpdateService>(service: &S) -> Result<String, Client
     Ok(out)
 }
 
-/// "Already followed" is left to the daemon: the `Channel` property names the booted image's
-/// channel, not the followed one after a switch that has not booted yet.
-pub async fn channel<S: UpdateService>(
-    service: &S,
-    channel: Channel,
-) -> Result<String, ClientError> {
-    service.switch_channel(channel).await?;
-    let status = service.status().await?;
-    let staged = &status.staged;
-    let mut out = String::new();
-    let _ = write!(out, "Apex now follows the {channel} channel.");
-    if staged.is_empty() {
-        let (sentence, _) = status_sentence(&status);
-        let _ = writeln!(out, " {sentence}");
-    } else {
-        let _ = writeln!(
-            out,
-            " Its image {} ({}) is downloaded and stays locked until you apply it.",
-            version_of(staged),
-            short_digest(digest_of(staged))
-        );
-        if is_running_build(&status, staged) {
-            let _ = writeln!(out, "{SAME_BUILD_NOTE}");
-        } else if compare_age(staged, &status.booted) == Some(Ordering::Less) {
-            let _ = writeln!(
-                out,
-                "It is older than the running {}; applying it installs it anyway, since you \
-                 chose this channel.",
-                version_label(&status.booted)
-            );
-        }
-        let _ = writeln!(out, "To finish the switch, run: apexctl update apply");
-        let _ = writeln!(
-            out,
-            "Then restart the computer; apexctl never restarts it by itself."
-        );
-    }
-    if channel == Channel::Testing {
-        let _ = writeln!(
-            out,
-            "Testing images are signed with the CI key and have not been qualified for stable."
-        );
-    }
-    Ok(out)
-}
-
 fn automatic_deferral(error: &ClientError) -> Option<String> {
     let ClientError::Daemon(error) = error else {
         return None;
@@ -531,7 +387,7 @@ pub async fn automatic<S: UpdateService>(service: &S) -> Result<String, ClientEr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apex_dbus::{ApexError, Change, Deployment, ErrorKind};
+    use apex_dbus::{ApexError, Change, Channel, Deployment, ErrorKind};
     use std::cell::RefCell;
     use std::future::{Future, ready};
 
@@ -585,20 +441,11 @@ mod tests {
         fn apply(&self, digest: &str) -> impl Future<Output = Result<(), ClientError>> {
             ready(self.call(format!("apply({digest})")))
         }
-        fn discard_staged(&self) -> impl Future<Output = Result<(), ClientError>> {
-            ready(self.call("discard".into()))
-        }
         fn rollback(&self, mark_bad: bool) -> impl Future<Output = Result<(), ClientError>> {
             ready(self.call(format!("rollback({mark_bad})")))
         }
         fn changes(&self) -> impl Future<Output = Result<Vec<Change>, ClientError>> {
             ready(self.call("changes".into()).map(|()| self.changes.clone()))
-        }
-        fn switch_channel(
-            &self,
-            channel: Channel,
-        ) -> impl Future<Output = Result<(), ClientError>> {
-            ready(self.call(format!("switch_channel({channel})")))
         }
         fn acknowledge_health_failure(&self) -> impl Future<Output = Result<(), ClientError>> {
             ready(self.call("acknowledge".into()))
@@ -630,7 +477,6 @@ mod tests {
             available: Deployment::default(),
             channel: Channel::Stable,
             last_check: 0,
-            stale: false,
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
@@ -692,7 +538,10 @@ mod tests {
     fn daemon_nothing_to_do_exits_3() {
         let fake = Fake::new(status(State::Staged));
         *fake.fail_with.borrow_mut() = Some(ErrorKind::NothingToDo);
-        assert_eq!(run(discard(&fake)).unwrap_err().exit(), Exit::NothingToDo);
+        assert_eq!(
+            run(apply(&fake, None)).unwrap_err().exit(),
+            Exit::NothingToDo
+        );
     }
 
     #[test]
@@ -796,100 +645,6 @@ mod tests {
     }
 
     #[test]
-    fn channel_switch_passes_the_typed_channel_and_names_the_stage() {
-        let fake = Fake::new(status(State::Staged));
-        let out = run(channel(&fake, Channel::Testing)).unwrap();
-        assert_eq!(fake.calls.borrow().as_slice(), ["switch_channel(testing)"]);
-        assert_eq!(
-            out,
-            "Apex now follows the testing channel. Its image 45.20260925.118 \
-             (sha256:bbbbbbbbbbbb) is downloaded and stays locked until you apply it.\n\
-             To finish the switch, run: apexctl update apply\n\
-             Then restart the computer; apexctl never restarts it by itself.\n\
-             Testing images are signed with the CI key and have not been qualified for stable.\n"
-        );
-
-        let fake = Fake::new(status(State::Staged));
-        let out = run(channel(&fake, Channel::Stable)).unwrap();
-        assert_eq!(fake.calls.borrow().as_slice(), ["switch_channel(stable)"]);
-        assert!(out.starts_with("Apex now follows the stable channel. Its image"));
-        assert!(!out.contains("CI key"), "{out}");
-
-        let mut s = status(State::UpToDate);
-        s.staged = Deployment::default();
-        let out = run(channel(&Fake::new(s), Channel::Stable)).unwrap();
-        assert_eq!(
-            out,
-            "Apex now follows the stable channel. Apex is up to date.\n"
-        );
-    }
-
-    #[test]
-    fn a_channel_switch_to_the_running_build_changes_only_the_channel() {
-        let mut s = status(State::Staged);
-        s.booted.image = Some("ghcr.io/apex-linux/apex-testing:45".to_owned());
-        s.staged = Deployment {
-            image: Some("ghcr.io/apex-linux/apex:45".to_owned()),
-            download_only: Some(true),
-            ..s.booted.clone()
-        };
-        let out = run(channel(&Fake::new(s.clone()), Channel::Stable)).unwrap();
-        assert_eq!(
-            out,
-            "Apex now follows the stable channel. Its image 45.20260924.117 \
-             (sha256:aaaaaaaaaaaa) is downloaded and stays locked until you apply it.\n\
-             It is the build that is running now, so only the channel changes: the same build \
-             starts again, and no boot check is armed for that restart.\n\
-             To finish the switch, run: apexctl update apply\n\
-             Then restart the computer; apexctl never restarts it by itself.\n"
-        );
-        let out = run(apply(&Fake::new(s), None)).unwrap();
-        assert_eq!(
-            out,
-            "Applied 45.20260924.117 (sha256:aaaaaaaaaaaa). It will be used at the next boot.\n\
-             It comes from the stable channel.\n\
-             It is the build that is running now, so only the channel changes: the same build \
-             starts again, and no boot check is armed for that restart.\n\
-             Reboot to finish the update. apexctl never reboots the computer by itself.\n"
-        );
-    }
-
-    #[test]
-    fn a_channel_switch_to_an_older_build_says_apply_installs_it_anyway() {
-        let mut s = status(State::Staged);
-        s.staged = testing_image("45.20260923.5", 'f');
-        let out = run(channel(&Fake::new(s.clone()), Channel::Testing)).unwrap();
-        assert!(
-            out.contains(
-                "\nIt is older than the running 45.20260924.117; applying it installs it anyway, \
-                 since you chose this channel.\nTo finish the switch, run: apexctl update apply\n"
-            ),
-            "{out}"
-        );
-        assert!(!out.contains("no boot check"), "{out}");
-        s.staged = testing_image("45.20260925.7", 'f');
-        let out = run(channel(&Fake::new(s), Channel::Testing)).unwrap();
-        assert!(!out.contains("older"), "{out}");
-        assert!(!out.contains("no boot check"), "{out}");
-    }
-
-    #[test]
-    fn channel_switch_exit_codes() {
-        for (kind, exit) in [
-            (ErrorKind::NothingToDo, Exit::NothingToDo),
-            (ErrorKind::PolicyDenied, Exit::PolicyDenied),
-            (ErrorKind::NotAuthorized, Exit::Error),
-            (ErrorKind::Busy, Exit::Error),
-            (ErrorKind::Network, Exit::Error),
-        ] {
-            let fake = Fake::new(status(State::UpToDate));
-            *fake.fail_with.borrow_mut() = Some(kind);
-            let error = run(channel(&fake, Channel::Stable)).unwrap_err();
-            assert_eq!(error.exit(), exit, "{kind:?}");
-        }
-    }
-
-    #[test]
     fn the_force_hint_follows_only_a_plain_download() {
         let denied = ClientError::Daemon(ApexError::new(ErrorKind::PolicyDenied, "no space"));
         let force_hint = denied.hint();
@@ -900,9 +655,6 @@ mod tests {
         );
         for command in [
             UpdateCommand::Download { force: true },
-            UpdateCommand::Channel {
-                channel: Channel::Testing,
-            },
             UpdateCommand::Apply { digest: None },
             UpdateCommand::Acknowledge,
             UpdateCommand::Automatic,
@@ -910,15 +662,7 @@ mod tests {
             assert_eq!(hint(&command, &denied), None, "{command:?}");
         }
         let busy = ClientError::Daemon(ApexError::new(ErrorKind::Busy, "downloading"));
-        assert_eq!(
-            hint(
-                &UpdateCommand::Channel {
-                    channel: Channel::Stable
-                },
-                &busy
-            ),
-            busy.hint()
-        );
+        assert_eq!(hint(&UpdateCommand::Check, &busy), busy.hint());
         assert!(busy.hint().is_some());
     }
 
@@ -935,126 +679,6 @@ mod tests {
     fn stable_booted(mut status: ServiceStatus) -> ServiceStatus {
         status.booted.image = Some("ghcr.io/apex-linux/apex:45".to_owned());
         status
-    }
-
-    #[test]
-    fn discard_says_when_the_same_update_is_locked_again() {
-        let applied = ServiceStatus {
-            staged: Deployment {
-                download_only: Some(false),
-                ..status(State::Staged).staged
-            },
-            ..status(State::ReadyForReboot)
-        };
-        let fake = Fake::changing(applied, status(State::Staged));
-        let out = run(discard(&fake)).unwrap();
-        assert_eq!(fake.calls.borrow().as_slice(), ["discard"]);
-        assert_eq!(
-            out,
-            format!(
-                "45.20260925.118 will not be installed at the next restart.\n\
-                 The update channel still offers it, so it is downloaded and locked:\n\
-                 \x20 45.20260925.118  {d}\n\
-                 To install exactly this build later: apexctl update apply --digest {d}\n\
-                 An automatic download may replace it with a newer build before then.\n",
-                d = digest('b')
-            )
-        );
-        assert!(!out.contains("stays downloaded"), "{out}");
-        assert!(!out.contains("apexctl update changes"), "{out}");
-    }
-
-    #[test]
-    fn discard_never_calls_an_unknown_digest_the_same_update() {
-        let mut applied = status(State::ReadyForReboot);
-        applied.staged.download_only = Some(false);
-        applied.staged.digest = None;
-        let mut after = status(State::Staged);
-        after.staged.digest = None;
-        let out = run(discard(&Fake::changing(applied, after))).unwrap();
-        assert!(
-            out.contains(
-                "\nThe update downloaded now is locked:\n  45.20260925.118  unknown digest\n"
-            ),
-            "{out}"
-        );
-        assert!(!out.contains("moved on"), "{out}");
-        assert!(
-            out.contains("Review it with: apexctl update changes\n"),
-            "{out}"
-        );
-        assert!(
-            out.contains("To install it later, check apexctl status, then: apexctl update apply\n"),
-            "{out}"
-        );
-        assert!(!out.contains("still offers it"), "{out}");
-    }
-
-    #[test]
-    fn discard_names_a_newer_build_that_replaced_the_applied_one() {
-        let mut applied = status(State::ReadyForReboot);
-        applied.staged.download_only = Some(false);
-        let mut replaced = status(State::Staged);
-        replaced.staged = Deployment {
-            digest: Some(digest('e')),
-            version: Some("45.20260926.119".to_owned()),
-            download_only: Some(true),
-            ..Deployment::default()
-        };
-        let out = run(discard(&Fake::changing(applied.clone(), replaced))).unwrap();
-        assert_eq!(
-            out,
-            format!(
-                "45.20260925.118 will not be installed at the next restart.\n\
-                 The update channel has moved on: cancelling downloaded its current build, which \
-                 replaced it and is locked:\n\
-                 \x20 45.20260926.119  {d}\n\
-                 Review it with: apexctl update changes\n\
-                 To install exactly this build later: apexctl update apply --digest {d}\n\
-                 An automatic download may replace it with a newer build before then.\n",
-                d = digest('e')
-            )
-        );
-
-        let mut gone = status(State::UpToDate);
-        gone.staged = Deployment::default();
-        let out = run(discard(&Fake::changing(applied, gone))).unwrap();
-        assert_eq!(
-            out,
-            "45.20260925.118 will not be installed at the next restart.\n\
-             No update is downloaded now. Download one again with: apexctl update download\n"
-        );
-    }
-
-    #[test]
-    fn a_failed_discard_says_whether_the_update_still_installs() {
-        let error = |kind| ClientError::Daemon(ApexError::new(kind, "m"));
-        let network = hint(&UpdateCommand::Discard, &error(ErrorKind::Network)).unwrap();
-        assert!(
-            network.starts_with("The update is still set to install at the next restart."),
-            "{network}"
-        );
-        assert!(network.contains("needs the network"));
-        for kind in [ErrorKind::Bootc, ErrorKind::Internal] {
-            assert_eq!(
-                hint(&UpdateCommand::Discard, &error(kind)),
-                Some(DISCARD_STATUS_HINT),
-                "{kind:?}"
-            );
-        }
-        assert!(DISCARD_STATUS_HINT.contains("apexctl status"));
-        assert_eq!(
-            hint(&UpdateCommand::Check, &error(ErrorKind::Network)),
-            None
-        );
-        let fake = Fake::new(status(State::ReadyForReboot));
-        *fake.fail_with.borrow_mut() = Some(ErrorKind::Network);
-        let failed = run(discard(&fake)).unwrap_err();
-        assert_eq!(failed.exit(), Exit::Error);
-        assert_eq!(
-            hint(&UpdateCommand::Discard, &failed),
-            Some(DISCARD_NETWORK_HINT)
-        );
     }
 
     #[test]
@@ -1121,9 +745,7 @@ mod tests {
         s.staged.download_only = Some(false);
         let out = run(check(&Fake::new(s))).unwrap();
         assert!(
-            out.ends_with(
-                "To install it instead, first cancel the applied update: apexctl update discard\n"
-            ),
+            out.ends_with("Download it after the restart that installs 45.20260925.118.\n"),
             "{out}"
         );
         let out = run(check(&Fake::new(status(State::Staged)))).unwrap();

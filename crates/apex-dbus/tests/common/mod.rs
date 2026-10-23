@@ -212,11 +212,6 @@ impl MockDaemon {
         }
     }
 
-    fn discard_staged(&self, #[zbus(header)] header: Header<'_>) -> Result<(), ApexError> {
-        self.log.call(&header);
-        Ok(())
-    }
-
     fn rollback(
         &self,
         mark_bad: bool,
@@ -236,25 +231,6 @@ impl MockDaemon {
         Ok(changes())
     }
 
-    /// Takes a raw string: zbus would reject a typed argument with a generic
-    /// `org.freedesktop.DBus.Error.InvalidArgs` instead of the contract's `InvalidArgument`.
-    fn switch_channel(
-        &self,
-        channel: &str,
-        #[zbus(header)] header: Header<'_>,
-    ) -> Result<(), ApexError> {
-        self.log.call(&header);
-        let channel: Channel = channel
-            .parse()
-            .map_err(|error: apex_dbus::UnknownValueError| {
-                ApexError::InvalidArgument(error.to_string())
-            })?;
-        match channel {
-            Channel::Testing => Ok(()),
-            Channel::Stable => Err(ApexError::NothingToDo("already on stable".to_owned())),
-        }
-    }
-
     fn acknowledge_health_failure(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -268,6 +244,8 @@ impl MockDaemon {
         Err(ApexError::NotAuthorized("uid 0 only".to_owned()))
     }
 
+    /// Takes a raw string: zbus would reject a typed argument with a generic
+    /// `org.freedesktop.DBus.Error.InvalidArgs` instead of the contract's `InvalidArgument`.
     fn report_boot(
         &self,
         verdict: &str,
@@ -347,12 +325,6 @@ impl MockDaemon {
     fn last_error(&self) -> String {
         self.log.property("LastError");
         String::new()
-    }
-
-    #[zbus(property)]
-    fn stale(&self) -> bool {
-        self.log.property("Stale");
-        true
     }
 
     #[zbus(property)]

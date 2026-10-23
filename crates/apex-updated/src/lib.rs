@@ -4,7 +4,6 @@ use std::time::Duration;
 
 pub mod auth;
 pub mod channel;
-pub mod civil;
 pub mod daemon;
 pub mod engine;
 pub mod errors;
@@ -22,9 +21,5 @@ pub mod view;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub const BINARY_PATH: &str = "/usr/libexec/apex/apex-updated";
-
-pub const IDLE_TIMEOUT: Duration = Duration::from_mins(5);
-
-pub const CHECK_RATE_LIMIT_SECS: u64 = 60;
 
 pub const REFRESH_MAX_AGE: Duration = Duration::from_secs(10);

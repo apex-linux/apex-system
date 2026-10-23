@@ -5,10 +5,9 @@ use apex_update::gates::{
     gate_disk_space, gate_intent, gate_metered, gate_power, gate_version,
 };
 use apex_update::{
-    AfterCheck, ApplyError, AutomaticPlan, Deferral, DenyEntry, DeploymentView, DiscardError,
-    DownloadError, Gate, HostView, Intent, Power, RemoteView, State, SystemSnapshot, Version,
-    derive_state, intent_is_orphaned, plan_after_check, plan_automatic, validate_apply,
-    validate_discard, validate_download,
+    AfterCheck, ApplyError, AutomaticPlan, Deferral, DenyEntry, DeploymentView, DownloadError,
+    Gate, HostView, Intent, Power, RemoteView, State, SystemSnapshot, Version, derive_state,
+    intent_is_orphaned, plan_after_check, plan_automatic, validate_apply, validate_download,
 };
 
 const V1: &str = "45.20260920.1";
@@ -96,18 +95,6 @@ fn update_from_check_to_green_boot() {
         }))
     ));
     assert_eq!(derive_state(&s), State::ReadyForReboot);
-
-    // bootc re-locks by pulling the tag, now at v3, so cancelling would download v3.
-    assert!(matches!(
-        validate_discard(&s),
-        Err(DiscardError::Gate(Deferral {
-            gate: Gate::Power,
-            ..
-        }))
-    ));
-    s.remote = Some(remote("sha256:v2", V2));
-    assert_eq!(validate_discard(&s), Ok(()));
-    s.remote = Some(remote("sha256:v3", V3));
 
     s.host.rollback = s.host.booted.take();
     s.host.booted = s.host.staged.take();
@@ -262,20 +249,8 @@ fn every_user_visible_text() {
         gate_intent(Some(&intent), &HostView::default(), Trigger::Automatic),
         gate_intent(None, &unlocked, Trigger::User),
     ];
-    let mut applied = laptop();
-    applied.host.staged = Some(deployment("sha256:v2", V2, false));
-    applied.metered = Some(true);
-    applied.remote = Some(remote("sha256:v3", V3));
-    let discard_moved = validate_discard(&applied);
-    applied.remote = None;
-    let discard_unknown = validate_discard(&applied);
-    let discards = [discard_moved, discard_unknown].map(|r| match r {
-        Err(DiscardError::Gate(d)) => Err(d),
-        other => panic!("expected a discard deferral, got {other:?}"),
-    });
     let mut lines: Vec<String> = deferrals
         .into_iter()
-        .chain(discards)
         .map(|r| {
             let d = r.expect_err("each case defers");
             format!("{:<11} {}", d.gate.as_str(), d.reason)
@@ -300,8 +275,6 @@ fn every_user_visible_text() {
         }
         .to_string(),
         DownloadError::NothingToDownload.to_string(),
-        DiscardError::NothingStaged.to_string(),
-        DiscardError::NotApplied.to_string(),
     ];
     lines.extend(errors.into_iter().map(|e| format!("{:<11} {e}", "error")));
     insta::assert_snapshot!("user_visible_texts", lines.join("\n"));

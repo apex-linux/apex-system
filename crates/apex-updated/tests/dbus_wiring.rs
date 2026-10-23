@@ -28,7 +28,7 @@ use zbus::{Connection, Guid, connection};
 /// Returns once the emitter's first signal has arrived, so later streams see only changes.
 async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
     let (server, client, first) = connect_announced(h, auth).await;
-    assert_eq!(first.len(), 12, "{first:?}");
+    assert_eq!(first.len(), 11, "{first:?}");
     (server, client)
 }
 
@@ -185,7 +185,6 @@ async fn properties_and_methods_over_the_wire() {
     assert_eq!(p.deferred_reason().await.unwrap(), "");
     assert_eq!(p.last_error().await.unwrap(), "");
     assert_eq!(p.health_failure().await.unwrap(), "");
-    assert!(!p.stale().await.unwrap());
 
     let changes = p.get_changes().await.expect("changes");
     assert!(changes.contains(&(
@@ -225,15 +224,6 @@ async fn properties_and_methods_over_the_wire() {
 async fn invalid_strings_are_invalid_arguments() {
     let h = Harness::new();
     let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
-    let channel = client
-        .call_method(
-            Some(BUS_NAME),
-            OBJECT_PATH,
-            Some(INTERFACE),
-            "SwitchChannel",
-            &("beta",),
-        )
-        .await;
     let verdict = client
         .call_method(
             Some(BUS_NAME),
@@ -243,15 +233,13 @@ async fn invalid_strings_are_invalid_arguments() {
             &("purple", ""),
         )
         .await;
-    for (member, reply) in [("SwitchChannel", channel), ("ReportBoot", verdict)] {
-        let error = ApexError::from(reply.expect_err("refused"));
-        assert_eq!(error.kind(), Some(ErrorKind::InvalidArgument), "{member}");
-        assert!(
-            error.message().contains("is not a valid"),
-            "{}",
-            error.message()
-        );
-    }
+    let error = ApexError::from(verdict.expect_err("refused"));
+    assert_eq!(error.kind(), Some(ErrorKind::InvalidArgument));
+    assert!(
+        error.message().contains("is not a valid"),
+        "{}",
+        error.message()
+    );
     h.fake.assert_finished();
 }
 
@@ -269,10 +257,6 @@ async fn callers_are_authorized() {
     }
     assert!(matches!(
         p.rollback(true).await,
-        Err(ApexError::NotAuthorized(_))
-    ));
-    assert!(matches!(
-        p.switch_channel(Channel::Testing).await,
         Err(ApexError::NotAuthorized(_))
     ));
     assert!(matches!(
@@ -353,9 +337,7 @@ async fn each_method_asks_polkit_for_its_contract_action() {
         ("Check", p.check().await),
         ("Download", p.download(false).await),
         ("Apply", p.apply(STAGED).await),
-        ("DiscardStaged", p.discard_staged().await),
         ("Rollback", p.rollback(false).await),
-        ("SwitchChannel", p.switch_channel(Channel::Testing).await),
         (
             "AcknowledgeHealthFailure",
             p.acknowledge_health_failure().await,
@@ -462,12 +444,10 @@ fn testing_booted() -> apex_bootc::BootEntry {
 
 #[tokio::test]
 async fn every_property_signals_its_changes() {
-    const DAY: u64 = 86_400;
     const REMOTE_VERSION: &str = "45.20260924.9";
     let mut state = fake_state();
-    // Sets DeferredReason and Stale.
+    // Sets DeferredReason.
     state.metered = Some(true);
-    state.now = NOW + 30 * DAY;
     let h = Harness::with(state, SharedGrubWriter::new());
     h.last_check(REMOTE, REMOTE_VERSION, 120);
     let (_server, client) = connect(&h, FakeAuthorizer::allow_all()).await;
@@ -487,7 +467,6 @@ async fn every_property_signals_its_changes() {
             "Channel",
             "LastCheck",
             "DeferredReason",
-            "Stale",
         ]
         .iter()
         .all(|name| s.contains_key(*name))
@@ -556,7 +535,7 @@ async fn every_property_signals_its_changes() {
         .into_keys()
         .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
         .collect();
-    assert_eq!(contract.len(), 12);
+    assert_eq!(contract.len(), 11);
     assert_eq!(signalled, contract);
     h.fake.assert_finished();
 }

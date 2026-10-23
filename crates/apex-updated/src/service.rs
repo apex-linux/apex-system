@@ -54,7 +54,6 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     /// The refresh lets readers see changes made outside the daemon, such as by root running
     /// bootc.
     async fn read_property<T>(&self, field: impl FnOnce(&Properties) -> T) -> T {
-        self.daemon.activity().touch();
         self.daemon.engine().first_refresh().await;
         self.daemon.refresh_if_due();
         field(&self.properties.borrow())
@@ -93,12 +92,10 @@ fn digest_argument(name: &str, value: &str) -> Result<(), ApexError> {
 #[zbus::interface(name = "io.github.apex_linux.Apex.Update1")]
 impl<R: CommandRunner + 'static> Update1Service<R> {
     async fn ping(&self) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         reply("Ping", self.daemon.ping().await)
     }
 
     async fn check(&self, #[zbus(header)] header: Header<'_>) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         reply(
             "Check",
             self.queued(&header, PolkitAction::Check, Op::Check).await,
@@ -110,7 +107,6 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
         override_soft_gates: bool,
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         let op = Op::Download {
             override_soft_gates,
         };
@@ -125,7 +121,6 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
         expected_digest: &str,
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         let result = async {
             // Arguments first, so an invalid call never shows an authentication prompt.
             digest_argument("expected digest", expected_digest)?;
@@ -140,21 +135,11 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
         reply("Apply", result.await)
     }
 
-    async fn discard_staged(&self, #[zbus(header)] header: Header<'_>) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
-        reply(
-            "DiscardStaged",
-            self.queued(&header, PolkitAction::Discard, Op::Discard)
-                .await,
-        )
-    }
-
     async fn rollback(
         &self,
         mark_bad: bool,
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         reply(
             "Rollback",
             self.queued(&header, PolkitAction::Rollback, Op::Rollback { mark_bad })
@@ -164,35 +149,15 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
 
     #[zbus(out_args("changes"))]
     async fn get_changes(&self) -> Result<Vec<Change>, ApexError> {
-        let _call = self.daemon.activity().call();
         self.daemon.engine().first_refresh().await;
         self.daemon.ensure_fresh().await;
         reply("GetChanges", self.daemon.engine().get_changes().await)
-    }
-
-    async fn switch_channel(
-        &self,
-        channel: &str,
-        #[zbus(header)] header: Header<'_>,
-    ) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
-        let result = async {
-            let channel: Channel = channel.parse().map_err(|e| invalid(&e))?;
-            self.queued(
-                &header,
-                PolkitAction::SwitchChannel,
-                Op::SwitchChannel(channel),
-            )
-            .await
-        };
-        reply("SwitchChannel", result.await)
     }
 
     async fn acknowledge_health_failure(
         &self,
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         let result = async {
             // Not `apply`: dismissing the warning must stay possible for someone who may not
             // install updates.
@@ -203,7 +168,6 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     }
 
     async fn automatic(&self, #[zbus(header)] header: Header<'_>) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         let result = async {
             require_root(self.auth.as_ref(), &header).await?;
             self.daemon.submit(Op::Automatic).await
@@ -217,7 +181,6 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
         digest: &str,
         #[zbus(header)] header: Header<'_>,
     ) -> Result<(), ApexError> {
-        let _call = self.daemon.activity().call();
         let result = async {
             let verdict: BootVerdict = verdict.parse().map_err(|e| invalid(&e))?;
             let digest = if digest.is_empty() {
@@ -296,17 +259,12 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     }
 
     #[zbus(property)]
-    async fn stale(&self) -> bool {
-        self.read_property(|p| p.stale).await
-    }
-
-    #[zbus(property)]
     async fn health_failure(&self) -> String {
         self.read_property(|p| p.health_failure.clone()).await
     }
 }
 
-/// First signals every property: client caches survive the idle exit. Built from the
+/// First signals every property: client caches survive a restart. Built from the
 /// published values, so it never waits for the interface lock a long method call holds.
 pub fn emit_property_changes(
     connection: Connection,
