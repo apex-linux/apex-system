@@ -10,8 +10,8 @@ mod values;
 pub use deployment::Deployment;
 pub use error::{ApexError, ErrorKind};
 pub use polkit::{
-    POLKIT_APPLY, POLKIT_CHECK, POLKIT_DISCARD, POLKIT_DOWNGRADE, POLKIT_DOWNLOAD, POLKIT_ROLLBACK,
-    PolkitAction, PolkitDefault,
+    POLKIT_APPLY, POLKIT_CHECK, POLKIT_DISCARD, POLKIT_DOWNLOAD, POLKIT_ROLLBACK, PolkitAction,
+    PolkitDefault,
 };
 pub use proxy::Update1Proxy;
 pub use values::{

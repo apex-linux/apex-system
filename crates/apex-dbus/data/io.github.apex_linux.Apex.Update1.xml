@@ -41,7 +41,6 @@
     io.github.apex-linux.apex.update.apply           yes
     io.github.apex-linux.apex.update.discard         yes         AcknowledgeHealthFailure
     io.github.apex-linux.apex.update.rollback        auth_admin
-    io.github.apex-linux.apex.update.downgrade       auth_admin  reserved: no method checks it
 -->
 <node>
   <interface name="io.github.apex_linux.Apex.Update1">

@@ -51,7 +51,6 @@ pub fn from_apply(error: &ApplyError) -> ApexError {
         ApplyError::DigestMismatch { expected, staged } => ApexError::DigestMismatch(format!(
             "{error} (reviewed {expected}, downloaded {staged})"
         )),
-        // A downgrade needs the `downgrade` polkit action, which no method uses yet.
         ApplyError::Downgrade { .. } => ApexError::PolicyDenied(format!(
             "{error} Installing an older version is not supported."
         )),

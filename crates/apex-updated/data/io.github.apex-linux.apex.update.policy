@@ -57,14 +57,4 @@
       <allow_active>auth_admin</allow_active>
     </defaults>
   </action>
-
-  <action id="io.github.apex-linux.apex.update.downgrade">
-    <description>Install an older system version</description>
-    <message>Authentication is required to install an older system version</message>
-    <defaults>
-      <allow_any>no</allow_any>
-      <allow_inactive>no</allow_inactive>
-      <allow_active>auth_admin</allow_active>
-    </defaults>
-  </action>
 </policyconfig>

@@ -35,18 +35,15 @@ pub enum PolkitAction {
     /// Guards `AcknowledgeHealthFailure`.
     Discard,
     Rollback,
-    /// Reserved: no method checks it yet.
-    Downgrade,
 }
 
 impl PolkitAction {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::Check,
         Self::Download,
         Self::Apply,
         Self::Discard,
         Self::Rollback,
-        Self::Downgrade,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -56,7 +53,6 @@ impl PolkitAction {
             Self::Apply => POLKIT_APPLY,
             Self::Discard => POLKIT_DISCARD,
             Self::Rollback => POLKIT_ROLLBACK,
-            Self::Downgrade => POLKIT_DOWNGRADE,
         }
     }
 
@@ -83,7 +79,7 @@ impl PolkitAction {
     pub const fn allow_active(self) -> PolkitDefault {
         match self {
             Self::Check | Self::Download | Self::Apply | Self::Discard => PolkitDefault::Yes,
-            Self::Rollback | Self::Downgrade => PolkitDefault::AuthAdmin,
+            Self::Rollback => PolkitDefault::AuthAdmin,
         }
     }
 }
@@ -99,7 +95,6 @@ pub const POLKIT_DOWNLOAD: &str = "io.github.apex-linux.apex.update.download";
 pub const POLKIT_APPLY: &str = "io.github.apex-linux.apex.update.apply";
 pub const POLKIT_DISCARD: &str = "io.github.apex-linux.apex.update.discard";
 pub const POLKIT_ROLLBACK: &str = "io.github.apex-linux.apex.update.rollback";
-pub const POLKIT_DOWNGRADE: &str = "io.github.apex-linux.apex.update.downgrade";
 
 #[cfg(test)]
 mod tests {
@@ -138,7 +133,6 @@ mod tests {
             (PolkitAction::Apply, Yes),
             (PolkitAction::Discard, Yes),
             (PolkitAction::Rollback, AuthAdmin),
-            (PolkitAction::Downgrade, AuthAdmin),
         ];
         assert_eq!(PolkitAction::ALLOW_ANY, No);
         assert_eq!(PolkitAction::ALLOW_INACTIVE, No);
