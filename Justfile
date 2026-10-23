@@ -171,6 +171,17 @@ vm-qualify:
 vm-g2 image="localhost/apex:build":
     tools/builder-vm/builder-vm.sh run tests/shots/run.sh {{ image }}
 
+# ---- Self-hosted runner: vm.yml drives the builder VM (tools/runner/README.md) ----------
+
+# The runner on this host: group, key, image, check, install, status (tools/runner/runner.sh help).
+[positional-arguments]
+runner *args:
+    tools/runner/runner.sh "$@"
+
+# Install ci-build in the builder VM and bind the runner's key to it, after just runner key.
+vm-ci-install:
+    tools/builder-vm/builder-vm.sh ci-install "${XDG_CONFIG_HOME:-$HOME/.config}/apex/runner/ssh/id_ed25519.pub"
+
 # ---- Rebuild lane: Fedora packages with Apex patches (packaging/README.md) -------------
 # snapshot.sh first commits a dirty tree in the VM copy: the lane and lane.sh build from git HEAD.
 

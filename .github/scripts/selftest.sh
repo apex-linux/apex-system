@@ -476,6 +476,80 @@ check "a G2 failure records nothing" "1:no record" \
     "$(build_gates):$([[ -e $BUILD_DIR/work/_build/gates-passed.txt ]] && echo record || echo 'no record')"
 rm -f "$BUILD_DIR/g2-rc"
 
+# --- ci-build.sh: the runner's forced command builds only 'ci-build <sha>' of main (fake git) ---
+CI_DIR="$TMP/ci-build"
+CI_SHA=$(printf 'a%.0s' {1..40})
+CI_OTHER=$(printf 'b%.0s' {1..40})
+mkdir -p "$CI_DIR/bin" "$CI_DIR/store" "$CI_DIR/home/apex-fedora/.git" "$CI_DIR/home/apex-fedora/tools/builder-vm"
+cat >"$CI_DIR/bin/git" <<'EOF'
+#!/usr/bin/env bash
+while [[ ${1:-} == -c || ${1:-} == -C ]]; do shift 2; done
+echo "$*" >>"$FAKE/git.log"
+case $1 in
+    rev-parse)
+        case $2 in
+            --git-dir) echo .git ;;
+            --is-shallow-repository) echo false ;;
+            HEAD) cat "$FAKE/head" ;;
+        esac ;;
+    cat-file) [[ $3 == "$(cat "$FAKE/main-sha")^{commit}" ]] ;;
+    merge-base) [[ $3 == "$(cat "$FAKE/main-sha")" ]] ;;
+    checkout) echo "$5" >"$FAKE/head" ;;
+esac
+EOF
+cat >"$CI_DIR/home/apex-fedora/tools/builder-vm/build-image.sh" <<'EOF'
+#!/usr/bin/env bash
+mkdir -p _build
+echo "lock-sha256 x" >_build/gates-passed.txt
+exit "$(cat "$FAKE/build-rc")"
+EOF
+cat >"$CI_DIR/home/apex-fedora/tools/builder-vm/lane.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "$*" >>"$FAKE/lane.log"
+EOF
+chmod +x "$CI_DIR/bin/git" "$CI_DIR/home/apex-fedora/tools/builder-vm/"*.sh
+printf 'old\n' >"$CI_DIR/store/rpms.lock"
+printf 'new\n' >"$CI_DIR/store/rpms.lock.next"
+ci_build() {
+    local rc=0
+    rm -f "$CI_DIR/git.log" "$CI_DIR/lane.log" "$CI_DIR/home/apex-fedora/_build/gates-passed.txt"
+    echo 0000000000000000000000000000000000000000 >"$CI_DIR/head"
+    HOME=$CI_DIR/home PATH="$CI_DIR/bin:$PATH" FAKE=$CI_DIR APEX_STORE=$CI_DIR/store \
+        "$@" bash "$APEX_ROOT/tools/builder-vm/ci-build.sh" >"$CI_DIR/out.tar" 2>"$CI_DIR/err" || rc=$?
+    printf '%s\n' "$rc"
+}
+ci_request() { ci_build env SSH_ORIGINAL_COMMAND="$1"; }
+echo "$CI_SHA" >"$CI_DIR/main-sha"
+echo 0 >"$CI_DIR/build-rc"
+for request in '' ci-build "ci-build $CI_SHA " " ci-build $CI_SHA" "ci-build  $CI_SHA" "ci-build ${CI_SHA^^}" \
+    "ci-build ${CI_SHA}a" "ci-build ${CI_SHA:1}" "ci-build $CI_SHA; touch $CI_DIR/pwned" \
+    "ci-build \$(touch $CI_DIR/pwned)" "ci-build \`touch $CI_DIR/pwned\`" $'ci-build '"$CI_SHA"$'\ntouch '"$CI_DIR/pwned" \
+    "ci-build $CI_SHA $CI_SHA" "ci-promote $CI_SHA" "ci-build HEAD" "ci-build main" "ci-build -h"; do
+    check "ci-build refuses $(printf '%q' "$request"), before any git" "2:no git" \
+        "$(ci_request "$request"):$([[ -e $CI_DIR/git.log ]] && echo git || echo 'no git')"
+done
+check_false "and evaluates none of them" test -e "$CI_DIR/pwned"
+check "ci-build refuses no SSH_ORIGINAL_COMMAND" 2 "$(ci_build env -u SSH_ORIGINAL_COMMAND)"
+check "ci-build refuses arguments: authorized_keys fixes its argv" 2 \
+    "$(HOME=$CI_DIR/home SSH_ORIGINAL_COMMAND="ci-build $CI_SHA" rc_of bash "$APEX_ROOT/tools/builder-vm/ci-build.sh" "$CI_SHA")"
+echo "$CI_OTHER" >"$CI_DIR/main-sha"
+check "ci-build refuses a commit that main does not contain, after the fetch" "2:fetched:no checkout" \
+    "$(ci_request "ci-build $CI_SHA"):$(grep -q '^fetch .*+refs/heads/main:refs/remotes/origin/main$' "$CI_DIR/git.log" && echo fetched):$(grep -q '^checkout' "$CI_DIR/git.log" && echo checkout || echo 'no checkout')"
+echo "$CI_SHA" >"$CI_DIR/main-sha"
+check "ci-build builds a commit of main" 0 "$(ci_request "ci-build $CI_SHA")"
+check "checked out at that commit, then cleaned keeping _build" "checkout -q --force --detach $CI_SHA|clean -q -ffdx -e /_build/" \
+    "$(grep -E '^(checkout|clean)' "$CI_DIR/git.log" | paste -sd'|')"
+check "and promoted the lane lock after the gates" promote "$(cat "$CI_DIR/lane.log")"
+check "stdout is the results tar" "./ci-build.txt ./gates-passed.txt ./lock.diff" \
+    "$(tar -tf "$CI_DIR/out.tar" | grep -v '^\./$' | sort | paste -sd' ')"
+check "ci-build.txt names the commit and the promotion" "sha $CI_SHA|build-image 0|promote passed|exit 0" \
+    "$(tar -xOf "$CI_DIR/out.tar" ./ci-build.txt | grep -Ev '^(started|finished) ' | paste -sd'|')"
+echo 1 >"$CI_DIR/build-rc"
+check "a failed build exits with its status and promotes nothing" "1:no promotion" \
+    "$(ci_request "ci-build $CI_SHA"):$([[ -e $CI_DIR/lane.log ]] && echo promotion || echo 'no promotion')"
+check "and still returns its results" "build-image 1|exit 1" \
+    "$(tar -xOf "$CI_DIR/out.tar" ./ci-build.txt | grep -E '^(build-image|exit) ' | paste -sd'|')"
+
 # --- qualify.sh: QMP over a unix socket ----------------------------------------------------
 QMP_DIR="$TMP/qmp"
 mkdir -p "$QMP_DIR"
