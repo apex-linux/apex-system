@@ -45,8 +45,6 @@ pub(crate) fn file_checks(root: &Path) -> Vec<Box<dyn Check>> {
     ]
 }
 
-const MANIFEST_PATH: &str = "/usr/share/apex/manifest.json";
-
 #[derive(Deserialize)]
 struct ManifestMajor {
     #[serde(default)]
@@ -55,7 +53,7 @@ struct ManifestMajor {
 
 /// The booted image's Fedora major, from its own manifest.
 pub(crate) fn fedora_major(root: &Path) -> Result<u32, String> {
-    let path = under(root, MANIFEST_PATH);
+    let path = under(root, nvidia::MANIFEST_PATH);
     let bytes = fs::read(&path).map_err(|err| describe_read_error(&path, &err))?;
     match serde_json::from_slice::<ManifestMajor>(&bytes) {
         Ok(ManifestMajor { fedora: 0 }) => Err(format!("{} names no Fedora major", path.display())),
@@ -582,7 +580,7 @@ headset-mic
     #[test]
     fn the_major_comes_from_the_booted_manifest() {
         let root = tempfile::tempdir().unwrap();
-        let manifest = under(root.path(), MANIFEST_PATH);
+        let manifest = under(root.path(), nvidia::MANIFEST_PATH);
         assert!(
             fedora_major(root.path())
                 .unwrap_err()
