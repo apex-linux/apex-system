@@ -307,6 +307,34 @@ pub async fn changes<S: UpdateService>(service: &S) -> Result<String, ClientErro
     Ok(out)
 }
 
+/// `GetChangesFor`: the deployment of `digest`, staged or the rollback, against the booted one.
+pub async fn changes_for<S: UpdateService>(
+    service: &S,
+    digest: &str,
+) -> Result<String, ClientError> {
+    let status = service.status().await?;
+    let changes = service.changes_for(digest).await.map_err(changes_error)?;
+    if status.booted.digest.as_deref() == Some(digest) {
+        return Err(ClientError::NothingToDo(format!(
+            "{} is the running version, so there are no package changes to show.",
+            short_digest(digest)
+        )));
+    }
+    let target = [&status.staged, &status.rollback]
+        .into_iter()
+        .find(|deployment| deployment.digest.as_deref() == Some(digest))
+        .map_or_else(|| short_digest(digest), version_of);
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "Changes from {} to {target} ({digest})",
+        version_of(&status.booted)
+    );
+    let _ = writeln!(out);
+    out.push_str(&render_changes(&changes));
+    Ok(out)
+}
+
 /// `Busy` from `GetChanges` means the service has not read the system yet, not that another
 /// operation runs.
 fn changes_error(error: ClientError) -> ClientError {
@@ -497,6 +525,15 @@ mod tests {
         fn changes(&self) -> impl Future<Output = Result<Vec<Change>, ClientError>> {
             ready(self.call("changes".into()).map(|()| self.changes.clone()))
         }
+        fn changes_for(
+            &self,
+            digest: &str,
+        ) -> impl Future<Output = Result<Vec<Change>, ClientError>> {
+            ready(
+                self.call(format!("changes_for({digest})"))
+                    .map(|()| self.changes.clone()),
+            )
+        }
         fn acknowledge_health_failure(&self) -> impl Future<Output = Result<(), ClientError>> {
             ready(self.call("acknowledge".into()))
         }
@@ -661,6 +698,47 @@ mod tests {
         assert!(
             out.contains("  upgraded    glibc.i686  2.42-3 → 2.42-4\n"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn changes_for_names_the_other_version() {
+        let mut s = status(State::UpToDate);
+        s.last_fallback = digest('c');
+        let mut fake = Fake::new(s);
+        fake.changes = vec![(
+            "mutter".into(),
+            "x86_64".into(),
+            "downgraded".into(),
+            "51.1-1".into(),
+            "51.0-1".into(),
+        )];
+        let out = run(changes_for(&fake, &digest('c'))).unwrap();
+        assert_eq!(
+            fake.calls.borrow().as_slice(),
+            [format!("changes_for({})", digest('c'))]
+        );
+        assert!(
+            out.starts_with(&format!(
+                "Changes from 45.20260924.117 to 45.20260920.110 ({})\n\n",
+                digest('c')
+            )),
+            "{out}"
+        );
+        assert!(out.contains("mutter"), "{out}");
+    }
+
+    #[test]
+    fn changes_for_the_running_version_or_an_unknown_digest_is_refused() {
+        let fake = Fake::new(status(State::UpToDate));
+        let error = run(changes_for(&fake, &digest('a'))).unwrap_err();
+        assert_eq!(error.exit(), Exit::NothingToDo);
+        let fake = Fake::new(status(State::UpToDate));
+        *fake.fail_with.borrow_mut() = Some(ErrorKind::InvalidArgument);
+        let error = run(changes_for(&fake, &digest('e'))).unwrap_err();
+        assert!(
+            matches!(&error, ClientError::Daemon(e) if e.kind() == Some(ErrorKind::InvalidArgument)),
+            "{error}"
         );
     }
 
@@ -1004,7 +1082,10 @@ mod tests {
             "Cannot list the package changes now. refused"
         );
         assert!(!error.to_string().contains("another update operation"));
-        assert_eq!(hint(&UpdateCommand::Changes, &error), None);
+        assert_eq!(
+            hint(&UpdateCommand::Changes { for_digest: None }, &error),
+            None
+        );
 
         let fake = Fake::new(unknown);
         *fake.fail_with.borrow_mut() = Some(ErrorKind::Internal);
@@ -1015,7 +1096,7 @@ mod tests {
             "internal error in apex-updated: cannot list the package changes: refused"
         );
         assert!(
-            hint(&UpdateCommand::Changes, &error)
+            hint(&UpdateCommand::Changes { for_digest: None }, &error)
                 .is_some_and(|h| h.contains("journalctl -u apex-updated")),
             "{error}"
         );

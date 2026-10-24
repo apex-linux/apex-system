@@ -39,6 +39,7 @@ pub trait UpdateService {
     fn apply(&self, expected_digest: &str) -> impl Future<Output = Result<(), ClientError>>;
     fn rollback(&self, mark_bad: bool) -> impl Future<Output = Result<(), ClientError>>;
     fn changes(&self) -> impl Future<Output = Result<Vec<Change>, ClientError>>;
+    fn changes_for(&self, digest: &str) -> impl Future<Output = Result<Vec<Change>, ClientError>>;
     fn acknowledge_health_failure(&self) -> impl Future<Output = Result<(), ClientError>>;
     fn automatic(&self) -> impl Future<Output = Result<(), ClientError>>;
     fn set_automatic_downloads(
@@ -311,6 +312,10 @@ impl UpdateService for DbusService {
 
     async fn changes(&self) -> Result<Vec<Change>, ClientError> {
         Ok(self.proxy.get_changes().await?)
+    }
+
+    async fn changes_for(&self, digest: &str) -> Result<Vec<Change>, ClientError> {
+        Ok(self.proxy.get_changes_for(digest).await?)
     }
 
     async fn acknowledge_health_failure(&self) -> Result<(), ClientError> {

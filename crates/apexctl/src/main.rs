@@ -147,7 +147,10 @@ async fn update_command(command: UpdateCommand) -> anyhow::Result<Exit> {
         UpdateCommand::Download { force } => update::download(&service, *force).await,
         UpdateCommand::Apply { digest } => update::apply(&service, digest.as_deref()).await,
         UpdateCommand::Rollback { mark_bad } => update::rollback(&service, *mark_bad).await,
-        UpdateCommand::Changes => update::changes(&service).await,
+        UpdateCommand::Changes { for_digest: None } => update::changes(&service).await,
+        UpdateCommand::Changes {
+            for_digest: Some(digest),
+        } => update::changes_for(&service, digest).await,
         UpdateCommand::Acknowledge => update::acknowledge(&service).await,
         UpdateCommand::Automatic => update::automatic(&service).await,
         UpdateCommand::Auto { setting } => update::auto(&service, *setting).await,
