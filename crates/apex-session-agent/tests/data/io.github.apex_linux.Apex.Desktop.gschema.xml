@@ -101,6 +101,15 @@
         shows again.
       </description>
     </key>
+    <key name="lower-refresh-rate-on-battery" type="b">
+      <default>true</default>
+      <summary>Lower the refresh rate on battery</summary>
+      <description>
+        apex-session-agent switches the built-in panel to its lowest refresh rate of 60 Hz
+        or more at the current resolution while on battery, and back to the highest rate
+        when plugged in. Settings' Power panel writes it.
+      </description>
+    </key>
   </schema>
   <schema id="io.github.apex_linux.Apex.Desktop.Keybindings"
           path="/io/github/apex_linux/apex/desktop/keybindings/">

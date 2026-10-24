@@ -1,10 +1,11 @@
 use std::process::ExitCode;
 
 use apex_session_agent::agent::Agent;
+use apex_session_agent::display::RefreshRate;
 use apex_session_agent::notifications::DbusNotifier;
 use apex_session_agent::paths::Paths;
 use apex_session_agent::update1;
-use apex_session_agent::{INTERFACE_SCHEMA_ID, SCHEMA_ID};
+use apex_session_agent::{INTERFACE_SCHEMA_ID, REFRESH_KEY, SCHEMA_ID};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
@@ -41,18 +42,30 @@ fn main() -> ExitCode {
         .map(|schema| gio::Settings::new_full(&schema, gio::SettingsBackend::NONE, None));
     let notifier = DbusNotifier::new(connection.clone());
     let agent = Agent::start(
-        settings,
+        settings.clone(),
         interface,
         paths,
-        Box::new(DbusNotifier::new(connection)),
+        Box::new(DbusNotifier::new(connection.clone())),
     );
     let _subscriptions = notifier.subscribe(&agent);
-    let _update1 = match gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) {
-        Ok(system) => Some(update1::subscribe(&system, &agent)),
-        Err(error) => {
-            tracing::warn!(%error, "cannot connect to the system bus: no \"Updates Ready\"");
-            None
-        }
+    let system = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE)
+        .inspect_err(|error| {
+            tracing::warn!(%error, "cannot connect to the system bus: no \"Updates Ready\", no refresh rate");
+        })
+        .ok();
+    let _update1 = system
+        .as_ref()
+        .map(|system| update1::subscribe(system, &agent));
+    let _refresh = if schema.has_key(REFRESH_KEY) {
+        Some(RefreshRate::start(
+            settings,
+            REFRESH_KEY,
+            connection,
+            system.as_ref(),
+        ))
+    } else {
+        tracing::warn!("the Apex schema has no {REFRESH_KEY}: the refresh rate stays as it is");
+        None
     };
     glib::MainLoop::new(None, false).run();
     ExitCode::SUCCESS

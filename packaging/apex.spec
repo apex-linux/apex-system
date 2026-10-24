@@ -63,7 +63,8 @@ system components:
   update that does not come up.
 - apex-session-agent: a user service that writes the GTK window radius file and the
   Ptyxis palette whose caret is the accent, offers to turn the Apex desktop back on
-  after the shell crash guard trips, and posts "Updates Ready" once per staged update.
+  after the shell crash guard trips, posts "Updates Ready" once per staged update, and
+  lowers the built-in panel's refresh rate on battery.
 - apexctl: the command-line client, and the build and hardware tools used by the image
   build.
 
