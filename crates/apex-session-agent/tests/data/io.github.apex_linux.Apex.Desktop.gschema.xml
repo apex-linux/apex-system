@@ -93,6 +93,14 @@
       <summary>Show recent files in Files</summary>
       <description>Show a strip of recent files above the Files view.</description>
     </key>
+    <key name="search-hint-shown" type="b">
+      <default>false</default>
+      <summary>Search hint shown</summary>
+      <description>
+        Set by the shell once it has shown "Press Super+Space to search"; the hint never
+        shows again.
+      </description>
+    </key>
   </schema>
   <schema id="io.github.apex_linux.Apex.Desktop.Keybindings"
           path="/io/github/apex_linux/apex/desktop/keybindings/">
