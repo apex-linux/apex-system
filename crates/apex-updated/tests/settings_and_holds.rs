@@ -7,7 +7,8 @@
 mod common;
 
 use apex_bootc::{BootcCommand, Scripted};
-use apex_dbus::{Hold, State, Stock};
+use apex_dbus::{BootVerdict, ErrorKind, Hold, State, Stock};
+use apex_update::{HealthFailureRecord, StateStore as _};
 use apex_updated::queue::Op;
 use apex_updated::store::Store as _;
 use common::*;
@@ -170,5 +171,93 @@ async fn last_fallback_is_set_kept_and_cleared() {
         .expect("acknowledge");
     assert_eq!(h.properties().last_fallback, "");
     assert_eq!(h.store.read_fallback().unwrap(), None);
+    h.fake.assert_finished();
+}
+
+#[tokio::test(start_paused = true)]
+async fn changes_for_the_staged_or_the_rollback_deployment() {
+    let h = Harness::new();
+    let engine = h.daemon.engine();
+    assert_eq!(
+        engine.get_changes_for(STAGED).await.unwrap_err().kind(),
+        Some(ErrorKind::Busy),
+        "the state is unknown"
+    );
+    h.refresh(&host(booted(), Some(staged(true)), Some(rollback())))
+        .await;
+    assert_eq!(
+        engine.get_changes_for(STAGED).await.unwrap(),
+        engine.get_changes().await.unwrap()
+    );
+    let removed: Vec<(String, String)> = engine
+        .get_changes_for(ROLLBACK)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(name, _, kind, _, _)| (name, kind))
+        .collect();
+    assert_eq!(
+        removed,
+        [
+            ("bash".to_owned(), "removed".to_owned()),
+            ("kernel".to_owned(), "removed".to_owned()),
+        ],
+        "the rollback image lists no packages"
+    );
+    assert_eq!(engine.get_changes_for(BOOTED).await.unwrap(), []);
+    let error = engine.get_changes_for(REMOTE).await.unwrap_err();
+    assert_eq!(error.kind(), Some(ErrorKind::InvalidArgument));
+    h.fake.assert_finished();
+}
+
+#[tokio::test(start_paused = true)]
+async fn health_failure_checks_come_from_the_record_and_clear_with_it() {
+    let h = Harness::new();
+    let current = host(booted(), None, Some(rollback()));
+    h.refresh(&current).await;
+    let record = |digest: &str| HealthFailureRecord {
+        digest: digest.into(),
+        failed_checks: vec!["session".into(), "audio".into()],
+        at: NOW,
+    };
+    h.store.write_health_failure(&record(BOOTED)).unwrap();
+    let engine = h.daemon.engine();
+    engine
+        .report_boot(BootVerdict::Red, Some(BOOTED))
+        .expect("red");
+    assert_eq!(h.properties().health_failure_checks, ["session", "audio"]);
+
+    let h = h.reboot(NOW + 60);
+    h.refresh(&current).await;
+    assert_eq!(
+        h.properties().health_failure_checks,
+        ["session", "audio"],
+        "read back at refresh"
+    );
+    h.daemon
+        .engine()
+        .report_boot(BootVerdict::Green, Some(BOOTED))
+        .expect("green");
+    assert!(h.properties().health_failure_checks.is_empty());
+
+    h.store.write_health_failure(&record(ROLLBACK)).unwrap();
+    h.daemon
+        .engine()
+        .report_boot(BootVerdict::Red, Some(BOOTED))
+        .expect("red");
+    assert_eq!(h.properties().health_failure, BOOTED);
+    assert!(
+        h.properties().health_failure_checks.is_empty(),
+        "the record named another digest"
+    );
+    assert_eq!(
+        h.store.read_health_failure().unwrap().map(|r| r.digest),
+        Some(BOOTED.to_owned())
+    );
+    h.daemon
+        .engine()
+        .acknowledge_health_failure()
+        .expect("acknowledge");
+    assert!(h.properties().health_failure_checks.is_empty());
     h.fake.assert_finished();
 }

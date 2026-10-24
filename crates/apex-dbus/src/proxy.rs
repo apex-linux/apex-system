@@ -27,6 +27,9 @@ pub trait Update1 {
     #[zbus(name = "GetChanges")]
     fn get_changes(&self) -> Result<Vec<Change>, ApexError>;
 
+    #[zbus(name = "GetChangesFor")]
+    fn get_changes_for(&self, digest: &str) -> Result<Vec<Change>, ApexError>;
+
     #[zbus(name = "AcknowledgeHealthFailure", allow_interactive_auth)]
     fn acknowledge_health_failure(&self) -> Result<(), ApexError>;
 
@@ -72,11 +75,17 @@ pub trait Update1 {
     #[zbus(property, name = "HealthFailure")]
     fn health_failure(&self) -> zbus::Result<String>;
 
+    #[zbus(property, name = "HealthFailureChecks")]
+    fn health_failure_checks(&self) -> zbus::Result<Vec<String>>;
+
     #[zbus(property, name = "LastFallback")]
     fn last_fallback(&self) -> zbus::Result<String>;
 
     #[zbus(property, name = "AutomaticDownloads")]
     fn automatic_downloads(&self) -> zbus::Result<bool>;
+
+    #[zbus(property, name = "Kept")]
+    fn kept(&self) -> zbus::Result<Vec<Deployment>>;
 }
 
 #[cfg(test)]

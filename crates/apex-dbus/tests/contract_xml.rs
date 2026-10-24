@@ -166,9 +166,15 @@ fn polkit_guards_match_the_xml() {
         .map(|method| method.name().to_string())
         .filter(|name| PolkitAction::guarding(name).is_none())
         .collect();
-    let expected: BTreeSet<String> = ["Ping", "GetChanges", "Automatic", "ReportBoot"]
-        .map(str::to_owned)
-        .into();
+    let expected: BTreeSet<String> = [
+        "Ping",
+        "GetChanges",
+        "GetChangesFor",
+        "Automatic",
+        "ReportBoot",
+    ]
+    .map(str::to_owned)
+    .into();
     assert_eq!(unguarded, expected);
 }
 

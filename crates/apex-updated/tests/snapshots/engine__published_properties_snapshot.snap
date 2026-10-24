@@ -112,6 +112,8 @@ Properties {
     deferred_reason: "",
     last_error: "",
     health_failure: "",
+    health_failure_checks: [],
     last_fallback: "",
     automatic_downloads: true,
+    kept: [],
 }

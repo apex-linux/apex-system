@@ -158,6 +158,7 @@ mod tests {
             ("Apply", Some(PolkitAction::Apply)),
             ("Rollback", Some(PolkitAction::Rollback)),
             ("GetChanges", None),
+            ("GetChangesFor", None),
             ("AcknowledgeHealthFailure", Some(PolkitAction::Discard)),
             ("Automatic", None),
             ("ReportBoot", None),

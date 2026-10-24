@@ -99,7 +99,7 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 | `intent.json` | `{ "digest": "sha256:…", "created": <unix seconds> }`, present only between `Apply` and the boot assessment of that digest |
 | `denylist.json` | `{ "digests": [ { "digest": "sha256:…", "reason": "…", "at": <unix seconds> } ] }` |
 | `last-check.json` | `{ "at": <unix>, "remote_digest": "sha256:…" or null, "remote_version": "…" or null, "remote_size": <bytes> or null }`; `remote_size` is the new-layer size `bootc upgrade --check` printed, rounded, and becomes `download-size` |
-| `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; removed by `AcknowledgeHealthFailure` and by a green boot |
+| `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; published as `HealthFailure` and `HealthFailureChecks`; removed by `AcknowledgeHealthFailure` and by a green boot |
 | `settings.json` | `{ "automatic_downloads": true or false }`, written by `SetAutomaticDownloads`; a missing file or key means true |
 | `last-fallback.json` | `{ "digest": "sha256:…", "at": <unix> }`, written when a `fallback` report denylists a digest (`LastFallback`); removed by `AcknowledgeHealthFailure` |
 | `force-red` | qualification hook only: a root-owned regular file (mode 0600, at most 4 KiB) holding one digest; when it names the booted digest, `apex-boot-assess` adds the failing required check `forced-red` |

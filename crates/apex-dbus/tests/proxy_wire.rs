@@ -89,6 +89,17 @@ async fn every_method_matches_the_contract_on_the_wire() {
         proxy.get_changes().await.expect("GetChanges"),
         common::changes()
     );
+    assert_eq!(
+        proxy
+            .get_changes_for(STAGED_DIGEST)
+            .await
+            .expect("GetChangesFor"),
+        common::changes()
+    );
+    assert!(matches!(
+        proxy.get_changes_for("sha256:00").await,
+        Err(ApexError::InvalidArgument(_))
+    ));
     proxy
         .acknowledge_health_failure()
         .await
@@ -165,6 +176,14 @@ async fn every_property_matches_the_contract_on_the_wire() {
     );
     assert_eq!(proxy.last_error().await.expect("LastError"), "");
     assert_eq!(proxy.health_failure().await.expect("HealthFailure"), "");
+    assert_eq!(
+        proxy
+            .health_failure_checks()
+            .await
+            .expect("HealthFailureChecks"),
+        ["session"]
+    );
+    assert_eq!(proxy.kept().await.expect("Kept"), [common::kept()]);
     assert_eq!(
         proxy.last_fallback().await.expect("LastFallback"),
         STAGED_DIGEST
