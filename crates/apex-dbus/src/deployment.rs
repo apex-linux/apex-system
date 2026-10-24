@@ -20,6 +20,8 @@ pub struct Deployment {
     pub download_only: Option<bool>,
     /// From the deployment's own manifest, so absent for `Available`.
     pub degraded: Option<Vec<String>>,
+    /// Lane families kept at their last good build, from the deployment's own manifest.
+    pub held: Option<Vec<String>>,
 }
 
 const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedVariant> as Type>::SIGNATURE;
@@ -32,8 +34,9 @@ impl Deployment {
     pub const PINNED: &'static str = "pinned";
     pub const DOWNLOAD_ONLY: &'static str = "download-only";
     pub const DEGRADED: &'static str = "degraded";
+    pub const HELD: &'static str = "held";
 
-    pub const KEYS: [(&'static str, &'static Signature); 7] = [
+    pub const KEYS: [(&'static str, &'static Signature); 8] = [
         (Self::IMAGE, <String as Type>::SIGNATURE),
         (Self::DIGEST, <String as Type>::SIGNATURE),
         (Self::VERSION, <String as Type>::SIGNATURE),
@@ -41,6 +44,7 @@ impl Deployment {
         (Self::PINNED, <bool as Type>::SIGNATURE),
         (Self::DOWNLOAD_ONLY, <bool as Type>::SIGNATURE),
         (Self::DEGRADED, <Vec<String> as Type>::SIGNATURE),
+        (Self::HELD, <Vec<String> as Type>::SIGNATURE),
     ];
 
     pub fn is_empty(&self) -> bool {
@@ -65,6 +69,7 @@ impl Deployment {
                 Self::PINNED => deployment.pinned = Some(boolean(key, value)?),
                 Self::DOWNLOAD_ONLY => deployment.download_only = Some(boolean(key, value)?),
                 Self::DEGRADED => deployment.degraded = Some(string_array(key, value)?),
+                Self::HELD => deployment.held = Some(string_array(key, value)?),
                 _ => {}
             }
         }
@@ -143,6 +148,7 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
             pinned,
             download_only,
             degraded,
+            held,
         } = deployment;
         let text = |value: String| OwnedVariant::from(Str::from(value));
         let entries = [
@@ -156,6 +162,7 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
                 download_only.map(OwnedVariant::from),
             ),
             (Deployment::DEGRADED, degraded.map(owned_string_array)),
+            (Deployment::HELD, held.map(owned_string_array)),
         ];
         entries
             .into_iter()
@@ -258,6 +265,7 @@ mod tests {
             pinned: Some(false),
             download_only: Some(true),
             degraded: Some(vec!["audio".to_owned()]),
+            held: Some(vec!["gnome-shell".to_owned()]),
         }
     }
 
@@ -273,16 +281,20 @@ mod tests {
             option::of(any::<bool>()),
             option::of(any::<bool>()),
             option::of(vec(TEXT, 0..4)),
+            option::of(vec(TEXT, 0..4)),
         )
             .prop_map(
-                |(image, digest, version, timestamp, pinned, download_only, degraded)| Deployment {
-                    image,
-                    digest,
-                    version,
-                    timestamp,
-                    pinned,
-                    download_only,
-                    degraded,
+                |(image, digest, version, timestamp, pinned, download_only, degraded, held)| {
+                    Deployment {
+                        image,
+                        digest,
+                        version,
+                        timestamp,
+                        pinned,
+                        download_only,
+                        degraded,
+                        held,
+                    }
                 },
             )
     }
@@ -308,7 +320,8 @@ mod tests {
                 "timestamp:t",
                 "pinned:b",
                 "download-only:b",
-                "degraded:as"
+                "degraded:as",
+                "held:as"
             ]
         );
         assert_eq!(Deployment::SIGNATURE.to_string(), "a{sv}");
@@ -386,6 +399,15 @@ mod tests {
             error.to_string(),
             "Deployment: expected D-Bus type a{sv}, found a{ss}"
         );
+    }
+
+    #[test]
+    fn a_dict_without_held_reads_as_unknown() {
+        let mut map = HashMap::<String, OwnedVariant>::from(full());
+        map.remove(Deployment::HELD);
+        let deployment = Deployment::try_from(map).unwrap();
+        assert_eq!(deployment.held, None);
+        assert_eq!(deployment.degraded, full().degraded);
     }
 
     #[test]

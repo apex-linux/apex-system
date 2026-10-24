@@ -9,9 +9,11 @@ Booted     45.20260924.117  built 2026-09-24
            sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 Staged     45.20260925.7  built 2026-09-24  locked: not used at the next boot
            sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+           held: none
            from the testing channel (signed with the CI key, not qualified for stable)
 Rollback   45.20260920.110  built 2026-09-24
            sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 Channel    stable (running image)
 Checked    2026-09-24 09:00 UTC
 Degraded   audio: the speaker fix is not available yet
+Held       gnome-shell

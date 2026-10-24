@@ -10,6 +10,9 @@ expression: json
     ],
     "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "download_only": null,
+    "held": [
+      "gnome-shell"
+    ],
     "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
     "timestamp": 1790208000,
@@ -21,6 +24,9 @@ expression: json
     "audio"
   ],
   "health_failure": null,
+  "held": [
+    "gnome-shell"
+  ],
   "last_check": 1790240400,
   "last_error": null,
   "progress": null,
@@ -30,6 +36,9 @@ expression: json
     ],
     "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "download_only": null,
+    "held": [
+      "gnome-shell"
+    ],
     "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
     "timestamp": 1790208000,
@@ -40,6 +49,7 @@ expression: json
     "degraded": [],
     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "download_only": true,
+    "held": [],
     "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
     "timestamp": 1790208000,

@@ -1192,6 +1192,11 @@ async fn changes_between_booted_and_staged_manifests() {
     let properties = h.properties();
     assert_eq!(properties.staged.version.as_deref(), Some(STAGED_VERSION));
     assert_eq!(properties.staged.degraded, Some(vec!["audio".to_owned()]));
+    assert_eq!(
+        properties.staged.held,
+        Some(vec!["gnome-shell".to_owned(), "nautilus".to_owned()]),
+        "sorted and deduplicated"
+    );
     h.fake.assert_finished();
 }
 

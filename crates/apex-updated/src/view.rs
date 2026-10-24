@@ -62,6 +62,12 @@ pub fn deployment_dict(
         pinned: Some(entry.pinned),
         download_only: staged.then_some(entry.download_only),
         degraded: manifest.map(|m| m.degraded.clone()),
+        held: manifest.map(|m| {
+            let mut held = m.held.clone();
+            held.sort();
+            held.dedup();
+            held
+        }),
     }
 }
 

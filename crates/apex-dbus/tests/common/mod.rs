@@ -81,6 +81,7 @@ pub(crate) fn booted() -> Deployment {
         pinned: Some(false),
         download_only: None,
         degraded: Some(vec!["audio".to_owned()]),
+        held: Some(vec!["gnome-shell".to_owned()]),
     }
 }
 
@@ -93,6 +94,7 @@ pub(crate) fn staged() -> Deployment {
         pinned: Some(false),
         download_only: Some(true),
         degraded: Some(Vec::new()),
+        held: Some(Vec::new()),
     }
 }
 
