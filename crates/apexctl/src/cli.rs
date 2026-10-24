@@ -244,8 +244,8 @@ pub enum BuildCommand {
             long = "degraded",
             value_name = "X",
             help = concat!(
-                "A component shipped degraded (audio, fingerprint, nvidia, shell); repeat for ",
-                "several"
+                "A component shipped degraded (audio, fingerprint, nvidia, shell, terminal); ",
+                "repeat for several"
             )
         )]
         degraded: Vec<String>,
