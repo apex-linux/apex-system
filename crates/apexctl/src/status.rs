@@ -27,6 +27,8 @@ meaning until \"schema\" changes.
   last_error       message of the last failed update operation, or null
   health_failure   digest of the update that failed its health checks, or null
   degraded         components shipped degraded in the running image, e.g. [\"audio\"]
+  held             lane families held at their last good build in the running image,
+                   e.g. [\"gnome-shell\"]
   booted, staged, rollback, available
                    a deployment, or null when there is none
 
@@ -37,7 +39,8 @@ A deployment has these keys, each null when unknown:
   timestamp        build time, Unix seconds
   pinned           true or false
   download_only    staged only: true while the update is locked (not used at the next boot)
-  degraded         components shipped degraded in that image, e.g. [\"audio\"]";
+  degraded         components shipped degraded in that image, e.g. [\"audio\"]
+  held             lane families held at their last good build in that image";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeploymentJson {
@@ -48,6 +51,7 @@ pub struct DeploymentJson {
     pub pinned: Option<bool>,
     pub download_only: Option<bool>,
     pub degraded: Option<Vec<String>>,
+    pub held: Option<Vec<String>>,
 }
 
 impl DeploymentJson {
@@ -61,6 +65,7 @@ impl DeploymentJson {
             pinned: d.pinned,
             download_only: d.download_only,
             degraded: d.degraded,
+            held: d.held,
         })
     }
 }
@@ -76,6 +81,7 @@ pub struct StatusJson {
     pub last_error: Option<String>,
     pub health_failure: Option<String>,
     pub degraded: Vec<String>,
+    pub held: Vec<String>,
     pub booted: Option<DeploymentJson>,
     pub staged: Option<DeploymentJson>,
     pub rollback: Option<DeploymentJson>,
@@ -103,6 +109,7 @@ impl StatusJson {
             last_error: non_empty(&status.last_error),
             health_failure: non_empty(&status.health_failure),
             degraded: status.booted.degraded.clone().unwrap_or_default(),
+            held: status.booted.held.clone().unwrap_or_default(),
             booted: DeploymentJson::from_deployment(&status.booted),
             staged: DeploymentJson::from_deployment(&status.staged),
             rollback: DeploymentJson::from_deployment(&status.rollback),
@@ -319,6 +326,14 @@ fn deployment_line(deployment: &Deployment) -> String {
     parts.join("  ")
 }
 
+fn held_list(held: &[String]) -> String {
+    if held.is_empty() {
+        "none".to_owned()
+    } else {
+        held.join(", ")
+    }
+}
+
 fn row(out: &mut String, label: &str, value: &str) {
     let _ = writeln!(out, "{label:<10} {value}");
 }
@@ -338,6 +353,11 @@ fn deployment_rows(
     if let Some(digest) = &deployment.digest {
         // In full: users compare it by eye with CI runs, and 12 hex digits are only 48 bits.
         row(out, "", digest);
+    }
+    if let Some(held) = &deployment.held
+        && deployment.held != booted.held
+    {
+        row(out, "", &format!("held: {}", held_list(held)));
     }
     if let Some(origin) = other_origin(booted, deployment) {
         row(out, "", &format!("from {origin}"));
@@ -399,6 +419,9 @@ pub fn render_status(status: &ServiceStatus) -> String {
                 &format!("{component}: {}", degraded_meaning(component)),
             );
         }
+    }
+    if let Some(held) = &status.booted.held {
+        row(&mut out, "Held", &held_list(held));
     }
 
     let mut notes = Vec::new();
@@ -530,6 +553,7 @@ pub(crate) mod tests {
             pinned: Some(false),
             download_only: None,
             degraded: Some(vec!["audio".to_owned()]),
+            held: Some(vec!["gnome-shell".to_owned()]),
         }
     }
 
@@ -541,6 +565,7 @@ pub(crate) mod tests {
             staged: Deployment {
                 download_only: Some(true),
                 degraded: Some(Vec::new()),
+                held: Some(Vec::new()),
                 ..deployment("45.20260925.118", 'b')
             },
             rollback: deployment("45.20260920.110", 'c'),
@@ -743,6 +768,39 @@ pub(crate) mod tests {
             let full = format!("sha256:{}", String::from(c).repeat(64));
             assert!(text.contains(&format!("\n           {full}\n")), "{text}");
         }
+    }
+
+    #[test]
+    fn held_families_are_listed_for_booted_and_where_another_image_differs() {
+        let mut status = staged_status();
+        status.booted.held = Some(vec!["gnome-shell".to_owned(), "libadwaita".to_owned()]);
+        status.rollback.held = status.booted.held.clone();
+        status.staged.held = Some(vec!["libadwaita".to_owned()]);
+        let text = render_status(&status);
+        assert!(
+            text.contains("\nHeld       gnome-shell, libadwaita\n"),
+            "{text}"
+        );
+        assert_eq!(text.matches("held: ").count(), 1, "{text}");
+        assert!(text.contains("\n           held: libadwaita\n"), "{text}");
+
+        status.booted.held = Some(Vec::new());
+        status.staged.held = Some(Vec::new());
+        status.rollback.held = Some(vec!["gnome-shell".to_owned()]);
+        let text = render_status(&status);
+        assert!(text.contains("\nHeld       none\n"), "{text}");
+        assert!(text.contains("\n           held: gnome-shell\n"), "{text}");
+    }
+
+    #[test]
+    fn an_older_service_without_held_prints_no_held_row() {
+        let mut status = staged_status();
+        for deployment in [&mut status.booted, &mut status.staged, &mut status.rollback] {
+            deployment.held = None;
+        }
+        let text = render_status(&status);
+        assert!(!text.contains("Held") && !text.contains("held:"), "{text}");
+        assert_eq!(StatusJson::new(&status).held, Vec::<String>::new());
     }
 
     #[test]

@@ -12,6 +12,7 @@ Available  45.20260925.118  built 2026-09-24
 Channel    stable (running image)
 Checked    never
 Degraded   audio: the speaker fix is not available yet
+Held       gnome-shell
 
 The automatic download is waiting: On battery below 50 %
 Last error: bootc failed: no space

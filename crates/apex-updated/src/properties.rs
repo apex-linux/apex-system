@@ -69,7 +69,11 @@ impl Properties {
             {
                 *text = display_text(text);
             }
-            for text in deployment.degraded.iter_mut().flatten() {
+            let lists = deployment
+                .degraded
+                .iter_mut()
+                .chain(deployment.held.iter_mut());
+            for text in lists.flatten() {
                 *text = display_text(text);
             }
         }

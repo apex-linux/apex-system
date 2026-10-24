@@ -23,6 +23,9 @@
     "download-only"  b   staged only: locked, will not boot
     "degraded"       as  components shipped degraded, from the deployment's own manifest,
                          so absent for Available
+    "held"           as  lane families kept at their last good build, from the same
+                         manifest, so absent for Available; a later "hold-since" a{st}
+                         (family to Unix seconds) will carry the kernel hold's clock
 
   Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting

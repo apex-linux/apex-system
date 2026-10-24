@@ -27,6 +27,12 @@ Properties {
                 "audio",
             ],
         ),
+        held: Some(
+            [
+                "gnome-shell",
+                "nautilus",
+            ],
+        ),
     },
     staged: Deployment {
         image: None,
@@ -36,6 +42,7 @@ Properties {
         pinned: None,
         download_only: None,
         degraded: None,
+        held: None,
     },
     rollback: Deployment {
         image: Some(
@@ -59,6 +66,12 @@ Properties {
                 "audio",
             ],
         ),
+        held: Some(
+            [
+                "gnome-shell",
+                "nautilus",
+            ],
+        ),
     },
     available: Deployment {
         image: Some(
@@ -74,6 +87,7 @@ Properties {
         pinned: None,
         download_only: None,
         degraded: None,
+        held: None,
     },
     channel: Stable,
     last_check: 1790299880,
