@@ -10,7 +10,8 @@ use apex_boot::checks::grub_cfg::{GRUB_CFG_PATH, GrubCfgCurrentCheck};
 use apex_boot::checks::names;
 use apex_boot::nvidia::{self, DiscreteGpu};
 use apex_boot::{Check, CheckOutcome, CheckResult, FnCheck};
-use apex_bootc::{APEX_STABLE, APEX_TESTING, ImageSignature};
+use apex_bootc::{ImageSignature, apex_stable, apex_testing};
+use serde::Deserialize;
 
 use crate::cli::under;
 use crate::ports::BootedImage;
@@ -44,10 +45,30 @@ pub(crate) fn file_checks(root: &Path) -> Vec<Box<dyn Check>> {
     ]
 }
 
-pub(crate) fn image_source(booted: &Result<BootedImage, String>) -> CheckResult {
+#[derive(Deserialize)]
+struct ManifestMajor {
+    #[serde(default)]
+    fedora: u32,
+}
+
+/// The booted image's Fedora major, from its own manifest.
+pub(crate) fn fedora_major(root: &Path) -> Result<u32, String> {
+    let path = under(root, nvidia::MANIFEST_PATH);
+    let bytes = fs::read(&path).map_err(|err| describe_read_error(&path, &err))?;
+    match serde_json::from_slice::<ManifestMajor>(&bytes) {
+        Ok(ManifestMajor { fedora: 0 }) => Err(format!("{} names no Fedora major", path.display())),
+        Ok(ManifestMajor { fedora }) => Ok(fedora),
+        Err(err) => Err(format!("{} is not valid: {err}", path.display())),
+    }
+}
+
+pub(crate) fn image_source(
+    booted: &Result<BootedImage, String>,
+    fedora_major: &Result<u32, String>,
+) -> CheckResult {
     let outcome = match booted {
         Err(err) => Err(format!("bootc status failed: {err}")),
-        Ok(booted) => evaluate_image_source(booted),
+        Ok(booted) => evaluate_image_source(booted, fedora_major),
     };
     CheckResult {
         name: names::IMAGE_SOURCE.to_owned(),
@@ -55,7 +76,10 @@ pub(crate) fn image_source(booted: &Result<BootedImage, String>) -> CheckResult 
     }
 }
 
-fn evaluate_image_source(booted: &BootedImage) -> Result<(), String> {
+fn evaluate_image_source(
+    booted: &BootedImage,
+    fedora_major: &Result<u32, String>,
+) -> Result<(), String> {
     let Some(image) = booted.image.as_deref() else {
         return Err("bootc reports no booted container image".to_owned());
     };
@@ -66,12 +90,20 @@ fn evaluate_image_source(booted: &BootedImage) -> Result<(), String> {
             booted.transport.as_deref().unwrap_or("unknown")
         ));
     }
-    let expected = [APEX_STABLE.to_string(), APEX_TESTING.to_string()];
-    if !expected.iter().any(|e| e == image) {
-        problems.push(format!(
-            "image {image} is neither {} nor {}",
-            expected[0], expected[1]
-        ));
+    match fedora_major {
+        Ok(major) => {
+            let expected = [
+                apex_stable(*major).to_string(),
+                apex_testing(*major).to_string(),
+            ];
+            if !expected.iter().any(|e| e == image) {
+                problems.push(format!(
+                    "image {image} is neither {} nor {}",
+                    expected[0], expected[1]
+                ));
+            }
+        }
+        Err(why) => problems.push(format!("the channel tags are unknown: {why}")),
     }
     if booted.signature != Some(ImageSignature::ContainerPolicy) {
         problems.push(format!(
@@ -483,18 +515,24 @@ headset-mic
             "ghcr.io/apex-linux/apex:45",
             "ghcr.io/apex-linux/apex-testing:45",
         ] {
-            let ok = image_source(&Ok(booted(
-                image,
-                "registry",
-                Some(ImageSignature::ContainerPolicy),
-            )));
+            let ok = image_source(
+                &Ok(booted(
+                    image,
+                    "registry",
+                    Some(ImageSignature::ContainerPolicy),
+                )),
+                &Ok(45),
+            );
             assert_eq!(ok, CheckResult::pass(names::IMAGE_SOURCE));
         }
-        let bad = image_source(&Ok(booted(
-            "quay.io/fedora/fedora-bootc:45",
-            "oci",
-            Some(ImageSignature::Insecure),
-        )));
+        let bad = image_source(
+            &Ok(booted(
+                "quay.io/fedora/fedora-bootc:45",
+                "oci",
+                Some(ImageSignature::Insecure),
+            )),
+            &Ok(45),
+        );
         assert_eq!(
             bad.outcome.to_string(),
             "fail: transport is oci, not registry; image quay.io/fedora/fedora-bootc:45 is \
@@ -502,16 +540,66 @@ headset-mic
              signature mode is insecure, not containerPolicy"
         );
         assert_eq!(
-            image_source(&Ok(BootedImage::default()))
+            image_source(&Ok(BootedImage::default()), &Ok(45))
                 .outcome
                 .to_string(),
             "fail: bootc reports no booted container image"
         );
         assert_eq!(
-            image_source(&Err("not root".to_owned()))
+            image_source(&Err("not root".to_owned()), &Ok(45))
                 .outcome
                 .to_string(),
             "fail: bootc status failed: not root"
+        );
+    }
+
+    #[test]
+    fn the_channel_tags_follow_the_booted_major() {
+        let verified =
+            |image: &str| booted(image, "registry", Some(ImageSignature::ContainerPolicy));
+        let on_46 = image_source(&Ok(verified("ghcr.io/apex-linux/apex-testing:46")), &Ok(46));
+        assert_eq!(on_46, CheckResult::pass(names::IMAGE_SOURCE));
+        assert_eq!(
+            image_source(&Ok(verified("ghcr.io/apex-linux/apex:45")), &Ok(46))
+                .outcome
+                .to_string(),
+            "fail: image ghcr.io/apex-linux/apex:45 is neither ghcr.io/apex-linux/apex:46 nor \
+             ghcr.io/apex-linux/apex-testing:46"
+        );
+        assert_eq!(
+            image_source(
+                &Ok(verified("ghcr.io/apex-linux/apex:45")),
+                &Err("no manifest".to_owned())
+            )
+            .outcome
+            .to_string(),
+            "fail: the channel tags are unknown: no manifest"
+        );
+    }
+
+    #[test]
+    fn the_major_comes_from_the_booted_manifest() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = under(root.path(), nvidia::MANIFEST_PATH);
+        assert!(
+            fedora_major(root.path())
+                .unwrap_err()
+                .starts_with("cannot read")
+        );
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(&manifest, r#"{"schema": 1, "fedora": 45, "packages": []}"#).unwrap();
+        assert_eq!(fedora_major(root.path()), Ok(45));
+        fs::write(&manifest, r#"{"schema": 1}"#).unwrap();
+        assert!(
+            fedora_major(root.path())
+                .unwrap_err()
+                .ends_with("names no Fedora major")
+        );
+        fs::write(&manifest, "{").unwrap();
+        assert!(
+            fedora_major(root.path())
+                .unwrap_err()
+                .contains("is not valid")
         );
     }
 

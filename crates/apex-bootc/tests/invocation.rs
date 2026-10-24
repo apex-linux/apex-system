@@ -7,8 +7,8 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use apex_bootc::{
-    APEX_STABLE, APEX_STABLE_REPOSITORY, APEX_TESTING, BOOTC_PROGRAM, BootcCommand, CommandKind,
-    ENVIRONMENT, ImageRef, ImageRefError, OSTREE_PROGRAM, Program,
+    APEX_STABLE_REPOSITORY, BOOTC_PROGRAM, BootcCommand, CommandKind, ENVIRONMENT, ImageRef,
+    ImageRefError, OSTREE_PROGRAM, Program, apex_stable, apex_testing,
 };
 
 const PINNED: &str = "sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0";
@@ -24,10 +24,10 @@ fn all_commands() -> Vec<BootcCommand> {
         BootcCommand::UpgradeFromDownloaded,
         BootcCommand::Rollback,
         BootcCommand::SwitchDownloadOnly {
-            target: APEX_STABLE,
+            target: apex_stable(45),
         },
         BootcCommand::SwitchDownloadOnly {
-            target: APEX_TESTING,
+            target: apex_testing(45),
         },
         BootcCommand::SwitchDownloadOnly {
             target: ImageRef::at_digest(APEX_STABLE_REPOSITORY, PINNED).unwrap(),
@@ -152,4 +152,19 @@ fn runtime_input_is_limited_to_a_validated_digest() {
         ImageRef::try_from_static("--apply/x"),
         Err(ImageRefError::BadStart)
     );
+}
+
+#[test]
+fn a_switch_to_the_next_major_names_its_tag() {
+    let argv = |target: ImageRef| {
+        BootcCommand::SwitchDownloadOnly { target }
+            .argv()
+            .last()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(argv(apex_stable(46)), "ghcr.io/apex-linux/apex:46");
+    assert_eq!(argv(apex_testing(46)), "ghcr.io/apex-linux/apex-testing:46");
 }

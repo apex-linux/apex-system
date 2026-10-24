@@ -17,10 +17,10 @@ mod time;
 pub use check::{CheckOutcome, parse_check_output};
 pub use client::Bootc;
 pub use command::{
-    APEX_STABLE, APEX_STABLE_REPOSITORY, APEX_TESTING, APEX_TESTING_REPOSITORY, BOOTC_PROGRAM,
-    BootcCommand, CHECK_TIMEOUT, CommandKind, DOWNLOAD_TIMEOUT, ENVIRONMENT, ImageRef,
-    ImageRefError, OSTREE_OVERRIDE_ENV, OSTREE_PROGRAM, OTHER_TIMEOUT, POLICY_JSON,
-    PROGRAM_OVERRIDE_ENV, PROGRESS_FD, Program, STATUS_TIMEOUT, ostree_program, program,
+    APEX_STABLE_REPOSITORY, APEX_TESTING_REPOSITORY, BOOTC_PROGRAM, BootcCommand, CHECK_TIMEOUT,
+    CommandKind, DOWNLOAD_TIMEOUT, ENVIRONMENT, ImageRef, ImageRefError, OSTREE_OVERRIDE_ENV,
+    OSTREE_PROGRAM, OTHER_TIMEOUT, POLICY_JSON, PROGRAM_OVERRIDE_ENV, PROGRESS_FD, Program,
+    STATUS_TIMEOUT, apex_stable, apex_testing, ostree_program, program,
 };
 pub use digest::{Digest, DigestError};
 pub use download::{DownloadOutcome, parse_download_output};
