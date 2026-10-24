@@ -12,7 +12,7 @@ pub const RPM_QUERY_FORMAT: &str = "%{NAME}\\t%{EPOCHNUM}\\t%{VERSION}\\t%{RELEA
 
 pub const IMAGE_NAME: &str = "apex";
 
-pub const DEGRADED_COMPONENTS: &[&str] = &["audio", "fingerprint", "nvidia", "shell"];
+pub const DEGRADED_COMPONENTS: &[&str] = &["audio", "fingerprint", "nvidia", "shell", "terminal"];
 
 /// rpm lists imported signing keys as packages of this name.
 const GPG_PUBKEY: &str = "gpg-pubkey";
@@ -27,7 +27,9 @@ pub enum ManifestBuildError {
     Revision(String),
     #[error("base image {0:?} is not pinned by digest (<repository>@sha256:<64 hex digits>)")]
     Base(String),
-    #[error("unknown degraded component {0:?} (known: audio, fingerprint, nvidia, shell)")]
+    #[error(
+        "unknown degraded component {0:?} (known: audio, fingerprint, nvidia, shell, terminal)"
+    )]
     Degraded(String),
     #[error("held family {0:?} is not a package name ([a-z0-9][a-z0-9._+-]*)")]
     Held(String),
@@ -319,7 +321,7 @@ kernel-core\t0\t7.2.9\t300.fc45\tx86_64
         assert!(with(|i| i.held.push(String::new())).contains("held family"));
         assert!(with(|i| i.held.push("-x".into())).contains("-x"));
         let mut shell = input();
-        shell.degraded = vec!["shell".to_owned()];
+        shell.degraded = vec!["shell".to_owned(), "terminal".to_owned()];
         shell.held = vec!["kernel-cachyos".to_owned(), "libadwaita".to_owned()];
         assert!(
             build(&shell, Vec::new()).is_ok(),
