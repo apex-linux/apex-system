@@ -1,0 +1,20 @@
+---
+source: crates/apex-updated/tests/hold_drill.rs
+expression: render_status(&status)
+---
+An update is downloaded and waiting.
+Use it at the next restart with: apexctl update apply
+
+Booted     45.20260920.1  built 2026-09-24
+           sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Staged     45.20260924.3  built 2026-09-24  locked: not used at the next boot
+           sha256:5555555555555555555555555555555555555555555555555555555555555555
+           held: gnome-control-center
+Rollback   45.20260918.1  built 2026-09-24
+           sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+           held: gnome-shell, nautilus
+Channel    stable (running image)
+Checked    never
+Downloads  automatic
+Degraded   none
+Held       none

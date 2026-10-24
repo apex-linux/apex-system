@@ -1,0 +1,15 @@
+---
+source: crates/apex-updated/tests/hold_drill.rs
+expression: text
+---
+Apex is up to date.
+
+Booted     45.20260924.3  built 2026-09-24
+           sha256:5555555555555555555555555555555555555555555555555555555555555555
+Rollback   45.20260920.1  built 2026-09-24
+           sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Channel    stable (running image)
+Checked    never
+Downloads  automatic
+Degraded   none
+Held       gnome-control-center, held since 2026-10-20 04:10 UTC, limit 2026-11-03 04:10 UTC
