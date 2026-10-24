@@ -1,0 +1,14 @@
+---
+source: crates/apexctl/src/status.rs
+expression: text
+---
+Apex is up to date.
+
+Booted     45.20261206.145  built 2026-09-24
+           sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Channel    stable (running image)
+Checked    2026-09-24 09:00 UTC
+Downloads  automatic
+Degraded   nvidia: no NVIDIA driver
+Held       none
+Stock      kernel-cachyos: break-glass: just image KERNEL=fedora, Fedora's kernel without the NVIDIA set

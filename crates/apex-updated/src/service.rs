@@ -154,6 +154,17 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
         reply("GetChanges", self.daemon.engine().get_changes().await)
     }
 
+    #[zbus(out_args("changes"))]
+    async fn get_changes_for(&self, digest: &str) -> Result<Vec<Change>, ApexError> {
+        let result = async {
+            digest_argument("digest", digest)?;
+            self.daemon.engine().first_refresh().await;
+            self.daemon.ensure_fresh().await;
+            self.daemon.engine().get_changes_for(digest).await
+        };
+        reply("GetChangesFor", result.await)
+    }
+
     async fn acknowledge_health_failure(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -278,6 +289,12 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     }
 
     #[zbus(property)]
+    async fn health_failure_checks(&self) -> Vec<String> {
+        self.read_property(|p| p.health_failure_checks.clone())
+            .await
+    }
+
+    #[zbus(property)]
     async fn last_fallback(&self) -> String {
         self.read_property(|p| p.last_fallback.clone()).await
     }
@@ -285,6 +302,11 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     #[zbus(property)]
     async fn automatic_downloads(&self) -> bool {
         self.read_property(|p| p.automatic_downloads).await
+    }
+
+    #[zbus(property)]
+    async fn kept(&self) -> Vec<Deployment> {
+        self.read_property(|p| p.kept.clone()).await
     }
 }
 

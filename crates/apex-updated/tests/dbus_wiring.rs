@@ -17,6 +17,7 @@ use apex_dbus::{
 };
 use apex_updated::queue::Op;
 use apex_updated::service::{Update1Service, emit_property_changes};
+use apex_updated::store::Store as _;
 use apex_updated::testing::{FakeAuthorizer, SharedGrubWriter};
 use common::*;
 use zbus::OwnedVariant;
@@ -28,7 +29,7 @@ use zbus::{Connection, Guid, connection};
 /// Returns once the emitter's first signal has arrived, so later streams see only changes.
 async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
     let (server, client, first) = connect_announced(h, auth).await;
-    assert_eq!(first.len(), 13, "{first:?}");
+    assert_eq!(first.len(), 15, "{first:?}");
     (server, client)
 }
 
@@ -236,6 +237,12 @@ async fn invalid_strings_are_invalid_arguments() {
         "{}",
         error.message()
     );
+    let error = proxy(&client)
+        .await
+        .get_changes_for("latest")
+        .await
+        .expect_err("refused before any state is read");
+    assert_eq!(error.kind(), Some(ErrorKind::InvalidArgument), "{error}");
     h.fake.assert_finished();
 }
 
@@ -446,7 +453,8 @@ fn testing_booted() -> apex_bootc::BootEntry {
     entry
 }
 
-/// `HealthFailure`, `AutomaticDownloads` and `LastFallback`, after a download staged `staged`.
+/// `HealthFailure` with its checks, `AutomaticDownloads` and `LastFallback`, after a
+/// download staged `staged`.
 async fn warning_and_setting_signals(
     h: &Harness,
     p: &Update1Proxy<'static>,
@@ -454,17 +462,30 @@ async fn warning_and_setting_signals(
     seen: &mut Seen,
     staged: apex_bootc::BootEntry,
 ) {
+    h.store
+        .write_health_failure(&apex_update::HealthFailureRecord {
+            digest: BOOTED.into(),
+            failed_checks: vec!["session".into()],
+            at: NOW,
+        })
+        .unwrap();
     p.report_boot(BootVerdict::Red, BOOTED).await.expect("red");
     watch_until(stream, seen, |s| {
         texts(s, "HealthFailure").last().map(String::as_str) == Some(BOOTED)
+            && s.contains_key("HealthFailureChecks")
     })
     .await;
+    assert_eq!(
+        p.health_failure_checks().await.expect("checks"),
+        ["session"]
+    );
     p.acknowledge_health_failure().await.expect("acknowledge");
     watch_until(stream, seen, |s| {
         texts(s, "HealthFailure").last().map(String::as_str) == Some("")
     })
     .await;
     assert_eq!(texts(seen, "HealthFailure"), [BOOTED, ""]);
+    assert!(p.health_failure_checks().await.expect("checks").is_empty());
     assert_eq!(
         texts(seen, "State").last().map(String::as_str),
         Some("staged")
@@ -564,8 +585,10 @@ async fn every_property_signals_its_changes() {
         .into_keys()
         .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
         .collect();
-    assert_eq!(contract.len(), 13);
-    assert_eq!(signalled, contract);
+    assert_eq!(contract.len(), 15);
+    // Only the pin-before-arm change fills Kept; properties.rs tests its signal.
+    let expected: BTreeSet<String> = contract.into_iter().filter(|name| name != "Kept").collect();
+    assert_eq!(signalled, expected);
     h.fake.assert_finished();
 }
 

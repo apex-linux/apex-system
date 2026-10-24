@@ -25,15 +25,21 @@
                          so absent for Available
     "held"           as  lane families kept at their last good build, from the same
                          manifest, so absent for Available
-    "holds"          a(sstbt) one record per held family, from the deployment's lane lock
+    "holds"          a(sstbts) one record per held family, from the deployment's lane lock
                          (/usr/share/apex/rpms.lock), so absent for Available: family; the
                          newer Fedora builds it holds back from, comma-separated, "" when
                          unknown; held since, Unix seconds, 0 when unknown; whether the
                          newer builds carry a security update, false when unknown; the
-                         hold's limit, Unix seconds, 0 when unknown
+                         hold's limit, Unix seconds, 0 when unknown; the side that failed,
+                         kernel or kmod for the kernel pair, "" otherwise
     "download-size"  t   Available and Staged only: bytes of layers not present yet, from
                          the check that found the image; bootc rounds it to one decimal
                          (1.2 GB, so about 50 MB either way); 0 when unknown
+    "stock"          a(ss) one record per family shipped as Fedora's build, from the same
+                         lane lock: family, and the lock's reason ("" when none), such as
+                         the break-glass image's break-glass: ...
+    "pin-reason"     s   only on a deployment apex-updated pinned itself, why: the booted
+                         deployment was unconfirmed or failed when an update was applied
 
   Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting
@@ -93,6 +99,10 @@
          AcknowledgeHealthFailure or a green boot. -->
     <property name="HealthFailure" type="s" access="read"/>
 
+    <!-- The names of the required checks that failed for HealthFailure, from
+         apex-boot-assess, e.g. "session"; empty when unknown, and cleared with it. -->
+    <property name="HealthFailureChecks" type="as" access="read"/>
+
     <!-- The digest a "fallback" ReportBoot denylisted (the update did not start), or "";
          cleared by AcknowledgeHealthFailure. -->
     <property name="LastFallback" type="s" access="read"/>
@@ -100,6 +110,10 @@
     <!-- Whether Automatic downloads what its check finds; true unless the user turned it
          off. Off, Automatic still checks and publishes Available. -->
     <property name="AutomaticDownloads" type="b" access="read"/>
+
+    <!-- Deployments apex-updated pinned itself (each with "pin-reason") that are not
+         Booted, Staged or Rollback, so they show only in the boot menu; empty if none. -->
+    <property name="Kept" type="aa{sv}" access="read"/>
 
     <!-- Liveness probe for the boot health check, no polkit check; Internal when bootc
          cannot be used. -->
@@ -133,7 +147,15 @@
       <arg name="changes" type="a(sssss)" direction="out"/>
     </method>
 
-    <!-- Clears HealthFailure and LastFallback. -->
+    <!-- GetChanges' rows from the booted deployment to the Staged or Rollback one whose
+         digest is given, such as LastFallback's; empty for the booted digest.
+         InvalidArgument for any other digest. -->
+    <method name="GetChangesFor">
+      <arg name="digest" type="s" direction="in"/>
+      <arg name="changes" type="a(sssss)" direction="out"/>
+    </method>
+
+    <!-- Clears HealthFailure, HealthFailureChecks and LastFallback. -->
     <method name="AcknowledgeHealthFailure"/>
 
     <!-- Persisted across restarts; setting the current value again succeeds. -->

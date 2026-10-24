@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use zbus::{Optional, OwnedVariant, Signature, Str, Type, Variant};
 
-/// One held lane family, `(sstbt)` on the wire.
+/// One held lane family, `(sstbts)` on the wire.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Hold {
     pub family: String,
@@ -16,9 +16,21 @@ pub struct Hold {
     pub security: bool,
     /// Unix seconds when the hold reaches its limit; 0 when unknown.
     pub limit: u64,
+    /// `"kernel"` or `"kmod"` for the kernel pair, `""` otherwise.
+    pub side: String,
 }
 
-type HoldTuple = (String, String, u64, bool, u64);
+type HoldTuple = (String, String, u64, bool, u64, String);
+
+/// A family the owner shipped as Fedora's build, `(ss)` on the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Stock {
+    pub family: String,
+    /// Why, as the lane lock says it, e.g. `break-glass: …`; `""` when it says nothing.
+    pub reason: String,
+}
+
+type StockTuple = (String, String);
 
 use crate::values::ValueError;
 
@@ -40,9 +52,13 @@ pub struct Deployment {
     pub held: Option<Vec<String>>,
     /// From the deployment's lane lock, so absent for `Available`.
     pub holds: Option<Vec<Hold>>,
+    /// From the same lane lock.
+    pub stock: Option<Vec<Stock>>,
     /// `Available` and `Staged` only: bytes still to download as the check found them, 0
     /// when unknown.
     pub download_size: Option<u64>,
+    /// Only on a deployment apex-updated pinned itself: why it did.
+    pub pin_reason: Option<String>,
 }
 
 const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedVariant> as Type>::SIGNATURE;
@@ -58,8 +74,10 @@ impl Deployment {
     pub const HELD: &'static str = "held";
     pub const HOLDS: &'static str = "holds";
     pub const DOWNLOAD_SIZE: &'static str = "download-size";
+    pub const STOCK: &'static str = "stock";
+    pub const PIN_REASON: &'static str = "pin-reason";
 
-    pub const KEYS: [(&'static str, &'static Signature); 10] = [
+    pub const KEYS: [(&'static str, &'static Signature); 12] = [
         (Self::IMAGE, <String as Type>::SIGNATURE),
         (Self::DIGEST, <String as Type>::SIGNATURE),
         (Self::VERSION, <String as Type>::SIGNATURE),
@@ -70,6 +88,8 @@ impl Deployment {
         (Self::HELD, <Vec<String> as Type>::SIGNATURE),
         (Self::HOLDS, <Vec<HoldTuple> as Type>::SIGNATURE),
         (Self::DOWNLOAD_SIZE, <u64 as Type>::SIGNATURE),
+        (Self::STOCK, <Vec<StockTuple> as Type>::SIGNATURE),
+        (Self::PIN_REASON, <String as Type>::SIGNATURE),
     ];
 
     pub fn is_empty(&self) -> bool {
@@ -97,6 +117,8 @@ impl Deployment {
                 Self::HELD => deployment.held = Some(string_array(key, value)?),
                 Self::HOLDS => deployment.holds = Some(holds(key, value)?),
                 Self::DOWNLOAD_SIZE => deployment.download_size = Some(uint64(key, value)?),
+                Self::STOCK => deployment.stock = Some(stock(key, value)?),
+                Self::PIN_REASON => deployment.pin_reason = Some(string(key, value)?),
                 _ => {}
             }
         }
@@ -181,12 +203,14 @@ fn holds(key: &str, value: &Variant<'_>) -> Result<Vec<Hold>, ValueError> {
                     Variant::U64(since),
                     Variant::Bool(security),
                     Variant::U64(limit),
+                    Variant::Str(side),
                 ] => Ok(Hold {
                     family: family.as_str().to_owned(),
                     newer: newer.as_str().to_owned(),
                     since: *since,
                     security: *security,
                     limit: *limit,
+                    side: side.as_str().to_owned(),
                 }),
                 _ => Err(wrong()),
             }
@@ -197,8 +221,37 @@ fn holds(key: &str, value: &Variant<'_>) -> Result<Vec<Hold>, ValueError> {
 fn owned_holds(holds: Vec<Hold>) -> OwnedVariant {
     let tuples: Vec<HoldTuple> = holds
         .into_iter()
-        .map(|h| (h.family, h.newer, h.since, h.security, h.limit))
+        .map(|h| (h.family, h.newer, h.since, h.security, h.limit, h.side))
         .collect();
+    OwnedVariant::from(Optional::from(Some(tuples)))
+}
+
+fn stock(key: &str, value: &Variant<'_>) -> Result<Vec<Stock>, ValueError> {
+    let expected = <Vec<StockTuple> as Type>::SIGNATURE;
+    let wrong = || ValueError::wrong_type(field(key), expected, value);
+    let Variant::Array(array) = value else {
+        return Err(wrong());
+    };
+    if array.signature() != expected {
+        return Err(wrong());
+    }
+    array
+        .iter()
+        .map(|element| match element {
+            Variant::Structure(record) => match record.fields() {
+                [Variant::Str(family), Variant::Str(reason)] => Ok(Stock {
+                    family: family.as_str().to_owned(),
+                    reason: reason.as_str().to_owned(),
+                }),
+                _ => Err(wrong()),
+            },
+            _ => Err(wrong()),
+        })
+        .collect()
+}
+
+fn owned_stock(stock: Vec<Stock>) -> OwnedVariant {
+    let tuples: Vec<StockTuple> = stock.into_iter().map(|s| (s.family, s.reason)).collect();
     OwnedVariant::from(Optional::from(Some(tuples)))
 }
 
@@ -220,7 +273,9 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
             degraded,
             held,
             holds,
+            stock,
             download_size,
+            pin_reason,
         } = deployment;
         let text = |value: String| OwnedVariant::from(Str::from(value));
         let entries = [
@@ -240,6 +295,8 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
                 Deployment::DOWNLOAD_SIZE,
                 download_size.map(OwnedVariant::from),
             ),
+            (Deployment::STOCK, stock.map(owned_stock)),
+            (Deployment::PIN_REASON, pin_reason.map(text)),
         ];
         entries
             .into_iter()
@@ -349,21 +406,34 @@ mod tests {
                 since: 1_791_000_000,
                 security: true,
                 limit: 1_792_209_600,
+                side: String::new(),
+            }]),
+            stock: Some(vec![Stock {
+                family: "kernel-cachyos".to_owned(),
+                reason: "break-glass: Fedora's kernel".to_owned(),
             }]),
             download_size: Some(1_200_000_000),
+            pin_reason: Some("the booted deployment was never confirmed".to_owned()),
         }
     }
 
     fn hold_strategy() -> impl Strategy<Value = Hold> {
-        (TEXT, TEXT, any::<u64>(), any::<bool>(), any::<u64>()).prop_map(
-            |(family, newer, since, security, limit)| Hold {
+        (
+            TEXT,
+            TEXT,
+            any::<u64>(),
+            any::<bool>(),
+            any::<u64>(),
+            "(kernel|kmod)?",
+        )
+            .prop_map(|(family, newer, since, security, limit, side)| Hold {
                 family,
                 newer,
                 since,
                 security,
                 limit,
-            },
-        )
+                side,
+            })
     }
 
     /// D-Bus strings cannot contain NUL.
@@ -380,7 +450,9 @@ mod tests {
             option::of(vec(TEXT, 0..4)),
             option::of(vec(TEXT, 0..4)),
             option::of(vec(hold_strategy(), 0..3)),
+            option::of(vec((TEXT, TEXT), 0..3)),
             option::of(any::<u64>()),
+            option::of(TEXT),
         )
             .prop_map(
                 |(
@@ -393,7 +465,9 @@ mod tests {
                     degraded,
                     held,
                     holds,
+                    stock,
                     download_size,
+                    pin_reason,
                 )| Deployment {
                     image,
                     digest,
@@ -404,7 +478,14 @@ mod tests {
                     degraded,
                     held,
                     holds,
+                    stock: stock.map(|pairs| {
+                        pairs
+                            .into_iter()
+                            .map(|(family, reason)| Stock { family, reason })
+                            .collect()
+                    }),
                     download_size,
+                    pin_reason,
                 },
             )
     }
@@ -432,8 +513,10 @@ mod tests {
                 "download-only:b",
                 "degraded:as",
                 "held:as",
-                "holds:a(sstbt)",
-                "download-size:t"
+                "holds:a(sstbts)",
+                "download-size:t",
+                "stock:a(ss)",
+                "pin-reason:s"
             ]
         );
         assert_eq!(Deployment::SIGNATURE.to_string(), "a{sv}");
@@ -522,7 +605,7 @@ mod tests {
             OwnedVariant::from(Optional::from(Some(wrong))),
         );
         let error = Deployment::try_from(map).unwrap_err();
-        assert!(error.to_string().contains("a(sstbt)"), "{error}");
+        assert!(error.to_string().contains("a(sstbts)"), "{error}");
     }
 
     #[test]

@@ -12,7 +12,7 @@ use apex_boot::{
     check_arming, disarm_ops,
 };
 use apex_bootc::{BootEntry, Bootc, CancelToken, CommandRunner, DownloadOutcome, Host};
-use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind, Hold};
+use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind};
 use apex_update::state::is_available;
 use apex_update::{
     AfterCheck, ApplyError, AutomaticPlan, DenyEntry, FallbackRecord, HealthFailureRecord,
@@ -26,7 +26,7 @@ use tokio::time::Instant;
 use crate::REFRESH_MAX_AGE;
 use crate::channel::channel_of_image;
 use crate::errors::{self, from_bootc, from_store};
-use crate::lane_lock;
+use crate::lane_lock::{self, LaneLock};
 use crate::properties::{self, Properties, Work};
 use crate::providers::{
     ASSESS_UNIT, BOOT, BOOT_COMPLETE_UNIT, FileError, GrubEnvSource, ManifestSource, Providers,
@@ -160,17 +160,17 @@ struct ManifestCache {
     running: RunningManifest,
     /// By ostree commit checksum, which names the content.
     deployments: HashMap<String, Option<Arc<Manifest>>>,
-    running_holds: RunningHolds,
+    running_lock: RunningLock,
     /// `None` when the image has no lane lock.
-    deployment_holds: HashMap<String, Option<Vec<Hold>>>,
+    deployment_locks: HashMap<String, Option<LaneLock>>,
 }
 
 /// `Read(None)` when the running image has no lane lock.
 #[derive(Debug, Clone, Default)]
-enum RunningHolds {
+enum RunningLock {
     #[default]
     NotRead,
-    Read(Option<Vec<Hold>>),
+    Read(Option<LaneLock>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -195,6 +195,8 @@ struct EngineState {
     last_error: String,
     settings: UpdateSettings,
     last_fallback: Option<String>,
+    /// health-failure.json's, kept with its digest in the snapshot.
+    health_failure_checks: Vec<String>,
 }
 
 pub struct Engine<R> {
@@ -512,13 +514,13 @@ impl<R: CommandRunner> Engine<R> {
                 return Err(mapped);
             }
         };
-        match self.store.read_settings() {
-            Ok(settings) => state.settings = settings,
-            Err(error) => {
-                tracing::warn!(error = %errors::with_sources(&error), "ignoring settings.json");
-            }
-        }
+        self.load_settings(&mut state);
         state.last_fallback = records.fallback.map(|record| record.digest);
+        state.health_failure_checks = records
+            .health
+            .as_ref()
+            .map(|record| record.failed_checks.clone())
+            .unwrap_or_default();
         let file_check = self.store.read_last_check().unwrap_or_else(|error| {
             tracing::warn!(error = %errors::with_sources(&error), "ignoring last-check.json");
             LastCheck::default()
@@ -564,7 +566,7 @@ impl<R: CommandRunner> Engine<R> {
             .retain(|checksum, _| keep.contains(checksum));
         state
             .manifests
-            .deployment_holds
+            .deployment_locks
             .retain(|checksum, _| keep.contains(checksum));
         state.host = Some(host);
         state.snapshot = Some(snapshot);
@@ -577,6 +579,16 @@ impl<R: CommandRunner> Engine<R> {
         self.publish();
         self.mark_settled();
         Ok(())
+    }
+
+    /// Not worth failing a refresh over.
+    fn load_settings(&self, state: &mut EngineState) {
+        match self.store.read_settings() {
+            Ok(settings) => state.settings = settings,
+            Err(error) => {
+                tracing::warn!(error = %errors::with_sources(&error), "ignoring settings.json");
+            }
+        }
     }
 
     async fn running_manifest(&self) -> Result<Option<Arc<Manifest>>, FileError> {
@@ -618,20 +630,24 @@ impl<R: CommandRunner> Engine<R> {
     }
 
     async fn attach_holds(&self, host: &Host, summary: &mut HostSummary) {
-        summary.booted.holds = self.holds(None).await;
+        let attach = |dict: &mut apex_dbus::Deployment, lock: Option<LaneLock>| {
+            dict.holds = lock.as_ref().map(|l| l.holds.clone());
+            dict.stock = lock.map(|l| l.stock);
+        };
+        attach(&mut summary.booted, self.lane_lock(None).await);
         if let Some(entry) = host.staged() {
-            summary.staged.holds = self.holds(Some(entry)).await;
+            attach(&mut summary.staged, self.lane_lock(Some(entry)).await);
         }
         if let Some(entry) = host.rollback() {
-            summary.rollback.holds = self.holds(Some(entry)).await;
+            attach(&mut summary.rollback, self.lane_lock(Some(entry)).await);
         }
     }
 
-    /// The running image's holds for `None`. A lock that cannot be read leaves the key out.
-    async fn holds(&self, entry: Option<&BootEntry>) -> Option<Vec<Hold>> {
+    /// The running image's lock for `None`. A lock that cannot be read leaves the keys out.
+    async fn lane_lock(&self, entry: Option<&BootEntry>) -> Option<LaneLock> {
         let source = match entry {
             None => {
-                if let RunningHolds::Read(cached) = self.lock().manifests.running_holds.clone() {
+                if let RunningLock::Read(cached) = self.lock().manifests.running_lock.clone() {
                     return cached;
                 }
                 ManifestSource::Running
@@ -641,7 +657,7 @@ impl<R: CommandRunner> Engine<R> {
                 if let Some(cached) = self
                     .lock()
                     .manifests
-                    .deployment_holds
+                    .deployment_locks
                     .get(location.checksum())
                 {
                     return cached.clone();
@@ -649,8 +665,8 @@ impl<R: CommandRunner> Engine<R> {
                 ManifestSource::Deployment(location)
             }
         };
-        let holds = match self.providers.files.lane_lock(&source).await {
-            Ok(lock) => lock.as_deref().map(lane_lock::holds),
+        let lock = match self.providers.files.lane_lock(&source).await {
+            Ok(text) => text.as_deref().map(lane_lock::parse),
             Err(error) => {
                 tracing::warn!(error = %errors::with_sources(&error), "cannot read a lane lock");
                 return None;
@@ -659,16 +675,16 @@ impl<R: CommandRunner> Engine<R> {
         let mut state = self.lock();
         match &source {
             ManifestSource::Running => {
-                state.manifests.running_holds = RunningHolds::Read(holds.clone());
+                state.manifests.running_lock = RunningLock::Read(lock.clone());
             }
             ManifestSource::Deployment(location) => {
                 state
                     .manifests
-                    .deployment_holds
-                    .insert(location.checksum().to_owned(), holds.clone());
+                    .deployment_locks
+                    .insert(location.checksum().to_owned(), lock.clone());
             }
         }
-        holds
+        lock
     }
 
     fn record_check(&self, record: LastCheck, timestamp: Option<u64>) {
@@ -1276,6 +1292,29 @@ impl<R: CommandRunner> Engine<R> {
         let Some(staged) = host.staged().cloned() else {
             return Ok(Vec::new());
         };
+        self.changes_to(&staged, "the downloaded update").await
+    }
+
+    /// For the `LastFallback` build, which `bootc rollback` left as the rollback deployment.
+    pub async fn get_changes_for(&self, digest: &str) -> Result<Vec<Change>, ApexError> {
+        let host = self.host().ok_or_else(|| self.state_unknown())?;
+        if host.booted_digest() == Some(digest) {
+            return Ok(Vec::new());
+        }
+        let entry = [host.staged(), host.rollback()]
+            .into_iter()
+            .flatten()
+            .find(|entry| entry.digest() == Some(digest))
+            .cloned()
+            .ok_or_else(|| {
+                ApexError::InvalidArgument(format!(
+                    "{digest} is not the running, the downloaded or the previous version."
+                ))
+            })?;
+        self.changes_to(&entry, "that version").await
+    }
+
+    async fn changes_to(&self, entry: &BootEntry, what: &str) -> Result<Vec<Change>, ApexError> {
         let unreadable = |what: &str| {
             ApexError::Internal(format!(
                 "The package list of {what} is not available (/usr/share/apex/manifest.json)."
@@ -1288,17 +1327,14 @@ impl<R: CommandRunner> Engine<R> {
                 errors::internal("The package list of the running system cannot be read", &e)
             })?
             .ok_or_else(|| unreadable("the running system"))?;
-        let staged = self
-            .deployment_manifest(&staged)
+        let other = self
+            .deployment_manifest(entry)
             .await
             .map_err(|e| {
-                errors::internal(
-                    "The package list of the downloaded update cannot be read",
-                    &e,
-                )
+                errors::internal(&format!("The package list of {what} cannot be read"), &e)
             })?
-            .ok_or_else(|| unreadable("the downloaded update"))?;
-        Ok(changes_reply(&booted.packages, &staged.packages))
+            .ok_or_else(|| unreadable(what))?;
+        Ok(changes_reply(&booted.packages, &other.packages))
     }
 
     pub fn acknowledge_health_failure(&self) -> Result<(), ApexError> {
@@ -1314,6 +1350,7 @@ impl<R: CommandRunner> Engine<R> {
             if let Some(snapshot) = &mut state.snapshot {
                 snapshot.health_failure = None;
             }
+            state.health_failure_checks.clear();
             state.last_fallback = None;
         }
         tracing::info!("health failure acknowledged");
@@ -1337,6 +1374,7 @@ impl<R: CommandRunner> Engine<R> {
                     unflushed_is_done(self.store.clear_intent(), "clearing the intent")
                         .map_err(|e| from_store(&e))?;
                 }
+                state.health_failure_checks.clear();
                 if let Some(snapshot) = &mut state.snapshot {
                     snapshot.health_failure = None;
                     if intent_booted {
@@ -1359,6 +1397,10 @@ impl<R: CommandRunner> Engine<R> {
                     .read_health_failure()
                     .map_err(|e| from_store(&e))?;
                 // apex-boot-assess's own record names the failed checks: keep it.
+                state.health_failure_checks = match &recorded {
+                    Some(record) if record.digest == digest => record.failed_checks.clone(),
+                    _ => Vec::new(),
+                };
                 if recorded.as_ref().is_none_or(|r| r.digest != digest) {
                     let record = HealthFailureRecord {
                         digest: digest.to_owned(),
@@ -1558,8 +1600,10 @@ fn build_properties(state: &EngineState) -> Properties {
         health_failure: snapshot
             .and_then(|s| s.health_failure.clone())
             .unwrap_or_default(),
+        health_failure_checks: state.health_failure_checks.clone(),
         last_fallback: state.last_fallback.clone().unwrap_or_default(),
         automatic_downloads: state.settings.automatic_downloads,
+        kept: Vec::new(),
     }
 }
 

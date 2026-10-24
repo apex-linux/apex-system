@@ -14,8 +14,10 @@ expression: json
     "held": [
       "gnome-shell"
     ],
+    "holds": null,
     "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
+    "stock": null,
     "timestamp": 1790208000,
     "version": "45.20260924.117"
   },
@@ -28,6 +30,7 @@ expression: json
   "held": [
     "gnome-shell"
   ],
+  "holds": [],
   "last_check": 1790240400,
   "last_error": null,
   "last_fallback": null,
@@ -41,8 +44,10 @@ expression: json
     "held": [
       "gnome-shell"
     ],
+    "holds": null,
     "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
+    "stock": null,
     "timestamp": 1790208000,
     "version": "45.20260920.110"
   },
@@ -52,10 +57,13 @@ expression: json
     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "download_only": true,
     "held": [],
+    "holds": null,
     "image": "ghcr.io/apex-linux/apex:45",
     "pinned": false,
+    "stock": null,
     "timestamp": 1790208000,
     "version": "45.20260925.118"
   },
-  "state": "staged"
+  "state": "staged",
+  "stock": []
 }

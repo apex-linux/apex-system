@@ -22,8 +22,10 @@ pub struct Properties {
     pub deferred_reason: String,
     pub last_error: String,
     pub health_failure: String,
+    pub health_failure_checks: Vec<String>,
     pub last_fallback: String,
     pub automatic_downloads: bool,
+    pub kept: Vec<Deployment>,
 }
 
 impl Default for Properties {
@@ -40,8 +42,10 @@ impl Default for Properties {
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
+            health_failure_checks: Vec::new(),
             last_fallback: String::new(),
             automatic_downloads: true,
+            kept: Vec::new(),
         }
     }
 }
@@ -57,40 +61,25 @@ impl Properties {
 
     #[must_use]
     pub fn sanitized(mut self) -> Self {
-        for deployment in [
+        let deployments = [
             &mut self.booted,
             &mut self.staged,
             &mut self.rollback,
             &mut self.available,
-        ] {
-            for text in [
-                &mut deployment.image,
-                &mut deployment.digest,
-                &mut deployment.version,
-            ]
-            .into_iter()
-            .flatten()
-            {
-                *text = display_text(text);
-            }
-            let lists = deployment
-                .degraded
-                .iter_mut()
-                .chain(deployment.held.iter_mut());
-            for text in lists.flatten() {
-                *text = display_text(text);
-            }
-            for hold in deployment.holds.iter_mut().flatten() {
-                hold.family = display_text(&hold.family);
-                hold.newer = display_text(&hold.newer);
-            }
+        ];
+        for deployment in deployments.into_iter().chain(self.kept.iter_mut()) {
+            sanitize_deployment(deployment);
         }
-        for text in [
+        let texts = [
             &mut self.deferred_reason,
             &mut self.last_error,
             &mut self.health_failure,
             &mut self.last_fallback,
-        ] {
+        ];
+        for text in texts
+            .into_iter()
+            .chain(self.health_failure_checks.iter_mut())
+        {
             *text = display_text(text);
         }
         self
@@ -158,6 +147,11 @@ impl Properties {
             Variant::from(self.health_failure.clone()),
         );
         put(
+            "HealthFailureChecks",
+            self.health_failure_checks != previous.health_failure_checks,
+            Variant::from(self.health_failure_checks.clone()),
+        );
+        put(
             "LastFallback",
             self.last_fallback != previous.last_fallback,
             Variant::from(self.last_fallback.clone()),
@@ -167,7 +161,40 @@ impl Properties {
             self.automatic_downloads != previous.automatic_downloads,
             Variant::Bool(self.automatic_downloads),
         );
+        put(
+            "Kept",
+            self.kept != previous.kept,
+            Variant::from(self.kept.clone()),
+        );
         changed
+    }
+}
+
+fn sanitize_deployment(deployment: &mut Deployment) {
+    let texts = [
+        &mut deployment.image,
+        &mut deployment.digest,
+        &mut deployment.version,
+        &mut deployment.pin_reason,
+    ];
+    for text in texts.into_iter().flatten() {
+        *text = display_text(text);
+    }
+    let lists = deployment
+        .degraded
+        .iter_mut()
+        .chain(deployment.held.iter_mut());
+    for text in lists.flatten() {
+        *text = display_text(text);
+    }
+    for hold in deployment.holds.iter_mut().flatten() {
+        hold.family = display_text(&hold.family);
+        hold.newer = display_text(&hold.newer);
+        hold.side = display_text(&hold.side);
+    }
+    for stock in deployment.stock.iter_mut().flatten() {
+        stock.family = display_text(&stock.family);
+        stock.reason = display_text(&stock.reason);
     }
 }
 
@@ -456,7 +483,7 @@ mod tests {
     #[test]
     fn every_contract_property_is_signalled_alone_when_it_changes() {
         let before = Properties::default();
-        let edits: [(&str, Edit); 13] = [
+        let edits: [(&str, Edit); 15] = [
             ("State", |p| p.state = State::Staged),
             ("Progress", |p| p.progress = 0.5),
             ("Booted", |p| p.booted = deployment("b")),
@@ -472,14 +499,18 @@ mod tests {
             ("DeferredReason", |p| p.deferred_reason = "later".into()),
             ("LastError", |p| p.last_error = "failed".into()),
             ("HealthFailure", |p| p.health_failure = "sha256:h".into()),
+            ("HealthFailureChecks", |p| {
+                p.health_failure_checks = vec!["session".into()];
+            }),
             ("LastFallback", |p| p.last_fallback = "sha256:f".into()),
             ("AutomaticDownloads", |p| p.automatic_downloads = false),
+            ("Kept", |p| p.kept = vec![deployment("k")]),
         ];
         let contract = contract_properties();
         assert_eq!(
             contract.len(),
             edits.len(),
-            "the XML has thirteen properties"
+            "the XML has fifteen properties"
         );
         let mut all = before.clone();
         for (name, edit) in edits {
@@ -533,7 +564,12 @@ mod tests {
             last_error: dirty.into(),
             deferred_reason: dirty.into(),
             health_failure: dirty.into(),
+            health_failure_checks: vec![dirty.into()],
             last_fallback: dirty.into(),
+            kept: vec![Deployment {
+                pin_reason: Some(dirty.into()),
+                ..Deployment::default()
+            }],
             available: Deployment {
                 image: Some(dirty.into()),
                 digest: Some(dirty.into()),
@@ -555,6 +591,14 @@ mod tests {
         assert_eq!(properties.deferred_reason, clean);
         assert_eq!(properties.health_failure, clean);
         assert_eq!(properties.last_fallback, clean);
+        assert_eq!(
+            properties.health_failure_checks,
+            std::slice::from_ref(&clean)
+        );
+        assert_eq!(
+            properties.kept[0].pin_reason.as_deref(),
+            Some(clean.as_str())
+        );
         let holds = properties.available.holds.clone().unwrap();
         assert_eq!(
             (holds[0].family.as_str(), holds[0].newer.as_str()),
