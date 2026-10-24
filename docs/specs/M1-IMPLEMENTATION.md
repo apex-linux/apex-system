@@ -191,3 +191,12 @@ installs a downgrade: `Apply` refuses one, and `Rollback` is the way back.
 
 Rendered hardware files live in `hardware/<machine>/generated/`. The legacy allowlist is
 `image/audit/legacy-allowlist.txt` (`name<TAB>milestone<TAB>reason`).
+
+## 10. `apex-session-agent` (user service)
+
+| What | Contract |
+|---|---|
+| Apex keys read (`io.github.apex_linux.Apex.Desktop`) | `window-corner-radius`, `layer-enabled`, `lower-refresh-rate-on-battery`; each feature is off, with a warning, when its key is missing |
+| Files written | `$XDG_CONFIG_HOME/gtk-4.0/apex.css` and its `gtk.css` import, `$XDG_DATA_HOME/org.gnome.Ptyxis/palettes/apex.palette`, `$XDG_STATE_HOME/apex/updates-notified` (one digest and a newline); atomic, and only inside those three homes |
+| Crash-guard offer and "Updates Ready" | `org.freedesktop.Notifications` on the session bus. Updates Ready follows `Update1.Staged` on the system bus and never starts `apex-updated`; its action calls `org.gnome.Settings` `launch-panel ('system', [])` |
+| Refresh rate on battery | while the key is true and UPower's `OnBattery` is true, the built-in panel (mutter's `is-builtin`) gets its lowest mode of 60 Hz or more at the current resolution; on AC, or with the key false, the highest one, but only after the agent lowered it. `ApplyMonitorsConfig` with method 1 (temporary, monitors.xml untouched), every logical monitor's position, scale, transform and primary flag kept. Nothing happens without a built-in panel with two rates, without UPower, or while a mode the user picked stands (until the next power or key change, or a hotplug) |
