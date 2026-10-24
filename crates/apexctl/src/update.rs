@@ -540,6 +540,7 @@ mod tests {
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
+            health_failure_checks: Vec::new(),
             last_fallback: String::new(),
             automatic_downloads: Some(true),
             kept: Vec::new(),
