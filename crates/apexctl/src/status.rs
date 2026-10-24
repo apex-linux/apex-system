@@ -29,6 +29,9 @@ meaning until \"schema\" changes.
   deferred_reason  why the automatic download is waiting, or null
   last_error       message of the last failed update operation, or null
   health_failure   digest of the update that failed its health checks, or null
+  health_failure_checks
+                   the names of the checks that failed for it, as apex-boot-assess
+                   reports them (e.g. [\"session\"]); [] when unknown or none
   last_fallback    digest of the update that did not start and was set aside, or null
   automatic_downloads
                    true or false: whether the daily check downloads what it finds; null
@@ -150,6 +153,7 @@ pub struct StatusJson {
     pub deferred_reason: Option<String>,
     pub last_error: Option<String>,
     pub health_failure: Option<String>,
+    pub health_failure_checks: Vec<String>,
     pub last_fallback: Option<String>,
     pub automatic_downloads: Option<bool>,
     pub degraded: Vec<String>,
@@ -211,6 +215,7 @@ impl StatusJson {
             deferred_reason: non_empty(&status.deferred_reason),
             last_error: non_empty(&status.last_error),
             health_failure: non_empty(&status.health_failure),
+            health_failure_checks: status.health_failure_checks.clone(),
             last_fallback: non_empty(&status.last_fallback),
             automatic_downloads: status.automatic_downloads,
             degraded: status.booted.degraded.clone().unwrap_or_default(),
@@ -619,9 +624,13 @@ pub fn render_status(status: &ServiceStatus) -> String {
     }
     if !status.health_failure.is_empty() {
         let mut note = format!(
-            "Update {} failed its health checks after it was applied.",
+            "Update {} failed its health checks after it was applied",
             status.health_failure
         );
+        if !status.health_failure_checks.is_empty() {
+            let _ = write!(note, " ({})", status.health_failure_checks.join(", "));
+        }
+        note.push('.');
         let next_step_already_says_how_to_clear = status.state == State::HealthFailure;
         if !next_step_already_says_how_to_clear {
             note.push_str(" Clear this notice with: apexctl update acknowledge");
@@ -769,6 +778,7 @@ pub(crate) mod tests {
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
+            health_failure_checks: Vec::new(),
             last_fallback: String::new(),
             automatic_downloads: Some(true),
             kept: Vec::new(),
@@ -1258,6 +1268,29 @@ pub(crate) mod tests {
             "{text}"
         );
         assert_eq!(StatusJson::new(&status).automatic_downloads, None);
+    }
+
+    #[test]
+    fn the_health_failure_note_names_the_failed_checks() {
+        let mut status = staged_status();
+        status.state = State::HealthFailure;
+        status.staged = Deployment::default();
+        status.health_failure = format!("sha256:{}", "f".repeat(64));
+        status.health_failure_checks = vec!["session".to_owned(), "core-units-active".to_owned()];
+        let text = render_status(&status);
+        assert!(
+            text.contains(&format!(
+                "Update sha256:{} failed its health checks after it was applied (session, \
+                 core-units-active).",
+                "f".repeat(64)
+            )),
+            "{text}"
+        );
+        let json = serde_json::to_value(StatusJson::new(&status)).unwrap();
+        assert_eq!(
+            json["health_failure_checks"],
+            serde_json::json!(["session", "core-units-active"])
+        );
     }
 
     #[test]

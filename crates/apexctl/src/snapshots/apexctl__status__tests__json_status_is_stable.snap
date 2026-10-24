@@ -29,6 +29,7 @@ expression: json
   ],
   "hardware": [],
   "health_failure": null,
+  "health_failure_checks": [],
   "held": [
     "gnome-shell"
   ],

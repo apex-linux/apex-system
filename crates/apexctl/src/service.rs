@@ -22,6 +22,8 @@ pub struct ServiceStatus {
     pub deferred_reason: String,
     pub last_error: String,
     pub health_failure: String,
+    /// apex-boot-assess's check names; empty when unknown or the service predates them.
+    pub health_failure_checks: Vec<String>,
     /// `""` when none, or when the service predates the property.
     pub last_fallback: String,
     /// `None` when the service predates the property.
@@ -286,6 +288,7 @@ impl UpdateService for DbusService {
             deferred_reason: p.deferred_reason().await?,
             last_error: p.last_error().await?,
             health_failure: p.health_failure().await?,
+            health_failure_checks: p.health_failure_checks().await.unwrap_or_default(),
             last_fallback: p.last_fallback().await.unwrap_or_default(),
             automatic_downloads: p.automatic_downloads().await.ok(),
             kept: p.kept().await.unwrap_or_default(),
