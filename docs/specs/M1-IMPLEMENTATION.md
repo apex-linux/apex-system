@@ -66,8 +66,8 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 ```
 
 - `packages` is sorted by `(name, arch)` in byte order and is unique on that key.
-- `degraded` is sorted and holds any of `audio`, `fingerprint`, `nvidia`, `shell` and
-  `terminal`.
+- `degraded` is sorted and holds any of `audio`, `files`, `fingerprint`, `nvidia`,
+  `settings`, `shell` and `terminal`.
   `nvidia` (S1c) marks an image the owner published without the NVIDIA set, because the
   kmod could not follow the kernel: the dGPU stays unbound in D3cold (ADR 0015 §4).
   `shell` (S1a) marks an image with Fedora's gnome-shell and mutter: the owner chose
@@ -75,7 +75,8 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
   the shell has no Apex layer, theme, dock or glass until the rebase (ARCHITECTURE
   §4.3). `terminal` (T1) marks an image with Fedora's Ptyxis: its family had no good
   Apex build, so the terminal has no sessions sidebar or pane headers (ADR 0014,
-  Consequences). A rebuild-lane family that is stock or degraded needs its name here
+  Consequences). `files` and `settings` mark Fedora's nautilus and gnome-control-center
+  the same way, without the Apex Files and Settings work. A rebuild-lane family that is stock or degraded needs its name here
   before an image can ship it; the build fails otherwise.
 - `held` (S1a) is sorted and lists the rebuild-lane families (`packaging/pkgs/*/pkg.env`
   `family=`, for example `gnome-shell`) that the lane's lock holds at their last good
