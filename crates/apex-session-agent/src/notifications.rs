@@ -122,7 +122,7 @@ fn notify_parameters(notification: &Notification) -> glib::Variant {
         .flat_map(|&(key, label)| [key, label])
         .collect();
     (
-        "Apex",
+        notification.app,
         0u32,
         notification.icon,
         notification.summary.as_str(),

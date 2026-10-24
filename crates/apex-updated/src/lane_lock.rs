@@ -33,6 +33,11 @@ fn hold(line: &str) -> Option<Hold> {
                     .and_then(|seconds| u64::try_from(seconds).ok())
                     .unwrap_or(0);
             }
+            "limit" => {
+                hold.limit = apex_bootc::parse_rfc3339_unix(value)
+                    .and_then(|seconds| u64::try_from(seconds).ok())
+                    .unwrap_or(0);
+            }
             "newer" => value.clone_into(&mut hold.newer),
             "security" => hold.security = value == "1",
             "reason" => break,
@@ -71,12 +76,14 @@ rpm gnome-shell built gnome-shell gnome-shell-0:51.0-1.fc45.apex1.x86_64 aa pkgs
                 newer: "gnome-shell-51.1-1.fc45,mutter-51.1-1.fc45".to_owned(),
                 since: 1_791_778_200,
                 security: true,
+                limit: 1_792_987_800,
             },
             "the reason's own words are not fields"
         );
         assert_eq!(holds[1].newer, "", "no newer build is known");
         assert_eq!(holds[1].since, 1_791_778_200);
         assert!(!holds[1].security);
+        assert_eq!(holds[1].limit, 0);
         assert_eq!((holds[2].since, holds[2].security), (0, false), "unknowns");
     }
 

@@ -11,6 +11,7 @@ pub const ACTION_LABEL: &str = "Turn the Apex desktop back on";
 
 pub fn notification() -> agent::Notification {
     agent::Notification {
+        app: "Apex",
         icon: "",
         summary: SUMMARY.to_owned(),
         body: BODY.to_owned(),

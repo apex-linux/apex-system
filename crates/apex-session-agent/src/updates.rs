@@ -7,6 +7,14 @@ pub const ACTION_LABEL: &str = "Open Settings";
 
 pub const SUMMARY: &str = "Updates Ready";
 
+/// The application line of every update notification.
+pub const APP_NAME: &str = "Apex Updates";
+
+pub const AVAILABLE_SUMMARY: &str = "Update Available";
+
+/// Software Updates, where an update found but not downloaded can be downloaded.
+pub const UPDATES_PAGE: &str = "software-updates";
+
 pub const ICON: &str = "software-update-available-symbolic";
 
 /// The Settings panel the action opens until the Software Updates page exists (S2d).
@@ -22,6 +30,28 @@ pub trait Digested: Clone {
 pub struct Staged {
     pub digest: String,
     pub version: Option<String>,
+}
+
+/// An update the daily check found while automatic downloads are off.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Downloadable {
+    pub digest: String,
+    pub version: Option<String>,
+}
+
+impl Digested for Downloadable {
+    fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+impl Downloadable {
+    pub fn body(&self) -> String {
+        match &self.version {
+            Some(version) => format!("Apex {version} is ready to download."),
+            None => "An Apex update is ready to download.".to_owned(),
+        }
+    }
 }
 
 impl Digested for Staged {

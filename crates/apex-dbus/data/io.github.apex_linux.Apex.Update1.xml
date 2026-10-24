@@ -25,13 +25,15 @@
                          so absent for Available
     "held"           as  lane families kept at their last good build, from the same
                          manifest, so absent for Available
-    "holds"          a(sstb) one record per held family, from the deployment's lane lock
+    "holds"          a(sstbt) one record per held family, from the deployment's lane lock
                          (/usr/share/apex/rpms.lock), so absent for Available: family; the
                          newer Fedora builds it holds back from, comma-separated, "" when
                          unknown; held since, Unix seconds, 0 when unknown; whether the
-                         newer builds carry a security update, false when unknown
-    "download-size"  t   Available and Staged only: bytes of layers not present yet, as
-                         the check that found the image rounded them; 0 when unknown
+                         newer builds carry a security update, false when unknown; the
+                         hold's limit, Unix seconds, 0 when unknown
+    "download-size"  t   Available and Staged only: bytes of layers not present yet, from
+                         the check that found the image; bootc rounds it to one decimal
+                         (1.2 GB, so about 50 MB either way); 0 when unknown
 
   Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting

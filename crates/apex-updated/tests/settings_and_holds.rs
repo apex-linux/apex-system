@@ -90,6 +90,7 @@ async fn holds_and_download_size_are_in_the_dicts() {
             newer: "gnome-shell-51.1-1.fc45".to_owned(),
             since: 1_791_778_200,
             security: true,
+            limit: 0,
         }])
     );
     assert_eq!(

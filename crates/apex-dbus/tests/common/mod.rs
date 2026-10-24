@@ -87,6 +87,7 @@ pub(crate) fn booted() -> Deployment {
             newer: "gnome-shell-51.1-1.fc45".to_owned(),
             since: 1_790_000_000,
             security: false,
+            limit: 0,
         }]),
         download_size: None,
     }

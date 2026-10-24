@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use zbus::{Optional, OwnedVariant, Signature, Str, Type, Variant};
 
-/// One held lane family, `(sstb)` on the wire.
+/// One held lane family, `(sstbt)` on the wire.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Hold {
     pub family: String,
@@ -14,9 +14,11 @@ pub struct Hold {
     pub since: u64,
     /// False when the newer builds carry no security update, or when that is unknown.
     pub security: bool,
+    /// Unix seconds when the hold reaches its limit; 0 when unknown.
+    pub limit: u64,
 }
 
-type HoldTuple = (String, String, u64, bool);
+type HoldTuple = (String, String, u64, bool, u64);
 
 use crate::values::ValueError;
 
@@ -178,11 +180,13 @@ fn holds(key: &str, value: &Variant<'_>) -> Result<Vec<Hold>, ValueError> {
                     Variant::Str(newer),
                     Variant::U64(since),
                     Variant::Bool(security),
+                    Variant::U64(limit),
                 ] => Ok(Hold {
                     family: family.as_str().to_owned(),
                     newer: newer.as_str().to_owned(),
                     since: *since,
                     security: *security,
+                    limit: *limit,
                 }),
                 _ => Err(wrong()),
             }
@@ -193,7 +197,7 @@ fn holds(key: &str, value: &Variant<'_>) -> Result<Vec<Hold>, ValueError> {
 fn owned_holds(holds: Vec<Hold>) -> OwnedVariant {
     let tuples: Vec<HoldTuple> = holds
         .into_iter()
-        .map(|h| (h.family, h.newer, h.since, h.security))
+        .map(|h| (h.family, h.newer, h.since, h.security, h.limit))
         .collect();
     OwnedVariant::from(Optional::from(Some(tuples)))
 }
@@ -344,20 +348,22 @@ mod tests {
                 newer: "gnome-shell-51.1-1.fc45,mutter-51.1-1.fc45".to_owned(),
                 since: 1_791_000_000,
                 security: true,
+                limit: 1_792_209_600,
             }]),
             download_size: Some(1_200_000_000),
         }
     }
 
     fn hold_strategy() -> impl Strategy<Value = Hold> {
-        (TEXT, TEXT, any::<u64>(), any::<bool>()).prop_map(|(family, newer, since, security)| {
-            Hold {
+        (TEXT, TEXT, any::<u64>(), any::<bool>(), any::<u64>()).prop_map(
+            |(family, newer, since, security, limit)| Hold {
                 family,
                 newer,
                 since,
                 security,
-            }
-        })
+                limit,
+            },
+        )
     }
 
     /// D-Bus strings cannot contain NUL.
@@ -426,7 +432,7 @@ mod tests {
                 "download-only:b",
                 "degraded:as",
                 "held:as",
-                "holds:a(sstb)",
+                "holds:a(sstbt)",
                 "download-size:t"
             ]
         );
@@ -510,13 +516,13 @@ mod tests {
     #[test]
     fn holds_of_the_wrong_shape_are_refused() {
         let mut map = HashMap::<String, OwnedVariant>::new();
-        let wrong: Vec<(String, String, u32, bool)> = vec![("a".into(), "b".into(), 1, true)];
+        let wrong: Vec<(String, String, u64, bool)> = vec![("a".into(), "b".into(), 1, true)];
         map.insert(
             Deployment::HOLDS.to_owned(),
             OwnedVariant::from(Optional::from(Some(wrong))),
         );
         let error = Deployment::try_from(map).unwrap_err();
-        assert!(error.to_string().contains("a(sstb)"), "{error}");
+        assert!(error.to_string().contains("a(sstbt)"), "{error}");
     }
 
     #[test]
