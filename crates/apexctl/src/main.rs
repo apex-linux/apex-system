@@ -12,7 +12,7 @@ use apexctl::manifest::{self, ManifestInput};
 use apexctl::profile::Profile;
 use apexctl::render::{self, AudioOutcome, FileAction};
 use apexctl::service::{ClientError, DbusService, UpdateService as _};
-use apexctl::status::{StatusJson, render_status};
+use apexctl::status::{StatusJson, hardware_notes, render_hardware_notes, render_status};
 use apexctl::update;
 use clap::Parser as _;
 
@@ -117,8 +117,14 @@ async fn status(json: bool) -> anyhow::Result<Exit> {
     }
     .await;
     match result {
-        Ok(status) if json => emit_json(&StatusJson::new(&status)).map(|()| Exit::Ok),
-        Ok(status) => emit(&render_status(&status)).map(|()| Exit::Ok),
+        Ok(status) if json => {
+            let notes = hardware_notes(Path::new("/"));
+            emit_json(&StatusJson::new(&status).with_hardware(notes)).map(|()| Exit::Ok)
+        }
+        Ok(status) => {
+            let notes = render_hardware_notes(&hardware_notes(Path::new("/")));
+            emit(&(render_status(&status) + &notes)).map(|()| Exit::Ok)
+        }
         Err(error) => Ok(report_client_error(&error, error.hint())),
     }
 }

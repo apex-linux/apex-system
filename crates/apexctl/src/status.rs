@@ -1,5 +1,8 @@
 use std::cmp::Ordering;
 use std::fmt::Write as _;
+use std::path::Path;
+
+use apex_boot::nvidia::{self, DiscreteGpu, NvidiaReport};
 
 use apex_bootc::{APEX_STABLE_REPOSITORY, APEX_TESTING_REPOSITORY};
 use apex_dbus::{Change, ChangeKind, Channel, Deployment, Hold, State, Stock};
@@ -36,6 +39,8 @@ meaning until \"schema\" changes.
   holds, stock     the running image's, as in a deployment below; [] when it reports none
   booted, staged, rollback, available
                    a deployment, or null when there is none
+  hardware         hardware notes read on this computer, one object per check: check
+                   (\"nvidia\"), ok (true or false), detail (a sentence)
   kept             deployments the update service pinned as the last version known to work
                    that are none of those, so only the boot menu offers them; [] when none
 
@@ -156,6 +161,34 @@ pub struct StatusJson {
     pub rollback: Option<DeploymentJson>,
     pub available: Option<DeploymentJson>,
     pub kept: Vec<DeploymentJson>,
+    pub hardware: Vec<HardwareNote>,
+}
+
+/// Read on this computer, not from the update service.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HardwareNote {
+    pub check: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// S1c (ARCHITECTURE §5.3): the NVIDIA driver the running image ships, below `root`.
+pub fn hardware_notes(root: &Path) -> Vec<HardwareNote> {
+    let report = DiscreteGpu::of_this_machine()
+        .map_or_else(NvidiaReport::Unreadable, |gpu| nvidia::report(root, &gpu));
+    vec![HardwareNote {
+        check: "nvidia",
+        ok: report.is_ok(),
+        detail: report.to_string(),
+    }]
+}
+
+pub fn render_hardware_notes(notes: &[HardwareNote]) -> String {
+    let mut out = String::from("\nHardware notes\n");
+    for note in notes {
+        let _ = writeln!(out, "  {:<8} {}", note.check, note.detail);
+    }
+    out
 }
 
 fn non_empty(text: &str) -> Option<String> {
@@ -193,7 +226,14 @@ impl StatusJson {
                 .iter()
                 .filter_map(DeploymentJson::from_deployment)
                 .collect(),
+            hardware: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_hardware(mut self, notes: Vec<HardwareNote>) -> Self {
+        self.hardware = notes;
+        self
     }
 }
 
@@ -1092,6 +1132,55 @@ pub(crate) mod tests {
         assert_eq!(json.kept[0].pin_reason, status.kept[0].pin_reason);
         status.kept.clear();
         assert!(!render_status(&status).contains("Kept"));
+    }
+
+    fn fake_root(manifest: &str) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let write = |path: &str, text: &str| {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write("usr/share/apex/manifest.json", manifest);
+        let device = "sys/bus/pci/devices/0000:01:00.0";
+        write(&format!("{device}/vendor"), "0x10de\n");
+        write(&format!("{device}/device"), "0x25a2\n");
+        let driver = root.path().join("sys/bus/pci/drivers/nvidia");
+        std::fs::create_dir_all(&driver).unwrap();
+        std::os::unix::fs::symlink(driver, root.path().join(device).join("driver")).unwrap();
+        write("sys/module/nvidia/version", "615.78.08\n");
+        root
+    }
+
+    #[test]
+    fn hardware_notes_report_the_nvidia_driver() {
+        let ready = fake_root(
+            r#"{"packages": [{"name": "kmod-nvidia-7.3.0-4.cachyos1.fc45.x86_64", "version": "615.78.08"}]}"#,
+        );
+        let notes = hardware_notes(ready.path());
+        assert_eq!(
+            notes,
+            [HardwareNote {
+                check: "nvidia",
+                ok: true,
+                detail: "NVIDIA driver 615.78.08 is bound to the dGPU, as the image ships it"
+                    .to_owned(),
+            }]
+        );
+        let degraded = fake_root(r#"{"degraded": ["nvidia"], "packages": []}"#);
+        let notes = hardware_notes(degraded.path());
+        insta::assert_snapshot!(render_hardware_notes(&notes));
+        assert!(!notes[0].ok);
+        let json =
+            serde_json::to_value(StatusJson::new(&staged_status()).with_hardware(notes)).unwrap();
+        assert_eq!(
+            json["hardware"],
+            serde_json::json!([{
+                "check": "nvidia",
+                "ok": false,
+                "detail": "no NVIDIA driver (degraded)",
+            }])
+        );
     }
 
     #[test]
