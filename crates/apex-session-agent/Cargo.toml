@@ -1,6 +1,6 @@
 [package]
 name = "apex-session-agent"
-description = "Apex user service: the GTK window radius file, the Ptyxis accent palette, and the offer to turn the Apex desktop back on after the shell crash guard"
+description = "Apex user service: the GTK window radius file, the Ptyxis accent palette, the offer to turn the Apex desktop back on after the shell crash guard, and the \"Updates Ready\" notification"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

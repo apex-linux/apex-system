@@ -1,0 +1,143 @@
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
+
+use gio::prelude::*;
+
+use crate::agent::Agent;
+use crate::notifications::{CALL_TIMEOUT_MS, Subscription};
+use crate::updates::Staged;
+
+pub const BUS_NAME: &str = "io.github.apex_linux.Apex.Update1";
+pub const PATH: &str = "/io/github/apex_linux/Apex/Update1";
+pub const INTERFACE: &str = "io.github.apex_linux.Apex.Update1";
+const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
+const STAGED: &str = "Staged";
+
+/// Update1's `Staged` dictionary, when it holds an update the user has not applied: an
+/// applied stage (`download-only` false) is already the user's choice.
+pub fn staged_from(dict: &glib::Variant) -> Option<Staged> {
+    let map = dict.get::<HashMap<String, glib::Variant>>()?;
+    let text = |key: &str| map.get(key).and_then(glib::Variant::get::<String>);
+    let digest = text("digest").filter(|digest| !digest.is_empty())?;
+    let applied = map
+        .get("download-only")
+        .and_then(glib::Variant::get::<bool>)
+        == Some(false);
+    (!applied).then(|| Staged {
+        digest,
+        version: text("version"),
+    })
+}
+
+/// Watches `Staged` on the system bus. It never starts the daemon: the name appears when
+/// the daily check or a front end starts it, and the property is read then.
+pub fn subscribe(connection: &gio::DBusConnection, agent: &Rc<Agent>) -> Subscription {
+    let on_change = Rc::downgrade(agent);
+    let fetch_connection = connection.clone();
+    let signal = connection.subscribe_to_signal(
+        Some(BUS_NAME),
+        Some(PROPERTIES),
+        Some("PropertiesChanged"),
+        Some(PATH),
+        Some(INTERFACE),
+        gio::DBusSignalFlags::NONE,
+        move |signal| {
+            let Some((_, changed, invalidated)) =
+                signal
+                    .parameters
+                    .get::<(String, HashMap<String, glib::Variant>, Vec<String>)>()
+            else {
+                return;
+            };
+            if let Some(dict) = changed.get(STAGED) {
+                if let Some(agent) = on_change.upgrade() {
+                    agent.staged(staged_from(dict));
+                }
+            } else if invalidated.iter().any(|name| name == STAGED) {
+                fetch(&fetch_connection, on_change.clone());
+            }
+        },
+    );
+    let appeared = Rc::downgrade(agent);
+    let watcher = gio::bus_watch_name_on_connection(
+        connection,
+        BUS_NAME,
+        gio::BusNameWatcherFlags::NONE,
+        move |connection, _, _| fetch(&connection, appeared.clone()),
+        |_, _| {},
+    );
+    Subscription::new(
+        vec![signal],
+        Box::new(move || gio::bus_unwatch_name(watcher)),
+    )
+}
+
+fn fetch(connection: &gio::DBusConnection, agent: Weak<Agent>) {
+    connection.call(
+        Some(BUS_NAME),
+        PATH,
+        PROPERTIES,
+        "Get",
+        Some(&(INTERFACE, STAGED).to_variant()),
+        Some(&<(glib::Variant,)>::static_variant_type()),
+        gio::DBusCallFlags::NO_AUTO_START,
+        CALL_TIMEOUT_MS,
+        gio::Cancellable::NONE,
+        move |reply| match reply {
+            Ok(reply) => {
+                let Some((dict,)) = reply.get::<(glib::Variant,)>() else {
+                    return;
+                };
+                if let Some(agent) = agent.upgrade() {
+                    agent.staged(staged_from(&dict));
+                }
+            }
+            Err(error) => tracing::warn!(%error, "cannot read the staged update from Update1"),
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dict(entries: &[(&str, glib::Variant)]) -> glib::Variant {
+        let map: HashMap<String, glib::Variant> = entries
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect();
+        map.to_variant()
+    }
+
+    #[test]
+    fn a_locked_stage_is_an_update_to_offer() {
+        let staged = staged_from(&dict(&[
+            ("digest", "sha256:b".to_variant()),
+            ("version", "45.20260925.118".to_variant()),
+            ("download-only", true.to_variant()),
+        ]));
+        assert_eq!(
+            staged,
+            Some(Staged {
+                digest: "sha256:b".to_owned(),
+                version: Some("45.20260925.118".to_owned()),
+            })
+        );
+        let without_flag = staged_from(&dict(&[("digest", "sha256:b".to_variant())]));
+        assert_eq!(without_flag.map(|s| s.version), Some(None));
+    }
+
+    #[test]
+    fn nothing_staged_an_applied_stage_or_a_bad_value_is_none() {
+        assert_eq!(staged_from(&dict(&[])), None);
+        assert_eq!(
+            staged_from(&dict(&[
+                ("digest", "sha256:b".to_variant()),
+                ("download-only", false.to_variant()),
+            ])),
+            None
+        );
+        assert_eq!(staged_from(&dict(&[("digest", 7u32.to_variant())])), None);
+        assert_eq!(staged_from(&"text".to_variant()), None);
+    }
+}

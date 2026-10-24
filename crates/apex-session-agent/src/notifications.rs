@@ -3,13 +3,16 @@ use std::rc::{Rc, Weak};
 
 use gio::prelude::*;
 
-use crate::agent::{Agent, Notifier, Posted};
-use crate::guard;
+use crate::agent::{Agent, Notification, Notifier, Posted};
 
 const BUS_NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 const INTERFACE: &str = "org.freedesktop.Notifications";
-const CALL_TIMEOUT_MS: i32 = 25_000;
+pub(crate) const CALL_TIMEOUT_MS: i32 = 25_000;
+
+const SETTINGS_NAME: &str = "org.gnome.Settings";
+const SETTINGS_PATH: &str = "/org/gnome/Settings";
+const APPLICATION_INTERFACE: &str = "org.freedesktop.Application";
 
 /// `org.freedesktop.Notifications` on the session bus, which GNOME Shell serves.
 #[derive(Debug)]
@@ -78,10 +81,7 @@ impl DbusNotifier {
                 }
             },
         );
-        Subscription {
-            _signals: signals,
-            unwatch: Some(Box::new(move || gio::bus_unwatch_name(watcher))),
-        }
+        Subscription::new(signals, Box::new(move || gio::bus_unwatch_name(watcher)))
     }
 }
 
@@ -89,6 +89,15 @@ impl DbusNotifier {
 pub struct Subscription {
     _signals: Vec<gio::SignalSubscription>,
     unwatch: Option<Box<dyn FnOnce()>>,
+}
+
+impl Subscription {
+    pub(crate) fn new(signals: Vec<gio::SignalSubscription>, unwatch: Box<dyn FnOnce()>) -> Self {
+        Self {
+            _signals: signals,
+            unwatch: Some(unwatch),
+        }
+    }
 }
 
 impl std::fmt::Debug for Subscription {
@@ -105,29 +114,42 @@ impl Drop for Subscription {
     }
 }
 
-fn notify_parameters() -> glib::Variant {
+fn notify_parameters(notification: &Notification) -> glib::Variant {
     let hints: HashMap<String, glib::Variant> = HashMap::new();
+    let actions: Vec<&str> = notification
+        .actions
+        .iter()
+        .flat_map(|&(key, label)| [key, label])
+        .collect();
     (
         "Apex",
         0u32,
-        "",
-        guard::SUMMARY,
-        guard::BODY,
-        vec![guard::ACTION_KEY, guard::ACTION_LABEL],
+        notification.icon,
+        notification.summary.as_str(),
+        notification.body.as_str(),
+        actions,
         hints,
         -1i32,
     )
         .to_variant()
 }
 
+/// gnome-control-center's `launch-panel` action takes `(sav)`: the panel id and its arguments.
+fn launch_panel_parameters(panel: &str) -> glib::Variant {
+    let platform_data: HashMap<String, glib::Variant> = HashMap::new();
+    let target = (panel, Vec::<glib::Variant>::new()).to_variant();
+    ("launch-panel", vec![target], platform_data).to_variant()
+}
+
 impl Notifier for DbusNotifier {
-    fn post(&self, posted: Posted) {
+    fn post(&self, notification: &Notification, posted: Posted) {
+        let summary = notification.summary.clone();
         self.connection.call(
             Some(BUS_NAME),
             PATH,
             INTERFACE,
             "Notify",
-            Some(&notify_parameters()),
+            Some(&notify_parameters(notification)),
             Some(&<(u32,)>::static_variant_type()),
             gio::DBusCallFlags::NONE,
             CALL_TIMEOUT_MS,
@@ -135,7 +157,7 @@ impl Notifier for DbusNotifier {
             move |reply| match reply {
                 Ok(reply) => posted(reply.get::<(u32,)>().map(|(id,)| id)),
                 Err(error) => {
-                    tracing::warn!(%error, "cannot post the crash-guard offer");
+                    tracing::warn!(%error, %summary, "cannot post the notification");
                     posted(None);
                 }
             },
@@ -155,7 +177,27 @@ impl Notifier for DbusNotifier {
             gio::Cancellable::NONE,
             |reply| {
                 if let Err(error) = reply {
-                    tracing::debug!(%error, "cannot withdraw the crash-guard offer");
+                    tracing::debug!(%error, "cannot withdraw a notification");
+                }
+            },
+        );
+    }
+
+    fn open_settings(&self, panel: &str) {
+        let panel = panel.to_owned();
+        self.connection.call(
+            Some(SETTINGS_NAME),
+            SETTINGS_PATH,
+            APPLICATION_INTERFACE,
+            "ActivateAction",
+            Some(&launch_panel_parameters(&panel)),
+            None,
+            gio::DBusCallFlags::NONE,
+            CALL_TIMEOUT_MS,
+            gio::Cancellable::NONE,
+            move |reply| {
+                if let Err(error) = reply {
+                    tracing::warn!(%error, %panel, "cannot open Settings");
                 }
             },
         );
@@ -165,15 +207,28 @@ impl Notifier for DbusNotifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guard;
 
     #[test]
     fn notify_has_the_specs_signature_and_the_action() {
-        let parameters = notify_parameters();
+        let parameters = notify_parameters(&guard::notification());
         assert_eq!(parameters.type_().as_str(), "(susssasa{sv}i)");
         let actions = parameters.child_value(5).get::<Vec<String>>().unwrap();
         assert_eq!(
             actions,
             [guard::ACTION_KEY, "Turn the Apex desktop back on"]
         );
+    }
+
+    #[test]
+    fn launch_panel_has_the_application_signature() {
+        let parameters = launch_panel_parameters("system");
+        assert_eq!(parameters.type_().as_str(), "(sava{sv})");
+        let targets = parameters
+            .child_value(1)
+            .get::<Vec<glib::Variant>>()
+            .unwrap();
+        assert_eq!(targets[0].type_().as_str(), "(sav)");
+        assert_eq!(targets[0].child_value(0).get::<String>().unwrap(), "system");
     }
 }

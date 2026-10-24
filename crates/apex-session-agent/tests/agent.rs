@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::rc::Rc;
 
-use apex_session_agent::agent::{Agent, Notifier, Posted};
+use apex_session_agent::agent::{Agent, Notification, Notifier, Posted};
 use apex_session_agent::guard::ACTION_KEY;
 use apex_session_agent::paths::Paths;
 use apex_session_agent::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
@@ -29,7 +29,7 @@ struct FakeNotifier {
 }
 
 impl Notifier for FakeNotifier {
-    fn post(&self, posted: Posted) {
+    fn post(&self, _notification: &Notification, posted: Posted) {
         let calls = Rc::clone(&self.calls);
         glib::idle_add_local_once(move || {
             let id = {
@@ -45,6 +45,8 @@ impl Notifier for FakeNotifier {
     fn withdraw(&self, id: u32) {
         self.calls.borrow_mut().withdrawn.push(id);
     }
+
+    fn open_settings(&self, _panel: &str) {}
 }
 
 /// One test, because the `GLib` main context and the file monitor belong to one thread.
