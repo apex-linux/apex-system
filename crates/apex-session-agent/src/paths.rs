@@ -72,6 +72,11 @@ impl Paths {
         self.state_home.join("apex/updates-notified")
     }
 
+    /// The digest of the last failed update the agent posted a notification for.
+    pub fn failure_notified(&self) -> PathBuf {
+        self.state_home.join("apex/failure-notified")
+    }
+
     pub fn marker_dir(&self) -> PathBuf {
         self.guard_marker
             .parent()
@@ -115,6 +120,7 @@ mod tests {
         assert_eq!(p.gtk_css(), Path::new("/cfg/gtk-4.0/gtk.css"));
         assert_eq!(p.guard_marker(), Path::new("/st/apex/shell-guard-tripped"));
         assert_eq!(p.updates_notified(), Path::new("/st/apex/updates-notified"));
+        assert_eq!(p.failure_notified(), Path::new("/st/apex/failure-notified"));
     }
 
     #[test]

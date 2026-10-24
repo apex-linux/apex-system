@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use apex_session_agent::agent::Agent;
+use apex_session_agent::failure;
 use apex_session_agent::notifications::DbusNotifier;
 use apex_session_agent::paths::Paths;
 use apex_session_agent::update1;
@@ -40,6 +41,8 @@ const XML: &str = r#"<node>
   </interface>
   <interface name="io.github.apex_linux.Apex.Update1">
     <property name="Staged" type="a{sv}" access="read"/>
+    <property name="HealthFailure" type="s" access="read"/>
+    <property name="LastFallback" type="s" access="read"/>
   </interface>
   <interface name="org.freedesktop.Application">
     <method name="ActivateAction">
@@ -123,31 +126,46 @@ fn staged(digest: &str, version: &str) -> glib::Variant {
     dict.to_variant()
 }
 
-/// A fake Update1 that serves `Staged` and counts the reads.
+type Update1Properties = Rc<RefCell<HashMap<String, glib::Variant>>>;
+
+fn update1_properties(staged: glib::Variant) -> Update1Properties {
+    Rc::new(RefCell::new(HashMap::from([
+        ("Staged".to_owned(), staged),
+        ("HealthFailure".to_owned(), "".to_variant()),
+        ("LastFallback".to_owned(), "".to_variant()),
+    ])))
+}
+
+/// A fake Update1 that serves its properties and counts the reads.
 fn serve_update1(
     connection: &gio::DBusConnection,
-    current: &Rc<RefCell<glib::Variant>>,
+    current: &Update1Properties,
     reads: &Rc<Cell<u32>>,
 ) {
     let current = Rc::clone(current);
     let reads = Rc::clone(reads);
     connection
         .register_object(update1::PATH, &interface(update1::INTERFACE))
-        .property(move |_, _, _, _, _| {
+        .property(move |_, _, _, _, name| {
             reads.set(reads.get() + 1);
-            current.borrow().clone()
+            current.borrow()[name].clone()
         })
         .build()
         .unwrap();
 }
 
-fn stage(
+fn stage(connection: &gio::DBusConnection, current: &Update1Properties, value: glib::Variant) {
+    change(connection, current, "Staged", value);
+}
+
+fn change(
     connection: &gio::DBusConnection,
-    current: &Rc<RefCell<glib::Variant>>,
+    current: &Update1Properties,
+    name: &str,
     value: glib::Variant,
 ) {
-    *current.borrow_mut() = value.clone();
-    let changed: HashMap<String, glib::Variant> = HashMap::from([("Staged".to_owned(), value)]);
+    current.borrow_mut().insert(name.to_owned(), value.clone());
+    let changed: HashMap<String, glib::Variant> = HashMap::from([(name.to_owned(), value)]);
     connection
         .emit_signal(
             None,
@@ -191,6 +209,108 @@ fn start(bus: &Bus, dir: &std::path::Path, paths: &Paths) -> Running {
     }
 }
 
+struct Fixture<'a> {
+    bus: &'a Bus,
+    dir: &'a std::path::Path,
+    paths: &'a Paths,
+    daemon: &'a gio::DBusConnection,
+    current: &'a Update1Properties,
+    reads: &'a Rc<Cell<u32>>,
+    shell: &'a gio::DBusConnection,
+    seen: &'a Rc<RefCell<Seen>>,
+}
+
+/// A restarted agent leaves the posted digest alone, posts the next one and withdraws it.
+fn restart_and_next_digest(f: &Fixture<'_>, running: Running, c: &str) -> Running {
+    drop(running);
+    let reads_before = f.reads.get();
+    let restarted = start(f.bus, &f.dir.join("second"), f.paths);
+    wait_for("the restarted agent's read", || {
+        f.reads.get() > reads_before
+    });
+    settle();
+    assert_eq!(
+        f.seen.borrow().posted.len(),
+        1,
+        "the same digest is not posted again"
+    );
+    assert_eq!(restarted.agent.updates_ready(), None);
+    stage(f.daemon, f.current, staged(c, "45.20260926.119"));
+    wait_for("Updates Ready for the next digest", || {
+        restarted.agent.updates_ready() == Some(8)
+    });
+    assert_eq!(
+        f.seen.borrow().posted[1].1,
+        "Apex 45.20260926.119 is downloaded and ready to install."
+    );
+    assert_eq!(
+        fs::read_to_string(f.paths.updates_notified()).unwrap(),
+        format!("{c}\n")
+    );
+
+    stage(f.daemon, f.current, staged("", ""));
+    wait_for("the notification withdrawn with the stage", || {
+        f.seen.borrow().closed == [8]
+    });
+    assert_eq!(restarted.agent.updates_ready(), None);
+    restarted
+}
+
+/// After the Updates Ready part: notification ids 7 and 8 are taken, and 8 was withdrawn.
+fn failure_notices(f: &Fixture<'_>, restarted: Running, b: &str, c: &str) {
+    change(f.daemon, f.current, "HealthFailure", c.to_variant());
+    wait_for("the health-failure notice", || {
+        restarted.agent.update_failed() == Some(9)
+    });
+    assert_eq!(f.seen.borrow().posted[2].0, failure::HEALTH_SUMMARY);
+    assert_eq!(
+        fs::read_to_string(f.paths.failure_notified()).unwrap(),
+        format!("{c}\n")
+    );
+    change(f.daemon, f.current, "LastFallback", c.to_variant());
+    settle();
+    assert_eq!(f.seen.borrow().posted.len(), 3, "one notice per digest");
+    f.shell
+        .emit_signal(
+            None,
+            NOTIFICATIONS_PATH,
+            NOTIFICATIONS,
+            "ActionInvoked",
+            Some(&(9u32, ACTION_KEY).to_variant()),
+        )
+        .unwrap();
+    wait_for("Software Updates to open", || {
+        f.seen.borrow().activated.len() == 2
+    });
+    let target = f.seen.borrow().activated[1]
+        .child_value(1)
+        .child_value(0)
+        .as_variant()
+        .unwrap();
+    assert_eq!(target.child_value(0).get::<String>().unwrap(), "system");
+    let page = target.child_value(1).get::<Vec<glib::Variant>>().unwrap();
+    assert_eq!(page[0].get::<String>().as_deref(), Some("software-updates"));
+
+    drop(restarted);
+    let reads_before = f.reads.get();
+    let again = start(f.bus, &f.dir.join("third"), f.paths);
+    wait_for("the third agent's read", || f.reads.get() > reads_before);
+    settle();
+    assert_eq!(f.seen.borrow().posted.len(), 3, "not again after a restart");
+    assert_eq!(again.agent.update_failed(), None);
+
+    change(f.daemon, f.current, "HealthFailure", "".to_variant());
+    change(f.daemon, f.current, "LastFallback", b.to_variant());
+    wait_for("a notice for the next failed update", || {
+        again.agent.update_failed() == Some(10)
+    });
+    assert_eq!(f.seen.borrow().posted[3].0, failure::FALLBACK_SUMMARY);
+    change(f.daemon, f.current, "LastFallback", "".to_variant());
+    wait_for("the notice withdrawn when acknowledged", || {
+        f.seen.borrow().closed == [8, 10]
+    });
+}
+
 /// One test: the main context and the buses belong to one thread.
 #[test]
 fn updates_ready_over_a_private_bus() {
@@ -205,7 +325,7 @@ fn updates_ready_over_a_private_bus() {
     let c = format!("sha256:{}", "c".repeat(64));
 
     let daemon = bus.connect();
-    let current = Rc::new(RefCell::new(staged(&b, "45.20260925.118")));
+    let current = update1_properties(staged(&b, "45.20260925.118"));
     let reads = Rc::new(Cell::new(0));
     serve_update1(&daemon, &current, &reads);
     let _update1_name = own(&daemon, update1::BUS_NAME);
@@ -267,36 +387,18 @@ fn updates_ready_over_a_private_bus() {
     assert_eq!(target.type_().as_str(), "(sav)");
     assert_eq!(target.child_value(0).get::<String>().unwrap(), "system");
 
-    drop(running);
-    let reads_before = reads.get();
-    let restarted = start(&bus, &dir.path().join("second"), &paths);
-    wait_for("the restarted agent's read", || reads.get() > reads_before);
-    settle();
-    assert_eq!(
-        seen.borrow().posted.len(),
-        1,
-        "the same digest is not posted again"
-    );
-    assert_eq!(restarted.agent.updates_ready(), None);
-
-    stage(&daemon, &current, staged(&c, "45.20260926.119"));
-    wait_for("Updates Ready for the next digest", || {
-        restarted.agent.updates_ready() == Some(8)
-    });
-    assert_eq!(
-        seen.borrow().posted[1].1,
-        "Apex 45.20260926.119 is downloaded and ready to install."
-    );
-    assert_eq!(
-        fs::read_to_string(paths.updates_notified()).unwrap(),
-        format!("{c}\n")
-    );
-
-    stage(&daemon, &current, staged("", ""));
-    wait_for("the notification withdrawn with the stage", || {
-        seen.borrow().closed == [8]
-    });
-    assert_eq!(restarted.agent.updates_ready(), None);
+    let fixture = Fixture {
+        bus: &bus,
+        dir: dir.path(),
+        paths: &paths,
+        daemon: &daemon,
+        current: &current,
+        reads: &reads,
+        shell: &shell,
+        seen: &seen,
+    };
+    let restarted = restart_and_next_digest(&fixture, running, &c);
+    failure_notices(&fixture, restarted, &b, &c);
 
     gio::bus_unown_name(notifications_name);
     shell.unregister_object(registration).unwrap();

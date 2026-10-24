@@ -1520,6 +1520,24 @@ impl apex_updated::store::Store for UnflushedStore {
         self.0.write_health_failure(record)?;
         Err(unflushed("health-failure.json"))
     }
+    fn read_settings(&self) -> Result<apex_update::UpdateSettings, StoreError> {
+        self.0.read_settings()
+    }
+    fn write_settings(&self, settings: &apex_update::UpdateSettings) -> Result<(), StoreError> {
+        self.0.write_settings(settings)?;
+        Err(unflushed("settings.json"))
+    }
+    fn read_fallback(&self) -> Result<Option<apex_update::FallbackRecord>, StoreError> {
+        self.0.read_fallback()
+    }
+    fn write_fallback(&self, record: &apex_update::FallbackRecord) -> Result<(), StoreError> {
+        self.0.write_fallback(record)?;
+        Err(unflushed("last-fallback.json"))
+    }
+    fn clear_fallback(&self) -> Result<(), StoreError> {
+        self.0.clear_fallback()?;
+        Err(unflushed("last-fallback.json"))
+    }
 }
 
 #[tokio::test(start_paused = true)]

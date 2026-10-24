@@ -226,6 +226,7 @@ impl Harness {
     pub fn last_check(&self, digest: &str, version: &str, age: u64) {
         self.store
             .write_last_check(&LastCheck {
+                remote_size: None,
                 at: NOW - age,
                 remote_digest: Some(digest.into()),
                 remote_version: Some(version.into()),

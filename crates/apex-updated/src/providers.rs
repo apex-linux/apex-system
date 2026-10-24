@@ -12,6 +12,8 @@ use apex_boot::grubenv::{self, ReadError as GrubEnvReadError};
 use apex_boot::writer::GRUBENV_PATH;
 use apex_bootc::DeploymentLocation;
 use apex_update::manifest::MANIFEST_PATH;
+
+use crate::lane_lock::LANE_LOCK_PATH;
 use apex_update::{Manifest, ManifestError, Power};
 use tokio::io::AsyncReadExt;
 use zbus::Connection;
@@ -74,6 +76,12 @@ pub trait DeploymentFiles: Send + Sync {
         &'a self,
         source: &'a ManifestSource,
     ) -> BoxFuture<'a, Result<Option<Manifest>, FileError>>;
+
+    /// The image's lane lock (`/usr/share/apex/rpms.lock`), when it has one.
+    fn lane_lock<'a>(
+        &'a self,
+        source: &'a ManifestSource,
+    ) -> BoxFuture<'a, Result<Option<String>, FileError>>;
 
     fn finalize_failure_stamp(&self) -> bool;
 }
@@ -434,9 +442,13 @@ impl HostFiles {
         }
     }
 
-    async fn read_manifest(&self, source: &ManifestSource) -> Result<Option<Manifest>, FileError> {
-        let relative = MANIFEST_PATH.trim_start_matches('/');
-        let (path, bytes) = match source {
+    async fn read_file(
+        &self,
+        source: &ManifestSource,
+        absolute: &str,
+    ) -> Result<(PathBuf, Option<Vec<u8>>), FileError> {
+        let relative = absolute.trim_start_matches('/');
+        Ok(match source {
             ManifestSource::Running => {
                 let path = self.root.join(relative);
                 let bytes = read_capped(&path)?;
@@ -446,10 +458,14 @@ impl HostFiles {
                 let path = location.root_under(&self.sysroot).join(relative);
                 match read_capped(&path)? {
                     Some(bytes) => (path, Some(bytes)),
-                    None => (path, self.ostree_cat(location.checksum()).await?),
+                    None => (path, self.ostree_cat(location.checksum(), absolute).await?),
                 }
             }
-        };
+        })
+    }
+
+    async fn read_manifest(&self, source: &ManifestSource) -> Result<Option<Manifest>, FileError> {
+        let (path, bytes) = self.read_file(source, MANIFEST_PATH).await?;
         let Some(bytes) = bytes else {
             return Ok(None);
         };
@@ -458,16 +474,21 @@ impl HostFiles {
             .map_err(|source| FileError::Manifest { path, source })
     }
 
+    async fn read_lane_lock(&self, source: &ManifestSource) -> Result<Option<String>, FileError> {
+        let (_, bytes) = self.read_file(source, LANE_LOCK_PATH).await?;
+        Ok(bytes.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+    }
+
     /// [`DeploymentLocation`] validated the checksum as hex, so ostree cannot read it as an
     /// option.
-    async fn ostree_cat(&self, checksum: &str) -> Result<Option<Vec<u8>>, FileError> {
+    async fn ostree_cat(&self, checksum: &str, path: &str) -> Result<Option<Vec<u8>>, FileError> {
         let mut repo = std::ffi::OsString::from("--repo=");
         repo.push(&self.ostree_repo);
         let mut child = tokio::process::Command::new(&self.ostree)
             .arg("cat")
             .arg(repo)
             .arg(checksum)
-            .arg(MANIFEST_PATH)
+            .arg(path)
             .env_clear()
             .env("PATH", "/usr/bin:/usr/sbin")
             .env("LANG", "C.UTF-8")
@@ -521,7 +542,7 @@ impl HostFiles {
             })?;
         if out.len() as u64 > MANIFEST_MAX_SIZE {
             return Err(FileError::TooLarge {
-                path: PathBuf::from(MANIFEST_PATH),
+                path: PathBuf::from(path),
                 limit: MANIFEST_MAX_SIZE,
             });
         }
@@ -579,6 +600,13 @@ impl DeploymentFiles for HostFiles {
         source: &'a ManifestSource,
     ) -> BoxFuture<'a, Result<Option<Manifest>, FileError>> {
         Box::pin(self.read_manifest(source))
+    }
+
+    fn lane_lock<'a>(
+        &'a self,
+        source: &'a ManifestSource,
+    ) -> BoxFuture<'a, Result<Option<String>, FileError>> {
+        Box::pin(self.read_lane_lock(source))
     }
 
     fn finalize_failure_stamp(&self) -> bool {

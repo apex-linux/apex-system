@@ -12,11 +12,22 @@ pub const ICON: &str = "software-update-available-symbolic";
 /// The Settings panel the action opens until the Software Updates page exists (S2d).
 pub const SETTINGS_PANEL: &str = "system";
 
+/// What a once-per-digest notification is about.
+pub trait Digested: Clone {
+    fn digest(&self) -> &str;
+}
+
 /// A staged update the user has not applied yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Staged {
     pub digest: String,
     pub version: Option<String>,
+}
+
+impl Digested for Staged {
+    fn digest(&self) -> &str {
+        &self.digest
+    }
 }
 
 impl Staged {
@@ -29,8 +40,8 @@ impl Staged {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Effect {
-    Post(Staged),
+pub enum Effect<T> {
+    Post(T),
     Withdraw(u32),
     /// Persist the digest, so the agent never posts it again, even after a restart.
     Record(String),
@@ -45,42 +56,45 @@ enum Notification {
     Shown(u32, String),
 }
 
-/// The "Updates Ready" notification as a pure state machine, one post per staged digest.
-#[derive(Debug, Default)]
-pub struct Ready {
-    staged: Option<Staged>,
+/// A notification posted once per digest, as a pure state machine: "Updates Ready" for a
+/// staged update, or the health-failure notice.
+#[derive(Debug)]
+pub struct Ready<T> {
+    current: Option<T>,
     notified: Option<String>,
     notification: Notification,
     server_gone: bool,
 }
 
-impl Ready {
+impl<T: Digested> Ready<T> {
     pub fn new(notified: Option<String>) -> Self {
         Self {
+            current: None,
             notified,
-            ..Self::default()
+            notification: Notification::None,
+            server_gone: false,
         }
     }
 
     fn staged_digest(&self) -> Option<&str> {
-        self.staged.as_ref().map(|s| s.digest.as_str())
+        self.current.as_ref().map(Digested::digest)
     }
 
-    fn next(&mut self) -> Option<Effect> {
-        let staged = self.staged.as_ref()?;
+    fn next(&mut self) -> Option<Effect<T>> {
+        let current = self.current.as_ref()?;
         if self.notification != Notification::None
             || self.server_gone
-            || self.notified.as_deref() == Some(staged.digest.as_str())
+            || self.notified.as_deref() == Some(current.digest())
         {
             return None;
         }
-        self.notification = Notification::Posting(staged.digest.clone());
-        Some(Effect::Post(staged.clone()))
+        self.notification = Notification::Posting(current.digest().to_owned());
+        Some(Effect::Post(current.clone()))
     }
 
-    /// What Update1 reports as staged; `None` once it is applied, discarded or booted.
-    pub fn staged(&mut self, staged: Option<Staged>) -> Vec<Effect> {
-        self.staged = staged;
+    /// What Update1 reports now; `None` once it is gone (applied, discarded, acknowledged).
+    pub fn update(&mut self, current: Option<T>) -> Vec<Effect<T>> {
+        self.current = current;
         let mut effects = Vec::new();
         if let Notification::Shown(id, digest) = &self.notification
             && self.staged_digest() != Some(digest.as_str())
@@ -93,7 +107,7 @@ impl Ready {
     }
 
     /// A shell restart takes the notification along; its digest stays recorded.
-    pub fn server(&mut self, present: bool) -> Option<Effect> {
+    pub fn server(&mut self, present: bool) -> Option<Effect<T>> {
         self.server_gone = !present;
         if !present {
             self.notification = Notification::None;
@@ -102,7 +116,7 @@ impl Ready {
         self.next()
     }
 
-    pub fn posted(&mut self, id: u32) -> Vec<Effect> {
+    pub fn posted(&mut self, id: u32) -> Vec<Effect<T>> {
         let Notification::Posting(digest) = &self.notification else {
             return vec![Effect::Withdraw(id)];
         };
@@ -124,7 +138,7 @@ impl Ready {
         }
     }
 
-    pub fn action(&mut self, id: u32, key: &str) -> Option<Effect> {
+    pub fn action(&mut self, id: u32, key: &str) -> Option<Effect<T>> {
         let Notification::Shown(shown, _) = self.notification else {
             return None;
         };
@@ -160,17 +174,17 @@ mod tests {
         }
     }
 
-    fn shown(id: u32) -> Ready {
-        let mut ready = Ready::new(None);
-        assert_eq!(ready.staged(Some(staged("b"))), [Effect::Post(staged("b"))]);
+    fn shown(id: u32) -> Ready<Staged> {
+        let mut ready = Ready::<Staged>::new(None);
+        assert_eq!(ready.update(Some(staged("b"))), [Effect::Post(staged("b"))]);
         assert_eq!(ready.posted(id), [Effect::Record("b".to_owned())]);
         ready
     }
 
     #[test]
     fn nothing_staged_posts_nothing() {
-        let mut ready = Ready::new(None);
-        assert_eq!(ready.staged(None), []);
+        let mut ready = Ready::<Staged>::new(None);
+        assert_eq!(ready.update(None), []);
         assert_eq!(ready.server(true), None);
     }
 
@@ -178,25 +192,25 @@ mod tests {
     fn a_staged_digest_is_posted_once() {
         let mut ready = shown(7);
         assert_eq!(ready.shown(), Some(7));
-        assert_eq!(ready.staged(Some(staged("b"))), [], "the same digest again");
+        assert_eq!(ready.update(Some(staged("b"))), [], "the same digest again");
         ready.closed(7);
-        assert_eq!(ready.staged(Some(staged("b"))), [], "dismissed");
+        assert_eq!(ready.update(Some(staged("b"))), [], "dismissed");
         assert_eq!(ready.server(false), None);
         assert_eq!(ready.server(true), None, "a shell restart");
     }
 
     #[test]
     fn a_recorded_digest_is_not_posted_after_a_restart() {
-        let mut ready = Ready::new(Some("b".to_owned()));
-        assert_eq!(ready.staged(Some(staged("b"))), []);
-        assert_eq!(ready.staged(Some(staged("c"))), [Effect::Post(staged("c"))]);
+        let mut ready = Ready::<Staged>::new(Some("b".to_owned()));
+        assert_eq!(ready.update(Some(staged("b"))), []);
+        assert_eq!(ready.update(Some(staged("c"))), [Effect::Post(staged("c"))]);
     }
 
     #[test]
     fn a_newer_digest_replaces_the_shown_notification() {
         let mut ready = shown(7);
         assert_eq!(
-            ready.staged(Some(staged("c"))),
+            ready.update(Some(staged("c"))),
             [Effect::Withdraw(7), Effect::Post(staged("c"))]
         );
         assert_eq!(ready.posted(8), [Effect::Record("c".to_owned())]);
@@ -206,9 +220,9 @@ mod tests {
     #[test]
     fn an_applied_or_discarded_update_withdraws_the_notification() {
         let mut ready = shown(7);
-        assert_eq!(ready.staged(None), [Effect::Withdraw(7)]);
+        assert_eq!(ready.update(None), [Effect::Withdraw(7)]);
         assert_eq!(ready.shown(), None);
-        assert_eq!(ready.staged(Some(staged("b"))), [], "still recorded");
+        assert_eq!(ready.update(Some(staged("b"))), [], "still recorded");
     }
 
     #[test]
@@ -227,25 +241,25 @@ mod tests {
 
     #[test]
     fn the_post_waits_for_the_notification_server() {
-        let mut ready = Ready::new(None);
+        let mut ready = Ready::<Staged>::new(None);
         assert_eq!(ready.server(false), None);
-        assert_eq!(ready.staged(Some(staged("b"))), [], "nobody to show it");
+        assert_eq!(ready.update(Some(staged("b"))), [], "nobody to show it");
         assert_eq!(ready.server(true), Some(Effect::Post(staged("b"))));
     }
 
     #[test]
     fn a_failed_post_is_retried_and_not_recorded() {
-        let mut ready = Ready::new(None);
-        assert_eq!(ready.staged(Some(staged("b"))).len(), 1);
+        let mut ready = Ready::<Staged>::new(None);
+        assert_eq!(ready.update(Some(staged("b"))).len(), 1);
         ready.post_failed();
         assert_eq!(ready.server(true), Some(Effect::Post(staged("b"))));
     }
 
     #[test]
     fn a_reply_for_a_digest_no_longer_staged_is_withdrawn() {
-        let mut ready = Ready::new(None);
-        assert_eq!(ready.staged(Some(staged("b"))).len(), 1);
-        assert_eq!(ready.staged(Some(staged("c"))), [], "still posting b");
+        let mut ready = Ready::<Staged>::new(None);
+        assert_eq!(ready.update(Some(staged("b"))).len(), 1);
+        assert_eq!(ready.update(Some(staged("c"))), [], "still posting b");
         assert_eq!(
             ready.posted(7),
             [Effect::Withdraw(7), Effect::Post(staged("c"))]

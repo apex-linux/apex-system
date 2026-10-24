@@ -12,12 +12,13 @@ use apex_boot::{
     check_arming, disarm_ops,
 };
 use apex_bootc::{BootEntry, Bootc, CancelToken, CommandRunner, DownloadOutcome, Host};
-use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind};
+use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind, Hold};
 use apex_update::state::is_available;
 use apex_update::{
-    AfterCheck, ApplyError, AutomaticPlan, DenyEntry, HealthFailureRecord, HostView, Intent,
-    LastCheck, Manifest, RemoteView, SystemSnapshot, Trigger, Version, diff, intent_is_orphaned,
-    plan_after_check, plan_automatic, validate_apply, validate_download,
+    AfterCheck, ApplyError, AutomaticPlan, DenyEntry, FallbackRecord, HealthFailureRecord,
+    HostView, Intent, LastCheck, Manifest, RemoteView, SystemSnapshot, Trigger, UpdateSettings,
+    Version, diff, intent_is_orphaned, plan_after_check, plan_automatic, validate_apply,
+    validate_download,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
@@ -25,6 +26,7 @@ use tokio::time::Instant;
 use crate::REFRESH_MAX_AGE;
 use crate::channel::channel_of_image;
 use crate::errors::{self, from_bootc, from_store};
+use crate::lane_lock;
 use crate::properties::{self, Properties, Work};
 use crate::providers::{
     ASSESS_UNIT, BOOT, BOOT_COMPLETE_UNIT, FileError, GrubEnvSource, ManifestSource, Providers,
@@ -158,6 +160,17 @@ struct ManifestCache {
     running: RunningManifest,
     /// By ostree commit checksum, which names the content.
     deployments: HashMap<String, Option<Arc<Manifest>>>,
+    running_holds: RunningHolds,
+    /// `None` when the image has no lane lock.
+    deployment_holds: HashMap<String, Option<Vec<Hold>>>,
+}
+
+/// `Read(None)` when the running image has no lane lock.
+#[derive(Debug, Clone, Default)]
+enum RunningHolds {
+    #[default]
+    NotRead,
+    Read(Option<Vec<Hold>>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -180,6 +193,8 @@ struct EngineState {
     manifests: ManifestCache,
     work: Option<Work>,
     last_error: String,
+    settings: UpdateSettings,
+    last_fallback: Option<String>,
 }
 
 pub struct Engine<R> {
@@ -484,7 +499,8 @@ impl<R: CommandRunner> Engine<R> {
             rollback: rollback.as_deref(),
         };
         let host_view = view::host_view(&host, &manifests, probes.finalize_failed);
-        let summary = summarize(&host, &manifests);
+        let mut summary = summarize(&host, &manifests);
+        self.attach_holds(&host, &mut summary).await;
 
         let mut state = self.lock();
         let records = match read_records(self.store.as_ref()) {
@@ -496,6 +512,13 @@ impl<R: CommandRunner> Engine<R> {
                 return Err(mapped);
             }
         };
+        match self.store.read_settings() {
+            Ok(settings) => state.settings = settings,
+            Err(error) => {
+                tracing::warn!(error = %errors::with_sources(&error), "ignoring settings.json");
+            }
+        }
+        state.last_fallback = records.fallback.map(|record| record.digest);
         let file_check = self.store.read_last_check().unwrap_or_else(|error| {
             tracing::warn!(error = %errors::with_sources(&error), "ignoring last-check.json");
             LastCheck::default()
@@ -538,6 +561,10 @@ impl<R: CommandRunner> Engine<R> {
         state
             .manifests
             .deployments
+            .retain(|checksum, _| keep.contains(checksum));
+        state
+            .manifests
+            .deployment_holds
             .retain(|checksum, _| keep.contains(checksum));
         state.host = Some(host);
         state.snapshot = Some(snapshot);
@@ -590,6 +617,60 @@ impl<R: CommandRunner> Engine<R> {
         Ok(manifest)
     }
 
+    async fn attach_holds(&self, host: &Host, summary: &mut HostSummary) {
+        summary.booted.holds = self.holds(None).await;
+        if let Some(entry) = host.staged() {
+            summary.staged.holds = self.holds(Some(entry)).await;
+        }
+        if let Some(entry) = host.rollback() {
+            summary.rollback.holds = self.holds(Some(entry)).await;
+        }
+    }
+
+    /// The running image's holds for `None`. A lock that cannot be read leaves the key out.
+    async fn holds(&self, entry: Option<&BootEntry>) -> Option<Vec<Hold>> {
+        let source = match entry {
+            None => {
+                if let RunningHolds::Read(cached) = self.lock().manifests.running_holds.clone() {
+                    return cached;
+                }
+                ManifestSource::Running
+            }
+            Some(entry) => {
+                let location = entry.location().ok()?;
+                if let Some(cached) = self
+                    .lock()
+                    .manifests
+                    .deployment_holds
+                    .get(location.checksum())
+                {
+                    return cached.clone();
+                }
+                ManifestSource::Deployment(location)
+            }
+        };
+        let holds = match self.providers.files.lane_lock(&source).await {
+            Ok(lock) => lock.as_deref().map(lane_lock::holds),
+            Err(error) => {
+                tracing::warn!(error = %errors::with_sources(&error), "cannot read a lane lock");
+                return None;
+            }
+        };
+        let mut state = self.lock();
+        match &source {
+            ManifestSource::Running => {
+                state.manifests.running_holds = RunningHolds::Read(holds.clone());
+            }
+            ManifestSource::Deployment(location) => {
+                state
+                    .manifests
+                    .deployment_holds
+                    .insert(location.checksum().to_owned(), holds.clone());
+            }
+        }
+        holds
+    }
+
     fn record_check(&self, record: LastCheck, timestamp: Option<u64>) {
         if let Err(error) = unflushed_is_done(
             self.store.write_last_check(&record),
@@ -628,11 +709,14 @@ impl<R: CommandRunner> Engine<R> {
             tracing::warn!(?outcome, "the check did not name the channel's image");
         }
         let timestamp = remote.as_ref().and_then(|r| r.timestamp);
-        let (remote_digest, remote_version) = remote
+        let (remote_digest, remote_version, remote_size) = remote
             .map(
                 |RemoteImage {
-                     digest, version, ..
-                 }| (Some(digest), version),
+                     digest,
+                     version,
+                     size,
+                     ..
+                 }| (Some(digest), version, size),
             )
             .unwrap_or_default();
         self.record_check(
@@ -640,6 +724,7 @@ impl<R: CommandRunner> Engine<R> {
                 at: now,
                 remote_digest,
                 remote_version,
+                remote_size,
             },
             timestamp,
         );
@@ -742,6 +827,7 @@ impl<R: CommandRunner> Engine<R> {
                     at: self.now(),
                     remote_digest: Some(image.image_digest.clone()),
                     remote_version: image.version.clone(),
+                    remote_size: None,
                 },
                 image_timestamp(image),
             );
@@ -1055,6 +1141,10 @@ impl<R: CommandRunner> Engine<R> {
             }
             AutomaticPlan::CheckThenDownload => self.check(cancel).await?,
         }
+        if !self.lock().settings.automatic_downloads {
+            tracing::info!("automatic run: checked; automatic downloads are off");
+            return Ok(());
+        }
         match plan_after_check(&self.snapshot()?) {
             AfterCheck::NothingToDo => {
                 tracing::info!("automatic run: nothing to download");
@@ -1079,6 +1169,7 @@ impl<R: CommandRunner> Engine<R> {
             ));
         }
         self.deny(digest, FALLBACK_REASON)?;
+        self.record_fallback(digest)?;
         // Only in exactly this state: a repeated report must not swap the order back.
         if host.rollback_queued() && host.rollback_digest() == Some(digest) {
             if let Err(error) = self.marking_bootc_busy(self.bootc.rollback(cancel)).await {
@@ -1108,6 +1199,37 @@ impl<R: CommandRunner> Engine<R> {
             self.clear_intent();
         }
         self.refresh_after_acting(cancel).await;
+        Ok(())
+    }
+
+    fn record_fallback(&self, digest: &str) -> Result<(), ApexError> {
+        let record = FallbackRecord {
+            digest: digest.to_owned(),
+            at: self.now(),
+        };
+        let mut state = self.lock();
+        unflushed_is_done(
+            self.store.write_fallback(&record),
+            "saving the last fallback",
+        )
+        .map_err(|e| from_store(&e))?;
+        state.last_fallback = Some(record.digest);
+        drop(state);
+        self.publish();
+        Ok(())
+    }
+
+    pub fn set_automatic_downloads(&self, enabled: bool) -> Result<(), ApexError> {
+        let settings = UpdateSettings {
+            automatic_downloads: enabled,
+        };
+        let mut state = self.lock();
+        unflushed_is_done(self.store.write_settings(&settings), "saving settings.json")
+            .map_err(|e| from_store(&e))?;
+        state.settings = settings;
+        drop(state);
+        tracing::info!(enabled, "automatic downloads set");
+        self.publish();
         Ok(())
     }
 
@@ -1187,9 +1309,12 @@ impl<R: CommandRunner> Engine<R> {
                 "clearing the health failure",
             )
             .map_err(|e| from_store(&e))?;
+            unflushed_is_done(self.store.clear_fallback(), "clearing the last fallback")
+                .map_err(|e| from_store(&e))?;
             if let Some(snapshot) = &mut state.snapshot {
                 snapshot.health_failure = None;
             }
+            state.last_fallback = None;
         }
         tracing::info!("health failure acknowledged");
         self.publish();
@@ -1352,6 +1477,7 @@ struct Records {
     intent: Option<Intent>,
     denylist: apex_update::Denylist,
     health: Option<HealthFailureRecord>,
+    fallback: Option<FallbackRecord>,
 }
 
 fn read_records(store: &dyn Store) -> Result<Records, apex_update::StoreError> {
@@ -1359,6 +1485,7 @@ fn read_records(store: &dyn Store) -> Result<Records, apex_update::StoreError> {
         intent: store.read_intent()?,
         denylist: store.read_denylist()?,
         health: store.read_health_failure()?,
+        fallback: store.read_fallback()?,
     })
 }
 
@@ -1407,14 +1534,21 @@ fn build_properties(state: &EngineState) -> Properties {
                 .as_ref()
                 .filter(|(digest, _)| *digest == remote.digest)
                 .map(|(_, t)| *t),
+            download_size: Some(state.last_check.remote_size.unwrap_or(0)),
             ..apex_dbus::Deployment::default()
         })
         .unwrap_or_default();
+    let mut staged = summary.staged.clone();
+    if !staged.is_empty() {
+        let measured = staged.digest.is_some() && staged.digest == state.last_check.remote_digest;
+        let size = measured.then_some(state.last_check.remote_size).flatten();
+        staged.download_size = Some(size.unwrap_or(0));
+    }
     Properties {
         state: properties::state(snapshot, work, state.refresh_failure.is_some()),
         progress: properties::progress(work),
         booted: summary.booted.clone(),
-        staged: summary.staged.clone(),
+        staged,
         rollback: summary.rollback.clone(),
         available,
         channel: summary.channel.unwrap_or(Channel::Stable),
@@ -1424,6 +1558,8 @@ fn build_properties(state: &EngineState) -> Properties {
         health_failure: snapshot
             .and_then(|s| s.health_failure.clone())
             .unwrap_or_default(),
+        last_fallback: state.last_fallback.clone().unwrap_or_default(),
+        automatic_downloads: state.settings.automatic_downloads,
     }
 }
 
@@ -1484,6 +1620,7 @@ mod tests {
             at: 1,
             remote_digest: Some("sha256:r".into()),
             remote_version: Some("not a version".into()),
+            remote_size: None,
         })
         .unwrap();
         assert_eq!(view.digest, "sha256:r");

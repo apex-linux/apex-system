@@ -60,6 +60,7 @@ async fn check_download_apply_flow() {
         CheckOutcome::Available {
             version: Some("45.20260924.117".into()),
             digest: Some(Digest::parse(DIGEST).unwrap()),
+            size: None,
         }
     );
 

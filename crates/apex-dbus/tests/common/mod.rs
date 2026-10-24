@@ -82,6 +82,13 @@ pub(crate) fn booted() -> Deployment {
         download_only: None,
         degraded: Some(vec!["audio".to_owned()]),
         held: Some(vec!["gnome-shell".to_owned()]),
+        holds: Some(vec![apex_dbus::Hold {
+            family: "gnome-shell".to_owned(),
+            newer: "gnome-shell-51.1-1.fc45".to_owned(),
+            since: 1_790_000_000,
+            security: false,
+        }]),
+        download_size: None,
     }
 }
 
@@ -95,6 +102,8 @@ pub(crate) fn staged() -> Deployment {
         download_only: Some(true),
         degraded: Some(Vec::new()),
         held: Some(Vec::new()),
+        holds: Some(Vec::new()),
+        download_size: Some(1_200_000_000),
     }
 }
 
@@ -269,6 +278,19 @@ impl MockDaemon {
         Ok(())
     }
 
+    fn set_automatic_downloads(
+        &self,
+        enabled: bool,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<(), ApexError> {
+        self.log.call(&header);
+        if enabled {
+            Ok(())
+        } else {
+            Err(ApexError::NotAuthorized("auth_admin".to_owned()))
+        }
+    }
+
     #[zbus(property)]
     fn state(&self) -> State {
         self.log.property("State");
@@ -333,6 +355,18 @@ impl MockDaemon {
     fn health_failure(&self) -> String {
         self.log.property("HealthFailure");
         String::new()
+    }
+
+    #[zbus(property)]
+    fn last_fallback(&self) -> String {
+        self.log.property("LastFallback");
+        STAGED_DIGEST.to_owned()
+    }
+
+    #[zbus(property)]
+    fn automatic_downloads(&self) -> bool {
+        self.log.property("AutomaticDownloads");
+        false
     }
 }
 

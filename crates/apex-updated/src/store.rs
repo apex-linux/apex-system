@@ -1,19 +1,29 @@
 use apex_update::store::{
-    DENYLIST_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE, write_json_atomic,
+    DENYLIST_FILE, FALLBACK_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE, SETTINGS_FILE,
+    read_json, remove_durable, write_json_atomic,
 };
-use apex_update::{HealthFailureRecord, StateDir, StateStore, StoreError};
+use apex_update::{
+    FallbackRecord, HealthFailureRecord, StateDir, StateStore, StoreError, UpdateSettings,
+};
 
 use crate::errors::with_sources;
 
-pub const STATE_FILES: [&str; 4] = [
+pub const STATE_FILES: [&str; 6] = [
     INTENT_FILE,
     DENYLIST_FILE,
     LAST_CHECK_FILE,
     HEALTH_FAILURE_FILE,
+    SETTINGS_FILE,
+    FALLBACK_FILE,
 ];
 
 pub trait Store: StateStore + Send + Sync {
     fn write_health_failure(&self, record: &HealthFailureRecord) -> Result<(), StoreError>;
+    fn read_settings(&self) -> Result<UpdateSettings, StoreError>;
+    fn write_settings(&self, settings: &UpdateSettings) -> Result<(), StoreError>;
+    fn read_fallback(&self) -> Result<Option<FallbackRecord>, StoreError>;
+    fn write_fallback(&self, record: &FallbackRecord) -> Result<(), StoreError>;
+    fn clear_fallback(&self) -> Result<(), StoreError>;
 
     /// Every write cleans up after earlier writes of its own file; this, at startup, covers
     /// files rarely written, such as the denylist.
@@ -25,6 +35,26 @@ pub trait Store: StateStore + Send + Sync {
 impl Store for StateDir {
     fn write_health_failure(&self, record: &HealthFailureRecord) -> Result<(), StoreError> {
         write_json_atomic(&self.file(HEALTH_FAILURE_FILE), record)
+    }
+
+    fn read_settings(&self) -> Result<UpdateSettings, StoreError> {
+        Ok(read_json(&self.file(SETTINGS_FILE))?.unwrap_or_default())
+    }
+
+    fn write_settings(&self, settings: &UpdateSettings) -> Result<(), StoreError> {
+        write_json_atomic(&self.file(SETTINGS_FILE), settings)
+    }
+
+    fn read_fallback(&self) -> Result<Option<FallbackRecord>, StoreError> {
+        read_json(&self.file(FALLBACK_FILE))
+    }
+
+    fn write_fallback(&self, record: &FallbackRecord) -> Result<(), StoreError> {
+        write_json_atomic(&self.file(FALLBACK_FILE), record)
+    }
+
+    fn clear_fallback(&self) -> Result<(), StoreError> {
+        remove_durable(&self.file(FALLBACK_FILE))
     }
 
     fn remove_stale_temp_files(&self) -> usize {
@@ -70,6 +100,36 @@ mod tests {
         assert_eq!(store.read_health_failure().unwrap(), Some(record));
         store.clear_health_failure().unwrap();
         assert_eq!(store.read_health_failure().unwrap(), None);
+    }
+
+    #[test]
+    fn settings_and_fallback_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateDir::new(dir.path());
+        assert!(
+            store.read_settings().unwrap().automatic_downloads,
+            "the default"
+        );
+        store
+            .write_settings(&UpdateSettings {
+                automatic_downloads: false,
+            })
+            .unwrap();
+        assert!(
+            !StateDir::new(dir.path())
+                .read_settings()
+                .unwrap()
+                .automatic_downloads
+        );
+        assert_eq!(store.read_fallback().unwrap(), None);
+        let record = FallbackRecord {
+            digest: "sha256:ff".into(),
+            at: 9,
+        };
+        store.write_fallback(&record).unwrap();
+        assert_eq!(store.read_fallback().unwrap(), Some(record));
+        store.clear_fallback().unwrap();
+        assert_eq!(store.read_fallback().unwrap(), None);
     }
 
     /// Above the kernel's `PID_MAX_LIMIT` (4194304).

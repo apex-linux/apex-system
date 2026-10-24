@@ -12,6 +12,9 @@ pub const PATH: &str = "/io/github/apex_linux/Apex/Update1";
 pub const INTERFACE: &str = "io.github.apex_linux.Apex.Update1";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 const STAGED: &str = "Staged";
+const HEALTH_FAILURE: &str = "HealthFailure";
+const LAST_FALLBACK: &str = "LastFallback";
+const WATCHED: [&str; 3] = [STAGED, HEALTH_FAILURE, LAST_FALLBACK];
 
 /// Update1's `Staged` dictionary, when it holds an update the user has not applied: an
 /// applied stage (`download-only` false) is already the user's choice.
@@ -29,8 +32,22 @@ pub fn staged_from(dict: &glib::Variant) -> Option<Staged> {
     })
 }
 
-/// Watches `Staged` on the system bus. It never starts the daemon: the name appears when
-/// the daily check or a front end starts it, and the property is read then.
+/// Hands the agent each watched property found in `properties`; an older daemon may lack some.
+fn deliver(agent: &Rc<Agent>, properties: &HashMap<String, glib::Variant>) {
+    if let Some(dict) = properties.get(STAGED) {
+        agent.staged(staged_from(dict));
+    }
+    let text = |name: &str| properties.get(name).and_then(glib::Variant::get::<String>);
+    if let Some(digest) = text(HEALTH_FAILURE) {
+        agent.health_failure(&digest);
+    }
+    if let Some(digest) = text(LAST_FALLBACK) {
+        agent.last_fallback(&digest);
+    }
+}
+
+/// Watches `Staged`, `HealthFailure` and `LastFallback` on the system bus. It never starts
+/// the daemon: the name appears when the daily check or a front end starts it.
 pub fn subscribe(connection: &gio::DBusConnection, agent: &Rc<Agent>) -> Subscription {
     let on_change = Rc::downgrade(agent);
     let fetch_connection = connection.clone();
@@ -49,11 +66,13 @@ pub fn subscribe(connection: &gio::DBusConnection, agent: &Rc<Agent>) -> Subscri
             else {
                 return;
             };
-            if let Some(dict) = changed.get(STAGED) {
-                if let Some(agent) = on_change.upgrade() {
-                    agent.staged(staged_from(dict));
-                }
-            } else if invalidated.iter().any(|name| name == STAGED) {
+            if let Some(agent) = on_change.upgrade() {
+                deliver(&agent, &changed);
+            }
+            if invalidated
+                .iter()
+                .any(|name| WATCHED.contains(&name.as_str()))
+            {
                 fetch(&fetch_connection, on_change.clone());
             }
         },
@@ -77,22 +96,22 @@ fn fetch(connection: &gio::DBusConnection, agent: Weak<Agent>) {
         Some(BUS_NAME),
         PATH,
         PROPERTIES,
-        "Get",
-        Some(&(INTERFACE, STAGED).to_variant()),
-        Some(&<(glib::Variant,)>::static_variant_type()),
+        "GetAll",
+        Some(&(INTERFACE,).to_variant()),
+        Some(&<(HashMap<String, glib::Variant>,)>::static_variant_type()),
         gio::DBusCallFlags::NO_AUTO_START,
         CALL_TIMEOUT_MS,
         gio::Cancellable::NONE,
         move |reply| match reply {
             Ok(reply) => {
-                let Some((dict,)) = reply.get::<(glib::Variant,)>() else {
+                let Some((properties,)) = reply.get::<(HashMap<String, glib::Variant>,)>() else {
                     return;
                 };
                 if let Some(agent) = agent.upgrade() {
-                    agent.staged(staged_from(&dict));
+                    deliver(&agent, &properties);
                 }
             }
-            Err(error) => tracing::warn!(%error, "cannot read the staged update from Update1"),
+            Err(error) => tracing::warn!(%error, "cannot read Update1's properties"),
         },
     );
 }

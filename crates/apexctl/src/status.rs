@@ -557,6 +557,7 @@ pub(crate) mod tests {
             download_only: None,
             degraded: Some(vec!["audio".to_owned()]),
             held: Some(vec!["gnome-shell".to_owned()]),
+            ..Deployment::default()
         }
     }
 

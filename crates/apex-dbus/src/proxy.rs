@@ -36,6 +36,9 @@ pub trait Update1 {
     #[zbus(name = "ReportBoot")]
     fn report_boot(&self, verdict: BootVerdict, digest: &str) -> Result<(), ApexError>;
 
+    #[zbus(name = "SetAutomaticDownloads", allow_interactive_auth)]
+    fn set_automatic_downloads(&self, enabled: bool) -> Result<(), ApexError>;
+
     #[zbus(property, name = "State")]
     fn state(&self) -> zbus::Result<State>;
 
@@ -68,6 +71,12 @@ pub trait Update1 {
 
     #[zbus(property, name = "HealthFailure")]
     fn health_failure(&self) -> zbus::Result<String>;
+
+    #[zbus(property, name = "LastFallback")]
+    fn last_fallback(&self) -> zbus::Result<String>;
+
+    #[zbus(property, name = "AutomaticDownloads")]
+    fn automatic_downloads(&self) -> zbus::Result<bool>;
 }
 
 #[cfg(test)]

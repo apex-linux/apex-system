@@ -4,6 +4,20 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 use zbus::{Optional, OwnedVariant, Signature, Str, Type, Variant};
 
+/// One held lane family, `(sstb)` on the wire.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Hold {
+    pub family: String,
+    /// The newer Fedora builds it holds back from, comma-separated; `""` when unknown.
+    pub newer: String,
+    /// Unix seconds; 0 when unknown.
+    pub since: u64,
+    /// False when the newer builds carry no security update, or when that is unknown.
+    pub security: bool,
+}
+
+type HoldTuple = (String, String, u64, bool);
+
 use crate::values::ValueError;
 
 /// The empty dictionary means "no such deployment". Unknown keys are ignored, so a newer
@@ -22,6 +36,11 @@ pub struct Deployment {
     pub degraded: Option<Vec<String>>,
     /// Lane families kept at their last good build, from the deployment's own manifest.
     pub held: Option<Vec<String>>,
+    /// From the deployment's lane lock, so absent for `Available`.
+    pub holds: Option<Vec<Hold>>,
+    /// `Available` and `Staged` only: bytes still to download as the check found them, 0
+    /// when unknown.
+    pub download_size: Option<u64>,
 }
 
 const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedVariant> as Type>::SIGNATURE;
@@ -35,8 +54,10 @@ impl Deployment {
     pub const DOWNLOAD_ONLY: &'static str = "download-only";
     pub const DEGRADED: &'static str = "degraded";
     pub const HELD: &'static str = "held";
+    pub const HOLDS: &'static str = "holds";
+    pub const DOWNLOAD_SIZE: &'static str = "download-size";
 
-    pub const KEYS: [(&'static str, &'static Signature); 8] = [
+    pub const KEYS: [(&'static str, &'static Signature); 10] = [
         (Self::IMAGE, <String as Type>::SIGNATURE),
         (Self::DIGEST, <String as Type>::SIGNATURE),
         (Self::VERSION, <String as Type>::SIGNATURE),
@@ -45,6 +66,8 @@ impl Deployment {
         (Self::DOWNLOAD_ONLY, <bool as Type>::SIGNATURE),
         (Self::DEGRADED, <Vec<String> as Type>::SIGNATURE),
         (Self::HELD, <Vec<String> as Type>::SIGNATURE),
+        (Self::HOLDS, <Vec<HoldTuple> as Type>::SIGNATURE),
+        (Self::DOWNLOAD_SIZE, <u64 as Type>::SIGNATURE),
     ];
 
     pub fn is_empty(&self) -> bool {
@@ -70,6 +93,8 @@ impl Deployment {
                 Self::DOWNLOAD_ONLY => deployment.download_only = Some(boolean(key, value)?),
                 Self::DEGRADED => deployment.degraded = Some(string_array(key, value)?),
                 Self::HELD => deployment.held = Some(string_array(key, value)?),
+                Self::HOLDS => deployment.holds = Some(holds(key, value)?),
+                Self::DOWNLOAD_SIZE => deployment.download_size = Some(uint64(key, value)?),
                 _ => {}
             }
         }
@@ -132,6 +157,47 @@ fn string_array(key: &str, value: &Variant<'_>) -> Result<Vec<String>, ValueErro
         .collect()
 }
 
+fn holds(key: &str, value: &Variant<'_>) -> Result<Vec<Hold>, ValueError> {
+    let expected = <Vec<HoldTuple> as Type>::SIGNATURE;
+    let wrong = || ValueError::wrong_type(field(key), expected, value);
+    let Variant::Array(array) = value else {
+        return Err(wrong());
+    };
+    if array.signature() != expected {
+        return Err(wrong());
+    }
+    array
+        .iter()
+        .map(|element| {
+            let Variant::Structure(record) = element else {
+                return Err(wrong());
+            };
+            match record.fields() {
+                [
+                    Variant::Str(family),
+                    Variant::Str(newer),
+                    Variant::U64(since),
+                    Variant::Bool(security),
+                ] => Ok(Hold {
+                    family: family.as_str().to_owned(),
+                    newer: newer.as_str().to_owned(),
+                    since: *since,
+                    security: *security,
+                }),
+                _ => Err(wrong()),
+            }
+        })
+        .collect()
+}
+
+fn owned_holds(holds: Vec<Hold>) -> OwnedVariant {
+    let tuples: Vec<HoldTuple> = holds
+        .into_iter()
+        .map(|h| (h.family, h.newer, h.since, h.security))
+        .collect();
+    OwnedVariant::from(Optional::from(Some(tuples)))
+}
+
 /// zbus converts arrays only fallibly (duplicating file descriptors can fail), but its
 /// infallible `From<Optional<V>> for OwnedVariant` covers `Vec<String>`.
 fn owned_string_array(items: Vec<String>) -> OwnedVariant {
@@ -149,6 +215,8 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
             download_only,
             degraded,
             held,
+            holds,
+            download_size,
         } = deployment;
         let text = |value: String| OwnedVariant::from(Str::from(value));
         let entries = [
@@ -163,6 +231,11 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
             ),
             (Deployment::DEGRADED, degraded.map(owned_string_array)),
             (Deployment::HELD, held.map(owned_string_array)),
+            (Deployment::HOLDS, holds.map(owned_holds)),
+            (
+                Deployment::DOWNLOAD_SIZE,
+                download_size.map(OwnedVariant::from),
+            ),
         ];
         entries
             .into_iter()
@@ -266,7 +339,25 @@ mod tests {
             download_only: Some(true),
             degraded: Some(vec!["audio".to_owned()]),
             held: Some(vec!["gnome-shell".to_owned()]),
+            holds: Some(vec![Hold {
+                family: "gnome-shell".to_owned(),
+                newer: "gnome-shell-51.1-1.fc45,mutter-51.1-1.fc45".to_owned(),
+                since: 1_791_000_000,
+                security: true,
+            }]),
+            download_size: Some(1_200_000_000),
         }
+    }
+
+    fn hold_strategy() -> impl Strategy<Value = Hold> {
+        (TEXT, TEXT, any::<u64>(), any::<bool>()).prop_map(|(family, newer, since, security)| {
+            Hold {
+                family,
+                newer,
+                since,
+                security,
+            }
+        })
     }
 
     /// D-Bus strings cannot contain NUL.
@@ -282,19 +373,32 @@ mod tests {
             option::of(any::<bool>()),
             option::of(vec(TEXT, 0..4)),
             option::of(vec(TEXT, 0..4)),
+            option::of(vec(hold_strategy(), 0..3)),
+            option::of(any::<u64>()),
         )
             .prop_map(
-                |(image, digest, version, timestamp, pinned, download_only, degraded, held)| {
-                    Deployment {
-                        image,
-                        digest,
-                        version,
-                        timestamp,
-                        pinned,
-                        download_only,
-                        degraded,
-                        held,
-                    }
+                |(
+                    image,
+                    digest,
+                    version,
+                    timestamp,
+                    pinned,
+                    download_only,
+                    degraded,
+                    held,
+                    holds,
+                    download_size,
+                )| Deployment {
+                    image,
+                    digest,
+                    version,
+                    timestamp,
+                    pinned,
+                    download_only,
+                    degraded,
+                    held,
+                    holds,
+                    download_size,
                 },
             )
     }
@@ -321,7 +425,9 @@ mod tests {
                 "pinned:b",
                 "download-only:b",
                 "degraded:as",
-                "held:as"
+                "held:as",
+                "holds:a(sstb)",
+                "download-size:t"
             ]
         );
         assert_eq!(Deployment::SIGNATURE.to_string(), "a{sv}");
@@ -399,6 +505,18 @@ mod tests {
             error.to_string(),
             "Deployment: expected D-Bus type a{sv}, found a{ss}"
         );
+    }
+
+    #[test]
+    fn holds_of_the_wrong_shape_are_refused() {
+        let mut map = HashMap::<String, OwnedVariant>::new();
+        let wrong: Vec<(String, String, u32, bool)> = vec![("a".into(), "b".into(), 1, true)];
+        map.insert(
+            Deployment::HOLDS.to_owned(),
+            OwnedVariant::from(Optional::from(Some(wrong))),
+        );
+        let error = Deployment::try_from(map).unwrap_err();
+        assert!(error.to_string().contains("a(sstb)"), "{error}");
     }
 
     #[test]

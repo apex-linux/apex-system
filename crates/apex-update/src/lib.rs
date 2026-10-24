@@ -20,7 +20,9 @@ pub use plan::{
     AfterCheck, ApplyError, AutomaticPlan, DownloadError, intent_is_orphaned, plan_after_check,
     plan_automatic, validate_apply, validate_download,
 };
-pub use records::{DenyEntry, Denylist, HealthFailureRecord, Intent, LastCheck};
+pub use records::{
+    DenyEntry, Denylist, FallbackRecord, HealthFailureRecord, Intent, LastCheck, UpdateSettings,
+};
 pub use rpmvercmp::{Evr, EvrRef, rpmvercmp};
 pub use snapshot::{DeploymentView, HostView, Power, RemoteView, SystemSnapshot};
 pub use state::{State, derive_state};

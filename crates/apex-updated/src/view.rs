@@ -68,6 +68,8 @@ pub fn deployment_dict(
             held.dedup();
             held
         }),
+        holds: None,
+        download_size: None,
     }
 }
 
@@ -81,6 +83,8 @@ pub struct RemoteImage {
     pub digest: String,
     pub version: Option<String>,
     pub timestamp: Option<u64>,
+    /// Bytes of new layers, as the check rounded them.
+    pub size: Option<u64>,
 }
 
 fn known_image<'h>(host: &'h Host, digest: &str) -> Option<&'h ImageStatus> {
@@ -99,12 +103,17 @@ pub fn remote_after_check(
     host: &Host,
     last: &LastCheck,
 ) -> Option<RemoteImage> {
-    let (digest, version) = match outcome {
+    let (digest, version, size) = match outcome {
         CheckOutcome::Available {
             digest: Some(digest),
             version,
-        } => (digest.as_str(), version.clone()),
-        CheckOutcome::UpToDate => (last.remote_digest.as_deref()?, last.remote_version.clone()),
+            size,
+        } => (digest.as_str(), version.clone(), *size),
+        CheckOutcome::UpToDate => (
+            last.remote_digest.as_deref()?,
+            last.remote_version.clone(),
+            last.remote_size,
+        ),
         CheckOutcome::Available { digest: None, .. } | CheckOutcome::Unknown => return None,
     };
     let known = known_image(host, digest);
@@ -112,6 +121,7 @@ pub fn remote_after_check(
         digest: digest.to_owned(),
         version: version.or_else(|| known.and_then(|image| image.version.clone())),
         timestamp: known.and_then(image_timestamp),
+        size,
     })
 }
 
@@ -217,6 +227,7 @@ mod tests {
             at: 1,
             remote_digest: digest.map(str::to_owned),
             remote_version: version.map(str::to_owned),
+            remote_size: Some(800_000_000),
         }
     }
 
@@ -226,6 +237,7 @@ mod tests {
         let outcome = CheckOutcome::Available {
             version: None,
             digest: Some(digest),
+            size: Some(1_200_000_000),
         };
         let none = LastCheck::default();
         let with_cache = host(Some(image(REMOTE, "45.20260924.3")), false);
@@ -235,6 +247,7 @@ mod tests {
                 digest: REMOTE.into(),
                 version: Some("45.20260924.3".into()),
                 timestamp: Some(1_790_208_000),
+                size: Some(1_200_000_000),
             })
         );
         let other_cache = host(Some(image(STAGED, "45.20260922.1")), false);
@@ -244,11 +257,13 @@ mod tests {
                 digest: REMOTE.into(),
                 version: None,
                 timestamp: None,
+                size: Some(1_200_000_000),
             })
         );
         let back = CheckOutcome::Available {
             version: Some("45.20260922.1".into()),
             digest: Some(Digest::parse(STAGED).unwrap()),
+            size: None,
         };
         let staged = host(None, true);
         assert_eq!(
@@ -257,6 +272,7 @@ mod tests {
                 digest: STAGED.into(),
                 version: Some("45.20260922.1".into()),
                 timestamp: Some(1_790_208_000),
+                size: None,
             })
         );
     }
@@ -273,6 +289,7 @@ mod tests {
                 digest: REMOTE.into(),
                 version: Some("45.20260924.3".into()),
                 timestamp: None,
+                size: Some(800_000_000),
             })
         );
         let h = host(None, true);
@@ -283,6 +300,7 @@ mod tests {
                 digest: STAGED.into(),
                 version: Some("45.20260922.1".into()),
                 timestamp: Some(1_790_208_000),
+                size: Some(800_000_000),
             })
         );
         let h = host(Some(image(REMOTE, "45.20260924.3")), true);
@@ -307,6 +325,7 @@ mod tests {
         let no_digest = CheckOutcome::Available {
             version: Some("45.20260924.3".into()),
             digest: None,
+            size: None,
         };
         assert_eq!(remote_after_check(&no_digest, &h, &pulled), None);
     }

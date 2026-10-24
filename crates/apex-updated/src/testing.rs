@@ -91,6 +91,9 @@ pub struct FakeState {
     pub running_manifest: Option<Manifest>,
     /// By ostree commit checksum.
     pub manifests: HashMap<String, Manifest>,
+    pub running_lane_lock: Option<String>,
+    /// By ostree commit checksum.
+    pub lane_locks: HashMap<String, String>,
     pub finalize_stamp: bool,
 }
 
@@ -109,6 +112,8 @@ impl Default for FakeState {
             units: HashMap::new(),
             running_manifest: None,
             manifests: HashMap::new(),
+            running_lane_lock: None,
+            lane_locks: HashMap::new(),
             finalize_stamp: false,
         }
     }
@@ -210,6 +215,20 @@ impl DeploymentFiles for FakeSystem {
             }
         };
         Box::pin(async move { Ok(manifest) })
+    }
+
+    fn lane_lock<'a>(
+        &'a self,
+        source: &'a ManifestSource,
+    ) -> BoxFuture<'a, Result<Option<String>, FileError>> {
+        let state = self.lock();
+        let lock = match source {
+            ManifestSource::Running => state.running_lane_lock.clone(),
+            ManifestSource::Deployment(location) => {
+                state.lane_locks.get(location.checksum()).cloned()
+            }
+        };
+        Box::pin(async move { Ok(lock) })
     }
 
     fn finalize_failure_stamp(&self) -> bool {

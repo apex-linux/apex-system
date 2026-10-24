@@ -1,13 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gio::prelude::*;
 
+use crate::failure::{self, Failure};
 use crate::files;
 use crate::guard::{self, Effect, Offer};
 use crate::paths::Paths;
-use crate::updates::{self, Ready, Staged};
+use crate::updates::{self, Digested, Ready, Staged};
 use crate::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
 
 /// The reply of a `Notify` call: the notification id, or `None` when it failed.
@@ -25,8 +27,46 @@ pub struct Notification {
 pub trait Notifier {
     fn post(&self, notification: &Notification, posted: Posted);
     fn withdraw(&self, id: u32);
-    fn open_settings(&self, panel: &str);
+    /// `page` is the panel's argument, as in `gnome-control-center PANEL PAGE`.
+    fn open_settings(&self, panel: &str, page: Option<&str>);
 }
+
+/// One once-per-digest notification: where its machine lives, what it says, where its
+/// digest is recorded, and what its action opens.
+struct Once<T> {
+    machine: fn(&Agent) -> &RefCell<Ready<T>>,
+    notification: fn(&T) -> Notification,
+    file: fn(&Paths) -> PathBuf,
+    panel: &'static str,
+    page: Option<&'static str>,
+    what: &'static str,
+}
+
+const UPDATES_READY: Once<Staged> = Once {
+    machine: |agent| &agent.ready,
+    notification: |staged| Notification {
+        icon: updates::ICON,
+        summary: updates::SUMMARY.to_owned(),
+        body: staged.body(),
+        actions: vec![
+            (updates::DEFAULT_ACTION_KEY, updates::ACTION_LABEL),
+            (updates::ACTION_KEY, updates::ACTION_LABEL),
+        ],
+    },
+    file: Paths::updates_notified,
+    panel: updates::SETTINGS_PANEL,
+    page: None,
+    what: "cannot record the notified update",
+};
+
+const UPDATE_FAILED: Once<Failure> = Once {
+    machine: |agent| &agent.failure,
+    notification: Failure::notification,
+    file: Paths::failure_notified,
+    panel: failure::SETTINGS_PANEL,
+    page: Some(failure::SETTINGS_PAGE),
+    what: "cannot record the notified update failure",
+};
 
 /// The Apex schema drives every feature but the palette, which follows the stock accent.
 pub struct Agent {
@@ -34,7 +74,10 @@ pub struct Agent {
     interface: Option<gio::Settings>,
     paths: Paths,
     offer: RefCell<Offer>,
-    ready: RefCell<Ready>,
+    ready: RefCell<Ready<Staged>>,
+    failure: RefCell<Ready<Failure>>,
+    /// Update1's `HealthFailure` and `LastFallback`, as last read.
+    failed: RefCell<(String, String)>,
     notifier: Box<dyn Notifier>,
     watches: RefCell<Vec<(gio::Settings, glib::SignalHandlerId)>>,
     monitor: RefCell<Option<gio::FileMonitor>>,
@@ -48,13 +91,16 @@ impl Agent {
         paths: Paths,
         notifier: Box<dyn Notifier>,
     ) -> Rc<Self> {
-        let recorded = files::read_notified(&paths);
+        let recorded = files::read_notified(&paths, &paths.updates_notified());
+        let recorded_failure = files::read_notified(&paths, &paths.failure_notified());
         let agent = Rc::new(Self {
             settings,
             interface,
             paths,
             offer: RefCell::new(Offer::new()),
             ready: RefCell::new(Ready::new(recorded)),
+            failure: RefCell::new(Ready::new(recorded_failure)),
+            failed: RefCell::new((String::new(), String::new())),
             notifier,
             watches: RefCell::new(Vec::new()),
             monitor: RefCell::new(None),
@@ -193,19 +239,24 @@ impl Agent {
         let effect = self.offer.borrow_mut().server(present);
         self.run(effect);
         let effect = self.ready.borrow_mut().server(present);
-        self.run_ready(effect);
+        self.run_once(&UPDATES_READY, effect);
+        let effect = self.failure.borrow_mut().server(present);
+        self.run_once(&UPDATE_FAILED, effect);
     }
 
     pub fn action_invoked(self: &Rc<Self>, id: u32, key: &str) {
         let effect = self.offer.borrow_mut().action(id, key);
         self.run(effect);
         let effect = self.ready.borrow_mut().action(id, key);
-        self.run_ready(effect);
+        self.run_once(&UPDATES_READY, effect);
+        let effect = self.failure.borrow_mut().action(id, key);
+        self.run_once(&UPDATE_FAILED, effect);
     }
 
     pub fn notification_closed(&self, id: u32) {
         self.offer.borrow_mut().closed(id);
         self.ready.borrow_mut().closed(id);
+        self.failure.borrow_mut().closed(id);
     }
 
     pub fn offered(&self) -> Option<u32> {
@@ -214,51 +265,70 @@ impl Agent {
 
     /// What Update1 reports as staged and not applied yet.
     pub fn staged(self: &Rc<Self>, staged: Option<Staged>) {
-        let effects = self.ready.borrow_mut().staged(staged);
-        self.run_ready(effects);
+        let effects = self.ready.borrow_mut().update(staged);
+        self.run_once(&UPDATES_READY, effects);
     }
 
     pub fn updates_ready(&self) -> Option<u32> {
         self.ready.borrow().shown()
     }
 
-    fn run_ready(self: &Rc<Self>, effects: impl IntoIterator<Item = updates::Effect>) {
+    /// Update1's `HealthFailure`, `""` when there is none.
+    pub fn health_failure(self: &Rc<Self>, digest: &str) {
+        digest.clone_into(&mut self.failed.borrow_mut().0);
+        self.failure_changed();
+    }
+
+    /// Update1's `LastFallback`, `""` when there is none.
+    pub fn last_fallback(self: &Rc<Self>, digest: &str) {
+        digest.clone_into(&mut self.failed.borrow_mut().1);
+        self.failure_changed();
+    }
+
+    fn failure_changed(self: &Rc<Self>) {
+        let current = {
+            let failed = self.failed.borrow();
+            Failure::from_properties(&failed.0, &failed.1)
+        };
+        let effects = self.failure.borrow_mut().update(current);
+        self.run_once(&UPDATE_FAILED, effects);
+    }
+
+    pub fn update_failed(&self) -> Option<u32> {
+        self.failure.borrow().shown()
+    }
+
+    fn run_once<T: Digested + 'static>(
+        self: &Rc<Self>,
+        once: &'static Once<T>,
+        effects: impl IntoIterator<Item = updates::Effect<T>>,
+    ) {
         for effect in effects {
             match effect {
-                updates::Effect::Post(staged) => {
+                updates::Effect::Post(subject) => {
                     let weak = Rc::downgrade(self);
-                    let notification = Notification {
-                        icon: updates::ICON,
-                        summary: updates::SUMMARY.to_owned(),
-                        body: staged.body(),
-                        actions: vec![
-                            (updates::DEFAULT_ACTION_KEY, updates::ACTION_LABEL),
-                            (updates::ACTION_KEY, updates::ACTION_LABEL),
-                        ],
-                    };
                     self.notifier.post(
-                        &notification,
+                        &(once.notification)(&subject),
                         Box::new(move |id| {
                             let Some(agent) = weak.upgrade() else { return };
                             match id {
                                 Some(id) => {
-                                    let effects = agent.ready.borrow_mut().posted(id);
-                                    agent.run_ready(effects);
+                                    let effects = (once.machine)(&agent).borrow_mut().posted(id);
+                                    agent.run_once(once, effects);
                                 }
-                                None => agent.ready.borrow_mut().post_failed(),
+                                None => (once.machine)(&agent).borrow_mut().post_failed(),
                             }
                         }),
                     );
                 }
                 updates::Effect::Withdraw(id) => self.notifier.withdraw(id),
                 updates::Effect::Record(digest) => {
-                    if let Err(error) = files::write_notified(&self.paths, &digest) {
-                        self.warn_once("cannot record the notified update", &error);
+                    let path = (once.file)(&self.paths);
+                    if let Err(error) = files::write_notified(&self.paths, &path, &digest) {
+                        self.warn_once(once.what, &error);
                     }
                 }
-                updates::Effect::OpenSettings => {
-                    self.notifier.open_settings(updates::SETTINGS_PANEL);
-                }
+                updates::Effect::OpenSettings => self.notifier.open_settings(once.panel, once.page),
             }
         }
     }
