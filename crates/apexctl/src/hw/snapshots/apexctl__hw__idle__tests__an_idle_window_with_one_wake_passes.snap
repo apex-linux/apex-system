@@ -1,0 +1,10 @@
+---
+source: crates/apexctl/src/hw/idle.rs
+expression: render(&report)
+---
+control=auto driver=nvidia
+window 20 s: active 500 ms, suspended 19500 ms, suspended share 97.5 %
+wakes seen (1 s sampling): 1, 180 per hour
+battery (Discharging): 4200 mW mean
+now: runtime_status=suspended power_state=D3cold
+PASS

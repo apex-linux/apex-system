@@ -72,6 +72,11 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
         Command::Hw(HwCommand::Report { json, root }) => {
             hw_report(&SysRoot::new(root.sysroot), json)
         }
+        Command::Hw(HwCommand::DgpuIdle {
+            seconds,
+            json,
+            root,
+        }) => dgpu_idle(&SysRoot::new(root.sysroot), seconds, json),
         Command::Hw(HwCommand::Audio(AudioCommand::Snapshot {
             proc_file,
             json,
@@ -165,6 +170,25 @@ fn hw_report(root: &SysRoot, json: bool) -> anyhow::Result<Exit> {
         emit(&hw::report::render(&report))?;
     }
     Ok(Exit::Ok)
+}
+
+fn dgpu_idle(root: &SysRoot, seconds: u64, json: bool) -> anyhow::Result<Exit> {
+    let report = hw::idle::measure(root, seconds, |_| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
+    let report = match report {
+        Ok(report) => report,
+        Err(error) => {
+            eprintln!("apexctl: {error}");
+            return Ok(Exit::Error);
+        }
+    };
+    if json {
+        emit_json(&report)?;
+    } else {
+        emit(&hw::idle::render(&report))?;
+    }
+    Ok(if report.pass { Exit::Ok } else { Exit::Error })
 }
 
 fn audio_snapshot(root: &SysRoot, proc_file: Option<&Path>, json: bool) -> anyhow::Result<Exit> {
