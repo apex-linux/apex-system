@@ -34,6 +34,7 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 | `crates/apex-updated/data/io.github.apex-linux.apex.update.policy` | `/usr/share/polkit-1/actions/` |
 | `crates/apex-updated/data/apex.tmpfiles.conf` | `/usr/lib/tmpfiles.d/apex.conf` |
 | `crates/apex-boot/data/apex-boot-assess.service` | `/usr/lib/systemd/system/` |
+| `crates/apex-boot/data/07_apex-menu.cfg` | `/usr/lib/bootupd/grub2-static/configs.d/07_apex-menu.cfg` |
 | `crates/apex-boot/data/08_apex-bootcount.cfg` | `/usr/lib/bootupd/grub2-static/configs.d/08_apex-bootcount.cfg` |
 | `crates/apex-boot/data/emergency.service.d/50-apex-bootcount.conf` | `/usr/lib/systemd/system/emergency.service.d/` |
 | `crates/apex-boot/data/rescue.service.d/50-apex-bootcount.conf` | `/usr/lib/systemd/system/rescue.service.d/` |
@@ -115,7 +116,7 @@ sharing those names would let a login mark a failed armed boot as good.
 |---|---|---|
 | `apex_target` | set by `apex-updated` on `Apply`; unset by `apex-boot-assess` (green, inconsistent, fallback after the report) and by `apex-updated` (after its own fallback rollback) | digest of the deployment that must prove itself |
 | `apex_counter` | 3 from `apex-updated` on `Apply`; decremented by the GRUB snippet; 3 again as the fallback hedge written by `apex-boot-assess`; unset together with `apex_target` | remaining attempts; `-1` after GRUB fell back |
-| `apex_ok` | 1 from `apex-boot-assess` on green; 0 from `apex-boot-assess` before a red reboot; reset to 0 by the GRUB snippet at every boot, after the counting | userspace confirmation |
+| `apex_ok` | 1 from `apex-boot-assess` on every green boot, armed or not; 0 from `apex-boot-assess` before a red reboot; reset to 0 by the GRUB snippet at every boot, after the counting. `07_apex-menu.cfg` reads it first: 1 hides the menu (`timeout_style=hidden`, `timeout=1`), anything else shows it for 5 s; bootupd's `14_menu_show_once.cfg` runs later, so `menu_show_once_timeout` still wins | userspace confirmation |
 
 While armed, the snippet also sets GRUB's `fallback=1`, so a kernel that GRUB cannot
 load falls through to the previous deployment immediately.

@@ -121,6 +121,8 @@ define install_data
 		'$(1)$(TMPFILESDIR)/apex.conf'
 	$(INSTALL) -Dm0644 $(BOOT_DATA)/apex-boot-assess.service \
 		'$(1)$(UNITDIR)/apex-boot-assess.service'
+	$(INSTALL) -Dm0644 $(BOOT_DATA)/07_apex-menu.cfg \
+		'$(1)$(BOOTUPDDIR)/07_apex-menu.cfg'
 	$(INSTALL) -Dm0644 $(BOOT_DATA)/08_apex-bootcount.cfg \
 		'$(1)$(BOOTUPDDIR)/08_apex-bootcount.cfg'
 	$(INSTALL) -Dm0644 $(BOOT_DATA)/emergency.service.d/50-apex-bootcount.conf \

@@ -25,6 +25,42 @@ pub const FILE_NAME: &str = "08_apex-bootcount.cfg";
 
 pub const INSTALL_PATH: &str = "/usr/lib/bootupd/grub2-static/configs.d/08_apex-bootcount.cfg";
 
+/// Hides GRUB's menu after a confirmed green boot. Not a required check: a disk installed
+/// before it keeps bootupd's 1 s menu, which is safe.
+pub const MENU_SNIPPET: &str = include_str!("../data/07_apex-menu.cfg");
+
+/// Sorts before the counter snippet, which resets `apex_ok`, and before bootupd's
+/// `14_menu_show_once.cfg`, which still overrides it for `menu_show_once_timeout`.
+pub const MENU_FILE_NAME: &str = "07_apex-menu.cfg";
+
+pub const MENU_INSTALL_PATH: &str = "/usr/lib/bootupd/grub2-static/configs.d/07_apex-menu.cfg";
+
+pub const CONFIRMED_TIMEOUT: u32 = 1;
+
+pub const UNCONFIRMED_TIMEOUT: u32 = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Menu {
+    /// `timeout_style=hidden`: Esc, F4 or Shift during the timeout still shows it.
+    pub hidden: bool,
+    pub timeout: u32,
+}
+
+/// What `07_apex-menu.cfg` sets; it writes nothing to grubenv.
+pub fn grub_menu(env: &GrubEnv) -> Menu {
+    if env.get(BootVar::ApexOk.name()) == Some(&b"1"[..]) {
+        Menu {
+            hidden: true,
+            timeout: CONFIRMED_TIMEOUT,
+        }
+    } else {
+        Menu {
+            hidden: false,
+            timeout: UNCONFIRMED_TIMEOUT,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootEntry {
     Default,
@@ -87,6 +123,10 @@ mod tests {
         assert_eq!(SNIPPET.lines().next(), Some(MARKER));
         assert_eq!(MARKER, format!("{MARKER_PREFIX}{MARKER_VERSION}"));
         assert!(INSTALL_PATH.ends_with(FILE_NAME));
+        assert!(MENU_INSTALL_PATH.ends_with(MENU_FILE_NAME));
+        assert!(MENU_FILE_NAME < FILE_NAME, "reads apex_ok before the reset");
+        assert!(FILE_NAME < "14_menu_show_once.cfg");
+        assert!(MENU_SNIPPET.starts_with("# apex-menu v1\n"));
         assert!(FILE_NAME < "10_blscfg.cfg");
     }
 

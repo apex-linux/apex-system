@@ -11,9 +11,9 @@ use apex_boot::checks::names;
 use apex_boot::emergency;
 use apex_boot::snippet::{BootEntry, grub_boot};
 use apex_boot::{
-    AssessInput, BOOT_ATTEMPTS, BootVars, CheckResult, Decision, DefaultDeployment, Digest, EnvOp,
-    GrubEnv, HEDGE_COUNTER, RecordingWriter, Step, Verdict, apply_ops, arm_ops, decide,
-    reconcile_fallback,
+    AssessInput, BOOT_ATTEMPTS, BootVar, BootVars, CheckResult, Decision, DefaultDeployment,
+    Digest, EnvOp, GrubEnv, HEDGE_COUNTER, RecordingWriter, Step, Verdict, apply_ops, arm_ops,
+    decide, reconcile_fallback,
 };
 use proptest::prelude::*;
 
@@ -391,13 +391,21 @@ fn a_healthy_update_is_confirmed_on_its_first_boot() {
     );
     let env = machine.env.clone();
     let end = machine.boot(ok_boot(Health::Green));
-    assert!(matches!(end, BootEnd::Settled(Decision::Green { ref ops, .. }) if ops.is_empty()));
+    assert!(
+        matches!(
+            end,
+            BootEnd::Settled(Decision::Green { ref ops, .. })
+                if *ops == [EnvOp::Set(BootVar::ApexOk, "1".to_owned())]
+        ),
+        "an ordinary green boot is confirmed too: {end:?}"
+    );
     assert_eq!(machine.booted, Some(t));
     let mut after_grub = env;
     grub_boot(&mut after_grub).unwrap();
+    after_grub.set(BootVar::ApexOk.name(), "1").unwrap();
     assert_eq!(
         machine.env, after_grub,
-        "only GRUB's own save_env changed it"
+        "GRUB's own save_env, then the confirmation"
     );
 }
 
