@@ -32,6 +32,7 @@ expression: json
     "gnome-shell"
   ],
   "holds": [],
+  "kept": [],
   "last_check": 1790240400,
   "last_error": null,
   "last_fallback": null,

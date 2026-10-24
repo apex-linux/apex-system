@@ -271,7 +271,9 @@ fn listing(rows: &[(&str, u32, bool)]) -> Scripted {
 
 /// Booted the update that came after the pin; the kept version is now third in line.
 fn after_the_update() -> apex_bootc::Host {
-    host(entry(NEW, STAGED_VERSION, NEW_CSUM), None, Some(booted()))
+    let mut after = host(entry(NEW, STAGED_VERSION, NEW_CSUM), None, Some(booted()));
+    after.status.other_deployments = vec![pinned(rollback())];
+    after
 }
 
 fn check_output() -> String {
@@ -310,11 +312,14 @@ async fn the_daily_run_unpins_the_kept_version_once_a_later_one_is_confirmed() {
             (ROLLBACK_CSUM, 0, true),
             owner_pin,
         ]))
-        .push(Scripted::new(BootcCommand::Unpin { index: 2 }))
-        .push(status(&current));
-    push_the_check(&h, &current);
+        .push(Scripted::new(BootcCommand::Unpin { index: 2 }));
+    let mut unpinned = current.clone();
+    unpinned.status.other_deployments = vec![rollback()];
+    h.push(status(&unpinned));
+    push_the_check(&h, &unpinned);
     h.run(Op::Automatic).await.expect("automatic");
     assert_eq!(h.store.read_pins().unwrap(), Pins::default());
+    assert!(h.properties().kept.is_empty());
     assert!(
         !h.fake.calls().contains(&BootcCommand::Unpin { index: 3 }),
         "the owner's pin stays"
@@ -337,6 +342,12 @@ async fn the_kept_version_stays_pinned_until_a_later_one_is_confirmed() {
     push_the_check(&h, &current);
     h.run(Op::Automatic).await.expect("automatic");
     assert_eq!(h.store.read_pins().unwrap().pins, [rollback_record()]);
+    let kept = h.properties().kept;
+    assert_eq!(kept.len(), 1, "third in line, so only in Kept");
+    assert_eq!(kept[0].digest.as_deref(), Some(ROLLBACK));
+    assert_eq!(kept[0].version.as_deref(), Some(OLDER_VERSION));
+    assert_eq!(kept[0].pin_reason.as_deref(), Some(PIN_REASON));
+    assert_eq!(h.properties().rollback.pin_reason, None);
     h.fake.assert_finished();
 }
 

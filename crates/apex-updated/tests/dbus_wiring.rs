@@ -17,6 +17,7 @@ use apex_dbus::{
 };
 use apex_updated::queue::Op;
 use apex_updated::service::{Update1Service, emit_property_changes};
+use apex_updated::store::Store as _;
 use apex_updated::testing::{FakeAuthorizer, SharedGrubWriter};
 use common::*;
 use zbus::OwnedVariant;
@@ -28,7 +29,7 @@ use zbus::{Connection, Guid, connection};
 /// Returns once the emitter's first signal has arrived, so later streams see only changes.
 async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
     let (server, client, first) = connect_announced(h, auth).await;
-    assert_eq!(first.len(), 13, "{first:?}");
+    assert_eq!(first.len(), 15, "{first:?}");
     (server, client)
 }
 
@@ -236,6 +237,12 @@ async fn invalid_strings_are_invalid_arguments() {
         "{}",
         error.message()
     );
+    let error = proxy(&client)
+        .await
+        .get_changes_for("latest")
+        .await
+        .expect_err("refused before any state is read");
+    assert_eq!(error.kind(), Some(ErrorKind::InvalidArgument), "{error}");
     h.fake.assert_finished();
 }
 
@@ -446,7 +453,8 @@ fn testing_booted() -> apex_bootc::BootEntry {
     entry
 }
 
-/// `HealthFailure`, `AutomaticDownloads` and `LastFallback`, after a download staged `staged`.
+/// `HealthFailure` with its checks, `AutomaticDownloads` and `LastFallback`, after a
+/// download staged `staged`.
 async fn warning_and_setting_signals(
     h: &Harness,
     p: &Update1Proxy<'static>,
@@ -454,17 +462,30 @@ async fn warning_and_setting_signals(
     seen: &mut Seen,
     staged: apex_bootc::BootEntry,
 ) {
+    h.store
+        .write_health_failure(&apex_update::HealthFailureRecord {
+            digest: BOOTED.into(),
+            failed_checks: vec!["session".into()],
+            at: NOW,
+        })
+        .unwrap();
     p.report_boot(BootVerdict::Red, BOOTED).await.expect("red");
     watch_until(stream, seen, |s| {
         texts(s, "HealthFailure").last().map(String::as_str) == Some(BOOTED)
+            && s.contains_key("HealthFailureChecks")
     })
     .await;
+    assert_eq!(
+        p.health_failure_checks().await.expect("checks"),
+        ["session"]
+    );
     p.acknowledge_health_failure().await.expect("acknowledge");
     watch_until(stream, seen, |s| {
         texts(s, "HealthFailure").last().map(String::as_str) == Some("")
     })
     .await;
     assert_eq!(texts(seen, "HealthFailure"), [BOOTED, ""]);
+    assert!(p.health_failure_checks().await.expect("checks").is_empty());
     assert_eq!(
         texts(seen, "State").last().map(String::as_str),
         Some("staged")
@@ -483,6 +504,39 @@ async fn warning_and_setting_signals(
         texts(s, "LastFallback").last().map(String::as_str) == Some(ROLLBACK)
     })
     .await;
+}
+
+/// A deployment the daemon pinned, now fourth in line.
+async fn kept_signal(h: &Harness, stream: &mut PropertiesChangedStream, seen: &mut Seen) {
+    const KEPT: &str = "sha256:7777777777777777777777777777777777777777777777777777777777777777";
+    const KEPT_CSUM: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+    h.store
+        .write_pins(&apex_update::Pins {
+            pins: vec![apex_update::PinRecord {
+                checksum: KEPT_CSUM.into(),
+                serial: 0,
+                digest: KEPT.into(),
+                at: NOW,
+            }],
+        })
+        .unwrap();
+    let mut current = host(testing_booted(), None, Some(rollback()));
+    current.status.other_deployments = vec![apex_bootc::BootEntry {
+        pinned: true,
+        ..entry(KEPT, "45.20260901.1", KEPT_CSUM)
+    }];
+    h.refresh(&current).await;
+    watch_until(stream, seen, |s| s.contains_key("Kept")).await;
+    let zbus::Variant::Array(array) = &**seen["Kept"].last().expect("a value") else {
+        panic!("Kept is an array");
+    };
+    let kept: Vec<Deployment> = array
+        .iter()
+        .map(|dict| Deployment::try_from(dict).expect("a deployment dict"))
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].digest.as_deref(), Some(KEPT));
+    assert!(kept[0].pin_reason.is_some());
 }
 
 #[tokio::test]
@@ -558,13 +612,14 @@ async fn every_property_signals_its_changes() {
     assert!(texts(&seen, "LastError")[0].contains("no such host"));
 
     warning_and_setting_signals(&h, &p, &mut stream, &mut seen, staged_remote).await;
+    kept_signal(&h, &mut stream, &mut seen).await;
 
     let signalled: BTreeSet<String> = seen.keys().cloned().collect();
     let contract: BTreeSet<String> = members(INTROSPECTION_XML)
         .into_keys()
         .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
         .collect();
-    assert_eq!(contract.len(), 13);
+    assert_eq!(contract.len(), 15);
     assert_eq!(signalled, contract);
     h.fake.assert_finished();
 }

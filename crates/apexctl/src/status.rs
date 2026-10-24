@@ -36,6 +36,8 @@ meaning until \"schema\" changes.
   holds, stock     the running image's, as in a deployment below; [] when it reports none
   booted, staged, rollback, available
                    a deployment, or null when there is none
+  kept             deployments the update service pinned as the last version known to work
+                   that are none of those, so only the boot menu offers them; [] when none
 
 A deployment has these keys, each null when unknown:
   image            image reference, e.g. \"ghcr.io/apex-linux/apex:45\"
@@ -153,6 +155,7 @@ pub struct StatusJson {
     pub staged: Option<DeploymentJson>,
     pub rollback: Option<DeploymentJson>,
     pub available: Option<DeploymentJson>,
+    pub kept: Vec<DeploymentJson>,
 }
 
 fn non_empty(text: &str) -> Option<String> {
@@ -185,6 +188,11 @@ impl StatusJson {
             staged: DeploymentJson::from_deployment(&status.staged),
             rollback: DeploymentJson::from_deployment(&status.rollback),
             available: DeploymentJson::from_deployment(&status.available),
+            kept: status
+                .kept
+                .iter()
+                .filter_map(DeploymentJson::from_deployment)
+                .collect(),
         }
     }
 }
@@ -489,6 +497,32 @@ fn deployment_rows(
     }
 }
 
+fn deployment_section(out: &mut String, status: &ServiceStatus) {
+    let booted = &status.booted;
+    if booted.is_empty() {
+        row(out, "Booted", "unknown");
+    } else {
+        deployment_rows(out, "Booted", booted, booted, "");
+    }
+    if !status.staged.is_empty() {
+        let suffix = match status.staged.download_only {
+            Some(true) => "  locked: not used at the next boot",
+            Some(false) => "  applied: used at the next boot",
+            None => "",
+        };
+        deployment_rows(out, "Staged", &status.staged, booted, suffix);
+    }
+    if !status.rollback.is_empty() {
+        deployment_rows(out, "Rollback", &status.rollback, booted, "");
+    }
+    for kept in &status.kept {
+        deployment_rows(out, "Kept", kept, booted, "  in the boot menu");
+    }
+    if !status.available.is_empty() {
+        deployment_rows(out, "Available", &status.available, booted, "");
+    }
+}
+
 pub fn render_status(status: &ServiceStatus) -> String {
     let mut out = String::new();
     let (sentence, next) = status_sentence(status);
@@ -501,26 +535,7 @@ pub fn render_status(status: &ServiceStatus) -> String {
     }
     let _ = writeln!(out);
 
-    let booted = &status.booted;
-    if booted.is_empty() {
-        row(&mut out, "Booted", "unknown");
-    } else {
-        deployment_rows(&mut out, "Booted", booted, booted, "");
-    }
-    if !status.staged.is_empty() {
-        let suffix = match status.staged.download_only {
-            Some(true) => "  locked: not used at the next boot",
-            Some(false) => "  applied: used at the next boot",
-            None => "",
-        };
-        deployment_rows(&mut out, "Staged", &status.staged, booted, suffix);
-    }
-    if !status.rollback.is_empty() {
-        deployment_rows(&mut out, "Rollback", &status.rollback, booted, "");
-    }
-    if !status.available.is_empty() {
-        deployment_rows(&mut out, "Available", &status.available, booted, "");
-    }
+    deployment_section(&mut out, status);
     row(
         &mut out,
         "Channel",
@@ -716,6 +731,7 @@ pub(crate) mod tests {
             health_failure: String::new(),
             last_fallback: String::new(),
             automatic_downloads: Some(true),
+            kept: Vec::new(),
         }
     }
 
@@ -1056,6 +1072,26 @@ pub(crate) mod tests {
             status.rollback.pin_reason
         );
         assert_eq!(json.booted.unwrap().pin_reason, None);
+    }
+
+    #[test]
+    fn a_version_kept_after_the_update_is_listed_with_the_boot_menu() {
+        let mut status = up_to_date_with(deployment("45.20260925.118", 'b'));
+        status.rollback = deployment("45.20260924.117", 'a');
+        status.kept = vec![Deployment {
+            pinned: Some(true),
+            degraded: None,
+            held: None,
+            pin_reason: Some("Kept as the last version known to work.".to_owned()),
+            ..deployment("45.20260920.110", 'c')
+        }];
+        let text = render_status(&status);
+        insta::assert_snapshot!(text);
+        let json = StatusJson::new(&status);
+        assert_eq!(json.kept.len(), 1);
+        assert_eq!(json.kept[0].pin_reason, status.kept[0].pin_reason);
+        status.kept.clear();
+        assert!(!render_status(&status).contains("Kept"));
     }
 
     #[test]

@@ -99,6 +99,10 @@
          AcknowledgeHealthFailure or a green boot. -->
     <property name="HealthFailure" type="s" access="read"/>
 
+    <!-- The names of the required checks that failed for HealthFailure, from
+         apex-boot-assess, e.g. "session"; empty when unknown, and cleared with it. -->
+    <property name="HealthFailureChecks" type="as" access="read"/>
+
     <!-- The digest a "fallback" ReportBoot denylisted (the update did not start), or "";
          cleared by AcknowledgeHealthFailure. -->
     <property name="LastFallback" type="s" access="read"/>
@@ -106,6 +110,10 @@
     <!-- Whether Automatic downloads what its check finds; true unless the user turned it
          off. Off, Automatic still checks and publishes Available. -->
     <property name="AutomaticDownloads" type="b" access="read"/>
+
+    <!-- Deployments apex-updated pinned itself (each with "pin-reason") that are not
+         Booted, Staged or Rollback, so they show only in the boot menu; empty if none. -->
+    <property name="Kept" type="aa{sv}" access="read"/>
 
     <!-- Liveness probe for the boot health check, no polkit check; Internal when bootc
          cannot be used. -->
@@ -139,7 +147,15 @@
       <arg name="changes" type="a(sssss)" direction="out"/>
     </method>
 
-    <!-- Clears HealthFailure and LastFallback. -->
+    <!-- GetChanges' rows from the booted deployment to the Staged or Rollback one whose
+         digest is given, such as LastFallback's; empty for the booted digest.
+         InvalidArgument for any other digest. -->
+    <method name="GetChangesFor">
+      <arg name="digest" type="s" direction="in"/>
+      <arg name="changes" type="a(sssss)" direction="out"/>
+    </method>
+
+    <!-- Clears HealthFailure, HealthFailureChecks and LastFallback. -->
     <method name="AcknowledgeHealthFailure"/>
 
     <!-- Persisted across restarts; setting the current value again succeeds. -->

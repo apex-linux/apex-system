@@ -99,10 +99,10 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 | `intent.json` | `{ "digest": "sha256:…", "created": <unix seconds> }`, present only between `Apply` and the boot assessment of that digest |
 | `denylist.json` | `{ "digests": [ { "digest": "sha256:…", "reason": "…", "at": <unix seconds> } ] }` |
 | `last-check.json` | `{ "at": <unix>, "remote_digest": "sha256:…" or null, "remote_version": "…" or null, "remote_size": <bytes> or null }`; `remote_size` is the new-layer size `bootc upgrade --check` printed, rounded, and becomes `download-size` |
-| `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; removed by `AcknowledgeHealthFailure` and by a green boot |
+| `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; published as `HealthFailure` and `HealthFailureChecks`; removed by `AcknowledgeHealthFailure` and by a green boot |
 | `settings.json` | `{ "automatic_downloads": true or false }`, written by `SetAutomaticDownloads`; a missing file or key means true |
 | `last-fallback.json` | `{ "digest": "sha256:…", "at": <unix> }`, written when a `fallback` report denylists a digest (`LastFallback`); removed by `AcknowledgeHealthFailure` |
-| `pinned.json` | `{ "pins": [ { "checksum": "…", "serial": <deploy serial>, "digest": "sha256:…", "at": <unix> } ] }`: the deployments `apex-updated` pinned itself before arming (§5), which carry `pin-reason`; an entry leaves when the daily run unpins it, or finds it unpinned by hand or deleted |
+| `pinned.json` | `{ "pins": [ { "checksum": "…", "serial": <deploy serial>, "digest": "sha256:…", "at": <unix> } ] }`: the deployments `apex-updated` pinned itself before arming (§5), which carry `pin-reason` and, once neither Booted, Staged nor Rollback, make up `Kept`; an entry leaves when the daily run unpins it, or finds it unpinned by hand or deleted |
 | `force-red` | qualification hook only: a root-owned regular file (mode 0600, at most 4 KiB) holding one digest; when it names the booted digest, `apex-boot-assess` adds the failing required check `forced-red` |
 
 Everything else is derived from `bootc status --format=json --format-version=1`.
@@ -166,7 +166,7 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
 ## 7. `apexctl` command surface (M1)
 
 ```
-apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, why the daemon pinned a deployment; JSON schema 2
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, the deployments the daemon kept (pinned) and why; JSON schema 2
 apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"

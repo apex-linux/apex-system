@@ -147,6 +147,8 @@ struct HostSummary {
     rollback: apex_dbus::Deployment,
     channel: Option<Channel>,
     spec_image: Option<String>,
+    /// The deployments it pinned that are none of the three above.
+    kept: Vec<apex_dbus::Deployment>,
 }
 
 #[derive(Debug, Clone)]
@@ -196,6 +198,8 @@ struct EngineState {
     last_error: String,
     settings: UpdateSettings,
     last_fallback: Option<String>,
+    /// health-failure.json's, kept with its digest in the snapshot.
+    health_failure_checks: Vec<String>,
 }
 
 pub struct Engine<R> {
@@ -515,6 +519,11 @@ impl<R: CommandRunner> Engine<R> {
         };
         self.read_settings_and_pins(&mut state, &host, &mut summary);
         state.last_fallback = records.fallback.map(|record| record.digest);
+        state.health_failure_checks = records
+            .health
+            .as_ref()
+            .map(|record| record.failed_checks.clone())
+            .unwrap_or_default();
         let file_check = self.store.read_last_check().unwrap_or_else(|error| {
             tracing::warn!(error = %errors::with_sources(&error), "ignoring last-check.json");
             LastCheck::default()
@@ -1440,6 +1449,29 @@ impl<R: CommandRunner> Engine<R> {
         let Some(staged) = host.staged().cloned() else {
             return Ok(Vec::new());
         };
+        self.changes_to(&staged, "the downloaded update").await
+    }
+
+    /// For the `LastFallback` build, which `bootc rollback` left as the rollback deployment.
+    pub async fn get_changes_for(&self, digest: &str) -> Result<Vec<Change>, ApexError> {
+        let host = self.host().ok_or_else(|| self.state_unknown())?;
+        if host.booted_digest() == Some(digest) {
+            return Ok(Vec::new());
+        }
+        let entry = [host.staged(), host.rollback()]
+            .into_iter()
+            .flatten()
+            .find(|entry| entry.digest() == Some(digest))
+            .cloned()
+            .ok_or_else(|| {
+                ApexError::InvalidArgument(format!(
+                    "{digest} is not the running, the downloaded or the previous version."
+                ))
+            })?;
+        self.changes_to(&entry, "that version").await
+    }
+
+    async fn changes_to(&self, entry: &BootEntry, what: &str) -> Result<Vec<Change>, ApexError> {
         let unreadable = |what: &str| {
             ApexError::Internal(format!(
                 "The package list of {what} is not available (/usr/share/apex/manifest.json)."
@@ -1452,17 +1484,14 @@ impl<R: CommandRunner> Engine<R> {
                 errors::internal("The package list of the running system cannot be read", &e)
             })?
             .ok_or_else(|| unreadable("the running system"))?;
-        let staged = self
-            .deployment_manifest(&staged)
+        let other = self
+            .deployment_manifest(entry)
             .await
             .map_err(|e| {
-                errors::internal(
-                    "The package list of the downloaded update cannot be read",
-                    &e,
-                )
+                errors::internal(&format!("The package list of {what} cannot be read"), &e)
             })?
-            .ok_or_else(|| unreadable("the downloaded update"))?;
-        Ok(changes_reply(&booted.packages, &staged.packages))
+            .ok_or_else(|| unreadable(what))?;
+        Ok(changes_reply(&booted.packages, &other.packages))
     }
 
     pub fn acknowledge_health_failure(&self) -> Result<(), ApexError> {
@@ -1478,6 +1507,7 @@ impl<R: CommandRunner> Engine<R> {
             if let Some(snapshot) = &mut state.snapshot {
                 snapshot.health_failure = None;
             }
+            state.health_failure_checks.clear();
             state.last_fallback = None;
         }
         tracing::info!("health failure acknowledged");
@@ -1501,6 +1531,7 @@ impl<R: CommandRunner> Engine<R> {
                     unflushed_is_done(self.store.clear_intent(), "clearing the intent")
                         .map_err(|e| from_store(&e))?;
                 }
+                state.health_failure_checks.clear();
                 if let Some(snapshot) = &mut state.snapshot {
                     snapshot.health_failure = None;
                     if intent_booted {
@@ -1523,6 +1554,10 @@ impl<R: CommandRunner> Engine<R> {
                     .read_health_failure()
                     .map_err(|e| from_store(&e))?;
                 // apex-boot-assess's own record names the failed checks: keep it.
+                state.health_failure_checks = match &recorded {
+                    Some(record) if record.digest == digest => record.failed_checks.clone(),
+                    _ => Vec::new(),
+                };
                 if recorded.as_ref().is_none_or(|r| r.digest != digest) {
                     let record = HealthFailureRecord {
                         digest: digest.to_owned(),
@@ -1672,11 +1707,19 @@ fn summarize(host: &Host, manifests: &Manifests<'_>) -> HostSummary {
             .and_then(BootEntry::image_reference)
             .map(channel_of_image),
         spec_image: host.spec.image.as_ref().map(|i| i.image.clone()),
+        kept: Vec::new(),
     }
 }
 
 /// Only on deployments still pinned: the owner may have unpinned one by hand.
 fn attach_pin_reasons(host: &Host, summary: &mut HostSummary, pins: &Pins) {
+    let kept_by_us = |entry: &BootEntry| {
+        entry.pinned
+            && entry
+                .ostree
+                .as_ref()
+                .is_some_and(|o| pins.contains(&o.checksum, o.deploy_serial))
+    };
     let entries = [host.booted(), host.staged(), host.rollback()];
     let dicts = [
         &mut summary.booted,
@@ -1684,15 +1727,18 @@ fn attach_pin_reasons(host: &Host, summary: &mut HostSummary, pins: &Pins) {
         &mut summary.rollback,
     ];
     for (entry, dict) in entries.into_iter().zip(dicts) {
-        let kept = entry.is_some_and(|entry| {
-            entry.pinned
-                && entry
-                    .ostree
-                    .as_ref()
-                    .is_some_and(|o| pins.contains(&o.checksum, o.deploy_serial))
-        });
-        dict.pin_reason = kept.then(|| PIN_REASON.to_owned());
+        dict.pin_reason = entry.is_some_and(kept_by_us).then(|| PIN_REASON.to_owned());
     }
+    summary.kept = host
+        .status
+        .other_deployments
+        .iter()
+        .filter(|entry| kept_by_us(entry))
+        .map(|entry| apex_dbus::Deployment {
+            pin_reason: Some(PIN_REASON.to_owned()),
+            ..deployment_dict(Some(entry), None, false)
+        })
+        .collect();
 }
 
 fn logged<T>(result: Result<Option<T>, FileError>, what: &str) -> Option<T> {
@@ -1742,8 +1788,10 @@ fn build_properties(state: &EngineState) -> Properties {
         health_failure: snapshot
             .and_then(|s| s.health_failure.clone())
             .unwrap_or_default(),
+        health_failure_checks: state.health_failure_checks.clone(),
         last_fallback: state.last_fallback.clone().unwrap_or_default(),
         automatic_downloads: state.settings.automatic_downloads,
+        kept: summary.kept.clone(),
     }
 }
 

@@ -113,6 +113,14 @@ pub(crate) fn staged() -> Deployment {
     }
 }
 
+pub(crate) fn kept() -> Deployment {
+    Deployment {
+        pinned: Some(true),
+        pin_reason: Some("Kept as the last version known to work.".to_owned()),
+        ..booted()
+    }
+}
+
 pub(crate) fn changes() -> Vec<Change> {
     let change = |name: &str, arch: &str, kind: ChangeKind, from: &str, to: &str| {
         (
@@ -248,6 +256,24 @@ impl MockDaemon {
         Ok(changes())
     }
 
+    #[zbus(out_args("changes"))]
+    fn get_changes_for(
+        &self,
+        digest: &str,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<Vec<Change>, ApexError> {
+        self.log.call(&header);
+        if digest == STAGED_DIGEST {
+            Ok(changes())
+        } else if booted().digest.as_deref() == Some(digest) {
+            Ok(Vec::new())
+        } else {
+            Err(ApexError::InvalidArgument(format!(
+                "{digest} is not a deployment on this system"
+            )))
+        }
+    }
+
     fn acknowledge_health_failure(
         &self,
         #[zbus(header)] header: Header<'_>,
@@ -364,6 +390,12 @@ impl MockDaemon {
     }
 
     #[zbus(property)]
+    fn health_failure_checks(&self) -> Vec<String> {
+        self.log.property("HealthFailureChecks");
+        vec!["session".to_owned()]
+    }
+
+    #[zbus(property)]
     fn last_fallback(&self) -> String {
         self.log.property("LastFallback");
         STAGED_DIGEST.to_owned()
@@ -373,6 +405,12 @@ impl MockDaemon {
     fn automatic_downloads(&self) -> bool {
         self.log.property("AutomaticDownloads");
         false
+    }
+
+    #[zbus(property)]
+    fn kept(&self) -> Vec<Deployment> {
+        self.log.property("Kept");
+        vec![kept()]
     }
 }
 
