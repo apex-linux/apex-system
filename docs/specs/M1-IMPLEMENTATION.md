@@ -13,8 +13,8 @@ in `docs/ARCHITECTURE.md` and the ADRs; this file is only the contract.
 | Version string | `<fedora>.<yyyymmdd>.<run>`, e.g. `45.20260924.117`; compared numerically field by field |
 | System bus name / object | `io.github.apex_linux.Apex.Update1` at `/io/github/apex_linux/Apex/Update1` |
 | Interface XML | `crates/apex-dbus/data/io.github.apex_linux.Apex.Update1.xml` (authoritative) |
-| Polkit action ids (lowercase) | `io.github.apex-linux.apex.update.{check,download,apply,discard,rollback}` |
-| OCI label prefix | `io.github.apex-linux.apex.` (`degraded`, `content-key`, `fedora`) plus standard `org.opencontainers.image.{version,revision,source,created}` |
+| Polkit action ids (lowercase) | `io.github.apex-linux.apex.update.{check,download,apply,discard,rollback,configure}` |
+| OCI label prefix | `io.github.apex-linux.apex.` (`degraded`, `held`, `content-key`, `fedora`) plus standard `org.opencontainers.image.{version,revision,source,created}` |
 | GSettings schema prefix | `io.github.apex_linux.Apex` (M2) |
 | State directory | `/var/lib/apex` (0700 root) |
 
@@ -151,17 +151,21 @@ read-only, so every write runs in a private mount namespace:
 `grub2-editenv`. The host never sees a writable `/boot`. Reads parse the environment
 block directly (`# GRUB Environment Block` header, `key=value` lines, `#` padding).
 
-## 6. bootc invocation rules (`apex-bootc`)
+## 6. bootc and ostree invocation rules (`apex-bootc`)
 
-- Executable `/usr/bin/bootc`, overridable only in debug builds via `APEX_BOOTC`.
+- Executables `/usr/bin/bootc` and, for pins only, `/usr/bin/ostree`, overridable only in
+  debug builds via `APEX_BOOTC` and `APEX_OSTREE`.
 - `env_clear()`, then `PATH=/usr/bin:/usr/sbin`, `LANG=C.UTF-8`,
   `CONTAINERS_POLICY_JSON=/usr/share/apex/containers/policy.json`.
-- argv is built only from enum variants and compile-time constants:
+- argv is built only from enum variants, compile-time constants and validated numbers:
   `status --format=json --format-version=1`, `upgrade --check`,
   `upgrade --download-only [--progress-fd 3]`, `upgrade --from-downloaded`,
-  `rollback`, `switch --enforce-container-sigpolicy --download-only <compile-time ref>`.
-- Timeouts: status 30 s, check 5 min, download 2 h, others 10 min. Cancellation
-  kills the process group.
+  `rollback`, `switch --enforce-container-sigpolicy --download-only <ref>`, where `<ref>`
+  is a compile-time repository with a validated digest or a Fedora major
+  (`apex_stable(major)`, `apex_testing(major)`: `ghcr.io/apex-linux/apex:45`); and
+  `ostree admin pin rollback`, `ostree admin status`, `ostree admin pin --unpin <index>`.
+- Timeouts: status and `ostree admin status` 30 s, check 5 min, download 2 h, others
+  10 min. Cancellation kills the process group.
 
 ## 7. `apexctl` command surface (M1)
 
@@ -211,8 +215,8 @@ installs a downgrade: `Apply` refuses one, and `Rollback` is the way back.
 | `apex-update` | — (pure; its own input types) | no | no |
 | `apex-boot` | `apex-bootc`, `apex-dbus` (used by the binary; the package depends on them, the library code does not use them) | binary only | no |
 | `apex-dbus` | — | no (zbus proxy is runtime-agnostic) | no |
-| `apex-updated` | all of the above | yes (current_thread) | no |
-| `apexctl` | `apex-dbus`, `apex-update` (for `changes` formatting), `apex-bootc` (types only) | yes (current_thread, for zbus) | no |
+| `apex-updated` | all of the above; `apexctl` in its tests only (the drills read it through apexctl's client) | yes (current_thread) | no |
+| `apexctl` | `apex-dbus`, `apex-update` (for `changes` formatting), `apex-bootc` (types only), `apex-boot` (the NVIDIA hardware note) | yes (current_thread, for zbus) | no |
 
 Rendered hardware files live in `hardware/<machine>/generated/`. The legacy allowlist is
 `image/audit/legacy-allowlist.txt` (`name<TAB>milestone<TAB>reason`).
