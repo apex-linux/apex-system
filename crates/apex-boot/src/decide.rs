@@ -338,10 +338,10 @@ fn clear_ops(vars: &BootVars) -> Vec<EnvOp> {
 }
 
 /// Confirms first: a crash before the clear leaves `apex_ok=1` with the arming, which GRUB
-/// treats as confirmed. Unarmed, `apex_ok` means nothing to GRUB and is not written.
+/// treats as confirmed. Every green boot confirms, so `07_apex-menu.cfg` hides the menu.
 fn green_ops(vars: &BootVars) -> Vec<EnvOp> {
     let mut ops = Vec::new();
-    if vars.is_armed() {
+    if vars.apex_ok != Some(true) {
         ops.push(EnvOp::Set(BootVar::ApexOk, "1".to_owned()));
     }
     ops.extend(clear_ops(vars));
@@ -684,35 +684,45 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_green_boot_writes_nothing() {
+    fn an_unarmed_green_boot_is_confirmed_too() {
+        let confirm = || vec![EnvOp::Set(BootVar::ApexOk, "1".into())];
         for booted in [Some(previous()), None] {
-            for vars in [
-                BootVars::default(),
-                BootVars {
-                    apex_ok: Some(false),
-                    ..BootVars::default()
-                },
-                BootVars {
-                    apex_ok: Some(true),
-                    ..BootVars::default()
-                },
+            for (vars, ops) in [
+                (BootVars::default(), confirm()),
+                (
+                    BootVars {
+                        apex_ok: Some(false),
+                        ..BootVars::default()
+                    },
+                    confirm(),
+                ),
+                (
+                    BootVars {
+                        apex_ok: Some(true),
+                        ..BootVars::default()
+                    },
+                    vec![],
+                ),
             ] {
                 let decision = decide(&plain(vars, booted.clone(), green_checks(), true));
                 assert_eq!(
                     decision,
                     Decision::Green {
                         booted: booted.clone(),
-                        ops: vec![]
+                        ops: ops.clone()
                     }
                 );
-                assert_eq!(
-                    decision.steps(),
-                    vec![Step::Report {
-                        verdict: Verdict::Green,
-                        digest: booted.clone(),
-                        must_succeed: false
-                    }]
-                );
+                let report = Step::Report {
+                    verdict: Verdict::Green,
+                    digest: booted.clone(),
+                    must_succeed: false,
+                };
+                let expected = if ops.is_empty() {
+                    vec![report]
+                } else {
+                    vec![Step::ApplyEnv(ops), report]
+                };
+                assert_eq!(decision.steps(), expected);
             }
         }
         let stray = BootVars {
@@ -720,7 +730,13 @@ mod tests {
             ..BootVars::default()
         };
         let decision = decide(&plain(stray, Some(previous()), green_checks(), true));
-        assert_eq!(decision.ops(), [EnvOp::Unset(BootVar::ApexCounter)]);
+        assert_eq!(
+            decision.ops(),
+            [
+                EnvOp::Set(BootVar::ApexOk, "1".into()),
+                EnvOp::Unset(BootVar::ApexCounter)
+            ]
+        );
         assert!(matches!(
             decide(&plain(BootVars::default(), None, Vec::new(), false)),
             Decision::Green { .. }
@@ -1241,8 +1257,10 @@ mod tests {
 
     fn expected_green_ops(vars: &BootVars) -> Vec<EnvOp> {
         let mut ops = Vec::new();
-        if vars.apex_target.is_some() {
+        if vars.apex_ok != Some(true) {
             ops.push(EnvOp::Set(BootVar::ApexOk, "1".into()));
+        }
+        if vars.apex_target.is_some() {
             ops.push(EnvOp::Unset(BootVar::ApexTarget));
         }
         if vars.apex_counter.is_some() {
@@ -1273,7 +1291,11 @@ mod tests {
                 prop_assert_ne!(decision.verdict(), Verdict::Red);
                 prop_assert!(!decision.reboot());
                 for op in decision.ops() {
-                    prop_assert_eq!(op, EnvOp::Unset(BootVar::ApexCounter));
+                    prop_assert!(
+                        op == EnvOp::Unset(BootVar::ApexCounter)
+                            || op == EnvOp::Set(BootVar::ApexOk, "1".into()),
+                        "{:?}", op
+                    );
                 }
             }
         }

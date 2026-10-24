@@ -275,10 +275,15 @@ fn green_confirms_the_target_and_clears_the_arming() {
 }
 
 #[test]
-fn an_ordinary_green_boot_leaves_grubenv_alone() {
+fn an_ordinary_green_boot_is_confirmed_too() {
     let run = Scenario::unarmed().booted(&previous()).run();
     assert!(matches!(run.decision, Decision::Green { .. }));
-    assert!(run.writer.calls().is_empty());
+    assert_eq!(run.writer.calls(), [set(&[("apex_ok", "1")])]);
+    assert_eq!(
+        run.vars().apex_ok,
+        Some(true),
+        "07_apex-menu.cfg hides the menu"
+    );
     assert_eq!(run.updater.reports(), [(Verdict::Green, Some(previous()))]);
     assert!(!run.failed());
 }
