@@ -174,6 +174,7 @@ apexctl update rollback [--mark-bad]
 apexctl update changes                    package diff booted → staged
 apexctl update acknowledge                clear HealthFailure after reading it
 apexctl update automatic                  (root, used by the timer)
+apexctl update auto on|off|status         SetAutomaticDownloads (polkit update.configure); the timer stays enabled, checks continue
 apexctl hw report [--json]                read-only: audio init_verbs, charge threshold, dGPU runtime PM, fingerprint device
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
 apexctl profile render [--profile P] [--out DIR] [--check]

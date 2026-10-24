@@ -41,6 +41,10 @@ pub trait UpdateService {
     fn changes(&self) -> impl Future<Output = Result<Vec<Change>, ClientError>>;
     fn acknowledge_health_failure(&self) -> impl Future<Output = Result<(), ClientError>>;
     fn automatic(&self) -> impl Future<Output = Result<(), ClientError>>;
+    fn set_automatic_downloads(
+        &self,
+        enabled: bool,
+    ) -> impl Future<Output = Result<(), ClientError>>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -315,6 +319,10 @@ impl UpdateService for DbusService {
 
     async fn automatic(&self) -> Result<(), ClientError> {
         Ok(self.proxy.automatic().await?)
+    }
+
+    async fn set_automatic_downloads(&self, enabled: bool) -> Result<(), ClientError> {
+        Ok(self.proxy.set_automatic_downloads(enabled).await?)
     }
 }
 
