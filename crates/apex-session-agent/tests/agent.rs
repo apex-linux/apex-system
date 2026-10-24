@@ -74,6 +74,12 @@ fn accent_changes(paths: &Paths, interface: &gio::Settings) {
     wait_for("back on Apex, the folders follow green", || {
         interface.string(ICON_THEME_KEY) == "Apex-green"
     });
+    interface.set_string(ICON_THEME_KEY, "Papirus").unwrap();
+    interface.reset(ICON_THEME_KEY);
+    wait_for(
+        "reset to the vendor default, the folders follow green",
+        || interface.string(ICON_THEME_KEY) == "Apex-green",
+    );
 }
 
 /// One test, because the `GLib` main context and the file monitor belong to one thread.
