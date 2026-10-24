@@ -7,6 +7,7 @@ pub const MARKER_ENV: &str = "APEX_SHELL_GUARD_MARKER";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
     pub config_home: PathBuf,
+    pub data_home: PathBuf,
     pub state_home: PathBuf,
     pub guard_marker: PathBuf,
 }
@@ -17,10 +18,11 @@ fn absolute(value: Option<OsString>) -> Option<PathBuf> {
 }
 
 impl Paths {
-    pub fn new(config_home: PathBuf, state_home: PathBuf) -> Self {
+    pub fn new(config_home: PathBuf, data_home: PathBuf, state_home: PathBuf) -> Self {
         let guard_marker = state_home.join("apex/shell-guard-tripped");
         Self {
             config_home,
+            data_home,
             state_home,
             guard_marker,
         }
@@ -33,6 +35,7 @@ impl Paths {
         };
         let mut paths = Self::new(
             or_home("XDG_CONFIG_HOME", ".config")?,
+            or_home("XDG_DATA_HOME", ".local/share")?,
             or_home("XDG_STATE_HOME", ".local/state")?,
         );
         if let Some(marker) = absolute(var(MARKER_ENV)) {
@@ -53,6 +56,12 @@ impl Paths {
         self.gtk_dir().join("gtk.css")
     }
 
+    /// Ptyxis watches this directory; the file name is the palette id, `apex`.
+    pub fn ptyxis_palette(&self) -> PathBuf {
+        self.data_home
+            .join("org.gnome.Ptyxis/palettes/apex.palette")
+    }
+
     /// Left by `apex-shell-safe.service` (apex-desktop) when the crash guard trips.
     pub fn guard_marker(&self) -> PathBuf {
         self.guard_marker.clone()
@@ -65,7 +74,9 @@ impl Paths {
     }
 
     pub fn is_ours(&self, path: &Path) -> bool {
-        path.starts_with(&self.config_home) || path.starts_with(&self.state_home)
+        [&self.config_home, &self.data_home, &self.state_home]
+            .iter()
+            .any(|home| path.starts_with(home))
     }
 }
 
@@ -87,10 +98,15 @@ mod tests {
         let p = paths(&[
             ("HOME", "/home/u"),
             ("XDG_CONFIG_HOME", "/cfg"),
+            ("XDG_DATA_HOME", "/data"),
             ("XDG_STATE_HOME", "/st"),
         ])
         .unwrap();
         assert_eq!(p.apex_css(), Path::new("/cfg/gtk-4.0/apex.css"));
+        assert_eq!(
+            p.ptyxis_palette(),
+            Path::new("/data/org.gnome.Ptyxis/palettes/apex.palette")
+        );
         assert_eq!(p.gtk_css(), Path::new("/cfg/gtk-4.0/gtk.css"));
         assert_eq!(p.guard_marker(), Path::new("/st/apex/shell-guard-tripped"));
     }
@@ -119,10 +135,12 @@ mod tests {
         let p = paths(&[
             ("HOME", "/home/u"),
             ("XDG_CONFIG_HOME", "cfg"),
+            ("XDG_DATA_HOME", "data"),
             ("XDG_STATE_HOME", ""),
         ])
         .unwrap();
         assert_eq!(p.config_home, Path::new("/home/u/.config"));
+        assert_eq!(p.data_home, Path::new("/home/u/.local/share"));
         assert_eq!(p.state_home, Path::new("/home/u/.local/state"));
     }
 
@@ -130,7 +148,13 @@ mod tests {
     fn without_a_usable_home_only_absolute_xdg_values_do() {
         assert_eq!(paths(&[]), None);
         assert_eq!(paths(&[("HOME", "relative")]), None);
-        assert!(paths(&[("XDG_CONFIG_HOME", "/c"), ("XDG_STATE_HOME", "/s")]).is_some());
+        let all = [
+            ("XDG_CONFIG_HOME", "/c"),
+            ("XDG_DATA_HOME", "/d"),
+            ("XDG_STATE_HOME", "/s"),
+        ];
+        assert!(paths(&all).is_some());
+        assert_eq!(paths(&all[..2]), None);
         assert_eq!(paths(&[("XDG_CONFIG_HOME", "/c")]), None);
     }
 
@@ -139,7 +163,9 @@ mod tests {
         let p = paths(&[("HOME", "/home/u")]).unwrap();
         assert!(p.is_ours(&p.apex_css()));
         assert!(p.is_ours(&p.guard_marker()));
+        assert!(p.is_ours(&p.ptyxis_palette()));
         assert!(!p.is_ours(Path::new("/home/u/Documents/gtk.css")));
         assert!(!p.is_ours(Path::new("/etc/gtk-4.0/gtk.css")));
+        assert!(!p.is_ours(Path::new("/home/u/.local/bin/x")));
     }
 }

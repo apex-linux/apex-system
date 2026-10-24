@@ -4,6 +4,7 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use crate::css;
+use crate::palette;
 use crate::paths::Paths;
 
 #[derive(Debug, thiserror::Error)]
@@ -14,7 +15,7 @@ pub enum FileError {
         #[source]
         source: io::Error,
     },
-    #[error("{} leads to {}, outside the agent's config and state directories", .link.display(), .target.display())]
+    #[error("{} leads to {}, outside the agent's config, data and state directories", .link.display(), .target.display())]
     Outside { link: PathBuf, target: PathBuf },
     #[error("{} is not writable by its owner, so it is left as it is", .path.display())]
     ReadOnly { path: PathBuf },
@@ -83,7 +84,11 @@ fn resolve_existing(path: &Path) -> io::Result<PathBuf> {
 pub fn contained(path: &Path, paths: &Paths) -> Result<PathBuf, FileError> {
     let target = resolve_existing(path).map_err(io_error(path))?;
     let canonical = |home: &Path| resolve_existing(home).unwrap_or_else(|_| home.to_owned());
-    let homes = Paths::new(canonical(&paths.config_home), canonical(&paths.state_home));
+    let homes = Paths::new(
+        canonical(&paths.config_home),
+        canonical(&paths.data_home),
+        canonical(&paths.state_home),
+    );
     if homes.is_ours(&target) {
         Ok(target)
     } else {
@@ -97,6 +102,11 @@ pub fn contained(path: &Path, paths: &Paths) -> Result<PathBuf, FileError> {
 pub fn write_apex_css(paths: &Paths, radius: u32) -> Result<bool, FileError> {
     let path = contained(&paths.apex_css(), paths)?;
     write_atomic(&path, css::radius_css(radius).as_bytes(), 0o644)
+}
+
+pub fn write_ptyxis_palette(paths: &Paths, accent: &str) -> Result<bool, FileError> {
+    let path = contained(&paths.ptyxis_palette(), paths)?;
+    write_atomic(&path, palette::palette(accent).as_bytes(), 0o644)
 }
 
 /// Adds the import line once; every byte of the user's own file is kept.
@@ -134,7 +144,11 @@ mod tests {
 
     fn tree() -> (tempfile::TempDir, Paths) {
         let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::new(dir.path().join("config"), dir.path().join("state"));
+        let paths = Paths::new(
+            dir.path().join("config"),
+            dir.path().join("data"),
+            dir.path().join("state"),
+        );
         (dir, paths)
     }
 
@@ -278,6 +292,37 @@ mod tests {
         let mut expected = b"@import url(\"apex.css\");\n".to_vec();
         expected.extend_from_slice(latin1);
         assert_eq!(fs::read(paths.gtk_css()).unwrap(), expected);
+    }
+
+    #[test]
+    fn the_palette_is_written_where_ptyxis_looks_and_follows_the_accent() {
+        let (_dir, paths) = tree();
+        assert!(write_ptyxis_palette(&paths, "green").unwrap());
+        assert!(!write_ptyxis_palette(&paths, "green").unwrap());
+        let text = fs::read_to_string(paths.ptyxis_palette()).unwrap();
+        assert!(text.contains("Cursor=#3a944a\n"));
+        assert_eq!(mode(&paths.ptyxis_palette()), 0o644);
+        assert!(write_ptyxis_palette(&paths, "purple").unwrap());
+        assert!(
+            fs::read_to_string(paths.ptyxis_palette())
+                .unwrap()
+                .contains("Cursor=#9141ac\n")
+        );
+    }
+
+    #[test]
+    fn a_linked_palette_directory_outside_our_homes_is_refused() {
+        let (dir, paths) = tree();
+        let dotfiles = dir.path().join("dotfiles/palettes");
+        fs::create_dir_all(&dotfiles).unwrap();
+        let ptyxis = paths.data_home.join("org.gnome.Ptyxis");
+        fs::create_dir_all(&ptyxis).unwrap();
+        symlink(&dotfiles, ptyxis.join("palettes")).unwrap();
+        assert!(matches!(
+            write_ptyxis_palette(&paths, "blue"),
+            Err(FileError::Outside { .. })
+        ));
+        assert!(!dotfiles.join("apex.palette").exists());
     }
 
     #[test]

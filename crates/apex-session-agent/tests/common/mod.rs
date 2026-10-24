@@ -10,22 +10,22 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use apex_session_agent::SCHEMA_ID;
+use apex_session_agent::{INTERFACE_SCHEMA_ID, SCHEMA_ID};
 
-/// A copy of apex-desktop's `desktop/schemas/` file, which this repository does not hold.
-const SCHEMA_XML: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/data/io.github.apex_linux.Apex.Desktop.gschema.xml"
-);
+/// A copy of apex-desktop's `desktop/schemas/` file, and the one stock key the agent reads.
+const SCHEMA_FILES: [&str; 2] = [
+    "io.github.apex_linux.Apex.Desktop.gschema.xml",
+    "org.gnome.desktop.interface.gschema.xml",
+];
 
-pub(crate) fn settings_from_the_compiled_schema(dir: &Path) -> gio::Settings {
+/// The Apex settings and the interface settings, on one memory backend.
+pub(crate) fn settings_from_the_compiled_schemas(dir: &Path) -> (gio::Settings, gio::Settings) {
     let schemas = dir.join("schemas");
     fs::create_dir_all(&schemas).unwrap();
-    fs::copy(
-        SCHEMA_XML,
-        schemas.join("io.github.apex_linux.Apex.Desktop.gschema.xml"),
-    )
-    .unwrap();
+    for name in SCHEMA_FILES {
+        let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        fs::copy(data.join(name), schemas.join(name)).unwrap();
+    }
     let status = Command::new("glib-compile-schemas")
         .arg("--strict")
         .arg(&schemas)
@@ -33,9 +33,12 @@ pub(crate) fn settings_from_the_compiled_schema(dir: &Path) -> gio::Settings {
         .expect("glib-compile-schemas (Fedora: glib2) must be installed");
     assert!(status.success());
     let source = gio::SettingsSchemaSource::from_directory(&schemas, None, false).unwrap();
-    let schema = source.lookup(SCHEMA_ID, false).expect("the Apex schema");
     let backend = gio::memory_settings_backend_new();
-    gio::Settings::new_full(&schema, Some(&backend), None)
+    let settings = |id: &str| {
+        let schema = source.lookup(id, false).expect(id);
+        gio::Settings::new_full(&schema, Some(&backend), None)
+    };
+    (settings(SCHEMA_ID), settings(INTERFACE_SCHEMA_ID))
 }
 
 pub(crate) fn wait_for(what: &str, done: impl Fn() -> bool) {

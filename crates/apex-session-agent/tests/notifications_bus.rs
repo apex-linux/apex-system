@@ -17,7 +17,7 @@ use apex_session_agent::agent::Agent;
 use apex_session_agent::guard::{ACTION_KEY, ACTION_LABEL};
 use apex_session_agent::notifications::DbusNotifier;
 use apex_session_agent::paths::Paths;
-use common::{settings_from_the_compiled_schema, wait_for};
+use common::{settings_from_the_compiled_schemas, wait_for};
 use gio::prelude::*;
 
 const NAME: &str = "org.freedesktop.Notifications";
@@ -127,8 +127,12 @@ fn serve(connection: &gio::DBusConnection, seen: &Rc<RefCell<Seen>>) -> gio::Reg
 fn the_offer_over_a_private_session_bus() {
     let bus = Bus::start();
     let dir = tempfile::tempdir().unwrap();
-    let paths = Paths::new(dir.path().join("config"), dir.path().join("state"));
-    let settings = settings_from_the_compiled_schema(dir.path());
+    let paths = Paths::new(
+        dir.path().join("config"),
+        dir.path().join("data"),
+        dir.path().join("state"),
+    );
+    let (settings, _) = settings_from_the_compiled_schemas(dir.path());
     settings.set_boolean(LAYER_KEY, false).unwrap();
     fs::create_dir_all(paths.marker_dir()).unwrap();
     fs::write(paths.guard_marker(), "").unwrap();
@@ -136,6 +140,7 @@ fn the_offer_over_a_private_session_bus() {
     let client = bus.connect();
     let agent = Agent::start(
         settings.clone(),
+        None,
         paths.clone(),
         Box::new(DbusNotifier::new(client.clone())),
     );
@@ -146,6 +151,10 @@ fn the_offer_over_a_private_session_bus() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert_eq!(agent.offered(), None, "no notification server yet");
+    assert!(
+        !paths.ptyxis_palette().exists(),
+        "no accent key, no palette"
+    );
 
     let server = bus.connect();
     let seen = Rc::new(RefCell::new(Seen::default()));

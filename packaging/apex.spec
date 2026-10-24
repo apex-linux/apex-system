@@ -61,8 +61,9 @@ system components:
   them only when the user asks.
 - apex-boot-assess: health checks after boot and the counted, automatic rollback of an
   update that does not come up.
-- apex-session-agent: a user service that writes the GTK window radius file and offers
-  to turn the Apex desktop back on after the shell crash guard trips.
+- apex-session-agent: a user service that writes the GTK window radius file and the
+  Ptyxis palette whose caret is the accent, and offers to turn the Apex desktop back on
+  after the shell crash guard trips.
 - apexctl: the command-line client, and the build and hardware tools used by the image
   build.
 

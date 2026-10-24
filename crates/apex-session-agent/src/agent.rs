@@ -7,7 +7,7 @@ use gio::prelude::*;
 use crate::files;
 use crate::guard::{Effect, Offer};
 use crate::paths::Paths;
-use crate::{LAYER_KEY, RADIUS_KEY};
+use crate::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
 
 /// The reply of a `Notify` call: the notification id, or `None` when it failed.
 pub type Posted = Box<dyn FnOnce(Option<u32>)>;
@@ -17,22 +17,28 @@ pub trait Notifier {
     fn withdraw(&self, id: u32);
 }
 
-/// Every feature reads the same settings object; the Ptyxis palette joins here once the
-/// reload spike passes.
+/// The Apex schema drives every feature but the palette, which follows the stock accent.
 pub struct Agent {
     settings: gio::Settings,
+    interface: Option<gio::Settings>,
     paths: Paths,
     offer: RefCell<Offer>,
     notifier: Box<dyn Notifier>,
-    watches: RefCell<Vec<glib::SignalHandlerId>>,
+    watches: RefCell<Vec<(gio::Settings, glib::SignalHandlerId)>>,
     monitor: RefCell<Option<gio::FileMonitor>>,
     warned: RefCell<HashSet<String>>,
 }
 
 impl Agent {
-    pub fn start(settings: gio::Settings, paths: Paths, notifier: Box<dyn Notifier>) -> Rc<Self> {
+    pub fn start(
+        settings: gio::Settings,
+        interface: Option<gio::Settings>,
+        paths: Paths,
+        notifier: Box<dyn Notifier>,
+    ) -> Rc<Self> {
         let agent = Rc::new(Self {
             settings,
+            interface,
             paths,
             offer: RefCell::new(Offer::new()),
             notifier,
@@ -52,6 +58,18 @@ impl Agent {
         } else {
             tracing::warn!("the Apex schema has no {LAYER_KEY}: the crash-guard offer is off");
         }
+        let has_accent = agent
+            .interface
+            .as_ref()
+            .and_then(gio::Settings::settings_schema)
+            .is_some_and(|s| s.has_key(ACCENT_KEY));
+        if has_accent {
+            agent.start_palette();
+        } else {
+            tracing::warn!(
+                "the interface schema has no {ACCENT_KEY}: the terminal caret stays stock"
+            );
+        }
         agent
     }
 
@@ -68,8 +86,34 @@ impl Agent {
                     agent.write_radius();
                 }
             });
-        self.watches.borrow_mut().push(id);
+        self.watches.borrow_mut().push((self.settings.clone(), id));
         self.write_radius();
+    }
+
+    fn start_palette(self: &Rc<Self>) {
+        let Some(interface) = &self.interface else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        let id = interface.connect_changed(Some(ACCENT_KEY), move |_, _| {
+            if let Some(agent) = weak.upgrade() {
+                agent.write_palette();
+            }
+        });
+        self.watches.borrow_mut().push((interface.clone(), id));
+        self.write_palette();
+    }
+
+    fn write_palette(&self) {
+        let Some(interface) = &self.interface else {
+            return;
+        };
+        let accent = interface.string(ACCENT_KEY);
+        match files::write_ptyxis_palette(&self.paths, &accent) {
+            Ok(true) => tracing::info!(%accent, "wrote apex.palette"),
+            Ok(false) => {}
+            Err(error) => self.warn_once("cannot write apex.palette", &error),
+        }
     }
 
     /// A refusal repeats with every radius change; the journal needs it once.
@@ -200,8 +244,8 @@ impl std::fmt::Debug for Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        for id in self.watches.take() {
-            self.settings.disconnect(id);
+        for (settings, id) in self.watches.take() {
+            settings.disconnect(id);
         }
         if let Some(monitor) = self.monitor.take() {
             monitor.cancel();
