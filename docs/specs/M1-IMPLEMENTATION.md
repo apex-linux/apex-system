@@ -177,6 +177,8 @@ apexctl update automatic                  (root, used by the timer)
 apexctl update auto on|off|status         SetAutomaticDownloads (polkit update.configure); the timer stays enabled, checks continue
 apexctl hw report [--json]                read-only: audio init_verbs, charge threshold, dGPU runtime PM, fingerprint device
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
+apexctl hw dgpu-idle [--seconds N] [--json]  dGPU runtime-suspended share, wakes per hour and battery mW over an idle window, from cached sysfs only (ACCEPTANCE 4.2, 4.9; N10); exits 1 below 95.0 %
+apexctl hw dgpu-d3cold [--within S] [--json]  wait until the dGPU's power_state reads D3cold, polling it once a second; exits 1 if it does not within S s (default 60)
 apexctl profile render [--profile P] [--out DIR] [--check]
 apexctl build manifest --root DIR --version V --revision R --base B [--degraded X]... [--held FAMILY]...
 ```

@@ -167,6 +167,44 @@ pub enum HwCommand {
     },
     #[command(subcommand, about = "Audio codec diagnostics")]
     Audio(AudioCommand),
+    #[command(
+        about = "Measure the dGPU's runtime-suspended share over an idle window. Read-only",
+        long_about = concat!(
+            "Measure the dGPU's runtime-suspended share over an idle window. Read-only.\n\n",
+            "Reads cached sysfs attributes only, so it never wakes the dGPU. Prints the wakes ",
+            "seen at 1 s sampling, per hour, and the mean battery power. Exits 1 when the ",
+            "suspended share is below 95.0 % (ACCEPTANCE 4.2). Do not run nvidia-smi, nvtop ",
+            "or lspci -v during the window: they wake the device."
+        )
+    )]
+    DgpuIdle {
+        #[arg(long, value_name = "SECONDS", default_value_t = crate::hw::idle::DEFAULT_SECONDS)]
+        seconds: u64,
+        #[arg(long, help = "Print JSON")]
+        json: bool,
+        #[command(flatten)]
+        root: RootArg,
+    },
+    #[command(
+        about = "Wait until the dGPU reaches D3cold. Read-only",
+        long_about = concat!(
+            "Wait until the dGPU reaches D3cold. Read-only.\n\n",
+            "Reads only its power_state once a second, which never wakes it. Exits 1 when it ",
+            "has not reached D3cold within the time given."
+        )
+    )]
+    DgpuD3cold {
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = crate::hw::idle::DEFAULT_D3COLD_WITHIN_S
+        )]
+        within: u64,
+        #[arg(long, help = "Print JSON")]
+        json: bool,
+        #[command(flatten)]
+        root: RootArg,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -313,6 +351,9 @@ mod tests {
             &["update", "auto", "off"],
             &["update", "auto", "status"],
             &["hw", "report", "--json"],
+            &["hw", "dgpu-idle"],
+            &["hw", "dgpu-idle", "--seconds", "3600", "--json"],
+            &["hw", "dgpu-d3cold", "--within", "30"],
             &["hw", "audio", "snapshot", "--proc", "/tmp/codec", "--json"],
             &[
                 "profile",

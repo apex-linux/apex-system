@@ -2,6 +2,7 @@
 //! wake the dGPU. The one exception is the ALC294's codec file ([`audio::snapshot`]).
 
 pub mod audio;
+pub mod idle;
 pub mod machine;
 pub mod report;
 pub mod upower;
