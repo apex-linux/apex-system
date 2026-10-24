@@ -183,6 +183,7 @@ apexctl hw report [--json]                read-only: audio init_verbs, charge th
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
 apexctl hw dgpu-idle [--seconds N] [--json]  dGPU runtime-suspended share, wakes per hour and battery mW over an idle window, from cached sysfs only (ACCEPTANCE 4.2, 4.9; N10); exits 1 below 95.0 %
 apexctl hw dgpu-d3cold [--within S] [--json]  wait until the dGPU's power_state reads D3cold, polling it once a second; exits 1 if it does not within S s (default 60)
+apexctl boot repair-grub [--check] [--sysroot DIR]  root only, no daemon: rebuild /boot/grub2/grub.cfg byte for byte as bootupd's grubconfigs::install does, from /usr/lib/bootupd/grub2-static (with --sysroot, of the default BLS entry's deployment); keeps grub.cfg.apex-bak, never touches grubenv, bootuuid.cfg or the ESP; refuses a result without the 08 marker; --check exits 1 on drift, a no-op exits 3
 apexctl profile render [--profile P] [--out DIR] [--check]
 apexctl build manifest --root DIR --version V --revision R --base B [--degraded X]... [--held FAMILY]...
 ```
@@ -216,7 +217,7 @@ installs a downgrade: `Apply` refuses one, and `Rollback` is the way back.
 | `apex-boot` | `apex-bootc`, `apex-dbus` (used by the binary; the package depends on them, the library code does not use them) | binary only | no |
 | `apex-dbus` | — | no (zbus proxy is runtime-agnostic) | no |
 | `apex-updated` | all of the above; `apexctl` in its tests only (the drills read it through apexctl's client) | yes (current_thread) | no |
-| `apexctl` | `apex-dbus`, `apex-update` (for `changes` formatting), `apex-bootc` (types only), `apex-boot` (the NVIDIA hardware note) | yes (current_thread, for zbus) | no |
+| `apexctl` | `apex-dbus`, `apex-update` (for `changes` formatting), `apex-bootc` (types only), `apex-boot` (the NVIDIA hardware note; the grub.cfg marker scan and the private /boot remount for `boot repair-grub`) | yes (current_thread, for zbus) | no |
 
 Rendered hardware files live in `hardware/<machine>/generated/`. The legacy allowlist is
 `image/audit/legacy-allowlist.txt` (`name<TAB>milestone<TAB>reason`).

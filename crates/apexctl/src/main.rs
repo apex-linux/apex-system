@@ -1,10 +1,13 @@
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
 
 use anyhow::Context as _;
+use apex_boot::writer::{SH, UNSHARE};
+use apexctl::boot::{self, Layout};
 use apexctl::cli::{
-    AudioCommand, BuildCommand, Cli, Command, HwCommand, ProfileCommand, UpdateCommand,
+    AudioCommand, BootCommand, BuildCommand, Cli, Command, HwCommand, ProfileCommand, UpdateCommand,
 };
 use apexctl::exit::Exit;
 use apexctl::hw::{self, SysRoot};
@@ -85,6 +88,11 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
             json,
             root,
         })) => audio_snapshot(&SysRoot::new(root.sysroot), proc_file.as_deref(), json),
+        Command::Boot(BootCommand::RepairGrub {
+            check,
+            sysroot,
+            boot_remounted,
+        }) => repair_grub(check, sysroot.as_deref(), boot_remounted),
         Command::Profile(ProfileCommand::Render {
             profile,
             out,
@@ -228,6 +236,109 @@ fn audio_snapshot(root: &SysRoot, proc_file: Option<&Path>, json: bool) -> anyho
         emit(&hw::audio::render(&snapshot))?;
     }
     Ok(Exit::Ok)
+}
+
+const FSFREEZE: &str = "/usr/sbin/fsfreeze";
+
+/// Constant, so the executable and its arguments reach it only as positional parameters.
+const REMOUNT_AND_EXEC: &str = concat!(
+    "/usr/bin/mount -n -o remount,rw /boot",
+    " && exec \"$0\" \"$@\""
+);
+
+fn repair_grub(check: bool, sysroot: Option<&Path>, boot_remounted: bool) -> anyhow::Result<Exit> {
+    let status =
+        std::fs::read_to_string("/proc/self/status").context("cannot read /proc/self/status")?;
+    if boot::effective_uid(&status) != Some(0) {
+        eprintln!(
+            "apexctl: repair-grub reads and writes /boot/grub2, which only root may: \
+             sudo apexctl boot repair-grub"
+        );
+        return Ok(Exit::Error);
+    }
+    let layout = match sysroot {
+        Some(root) => Layout::sysroot(root)?,
+        None => Layout::host(),
+    };
+    let rebuilt = boot::rebuild(&layout.static_dir)?;
+    let current = boot::read_current(&layout)?;
+    if current.as_deref() == Some(rebuilt.text.as_bytes()) {
+        emit(&format!(
+            "{} matches the static configs in {}.\n",
+            layout.grub_cfg().display(),
+            layout.static_dir.display()
+        ))?;
+        return Ok(if check { Exit::Ok } else { Exit::NothingToDo });
+    }
+    if check {
+        eprint!("{}", boot::diff(&layout, current.as_deref(), &rebuilt));
+        eprintln!(
+            "apexctl: {} differs from the static configs in {}; sudo apexctl boot repair-grub \
+             rebuilds it.",
+            layout.grub_cfg().display(),
+            layout.static_dir.display()
+        );
+        return Ok(Exit::Error);
+    }
+    if sysroot.is_none() && !boot_remounted {
+        return in_private_writable_boot();
+    }
+    let backup = match sysroot {
+        Some(_) => boot::write(&layout, current.as_deref(), &rebuilt, |_| {})?,
+        None => boot::write(&layout, current.as_deref(), &rebuilt, freeze_thaw)?,
+    };
+    let mut text = boot::render_written(&layout, &rebuilt, backup.as_deref());
+    if let Some(root) = sysroot {
+        let _ = writeln!(
+            text,
+            "Unmount {} before rebooting, so GRUB reads the new file.",
+            root.join("boot").display()
+        );
+    }
+    emit(&text)?;
+    Ok(Exit::Ok)
+}
+
+/// The host's /boot is read-only; only this run's private mount of it is made writable.
+fn in_private_writable_boot() -> anyhow::Result<Exit> {
+    let exe = std::env::current_exe().context("cannot find the apexctl executable")?;
+    let status = std::process::Command::new(UNSHARE)
+        .args([
+            "--mount",
+            "--propagation",
+            "private",
+            "--",
+            SH,
+            "-c",
+            REMOUNT_AND_EXEC,
+        ])
+        .arg(exe)
+        .args(["boot", "repair-grub", "--boot-remounted"])
+        .status()
+        .with_context(|| format!("cannot run {UNSHARE}"))?;
+    Ok(match status.code() {
+        Some(0) => Exit::Ok,
+        Some(3) => Exit::NothingToDo,
+        _ => Exit::Error,
+    })
+}
+
+fn freeze_thaw(grub_dir: &Path) {
+    let run = |flag: &str, stderr: Stdio| {
+        std::process::Command::new(FSFREEZE)
+            .arg(flag)
+            .arg(grub_dir)
+            .stderr(stderr)
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    if run("--freeze", Stdio::null()) && !run("--unfreeze", Stdio::inherit()) {
+        eprintln!(
+            "apexctl: {} is still frozen; run: {FSFREEZE} --unfreeze {}",
+            grub_dir.display(),
+            grub_dir.display()
+        );
+    }
 }
 
 fn profile_render(profile_path: &Path, out: Option<&Path>, check: bool) -> anyhow::Result<Exit> {
