@@ -156,6 +156,7 @@ impl Scenario {
             grub_cfg: Box::new(FnCheck::new(names::GRUB_CFG_MARKER, || Ok(()))),
             reported: vec![Box::new(FnCheck::new(names::CHARGE_THRESHOLD, || Ok(())))],
             force_red_path: force_red,
+            fedora_major: Ok(45),
         };
         let gathered = gather(&ports, local, &path).unwrap();
         let decision = decide(&gathered.input);
@@ -795,6 +796,7 @@ fn an_uninterpretable_grubenv_stops_before_any_check() {
         grub_cfg: Box::new(FnCheck::new(names::GRUB_CFG_MARKER, || Ok(()))),
         reported: Vec::new(),
         force_red_path: dir.path().join("force-red"),
+        fedora_major: Ok(45),
     };
 
     let missing = dir.path().join("missing");

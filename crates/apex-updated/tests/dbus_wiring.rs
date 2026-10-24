@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use apex_bootc::{APEX_TESTING, BootcCommand, FakeRunner, Scripted};
+use apex_bootc::{BootcCommand, FakeRunner, Scripted, apex_testing};
 use apex_dbus::{
     ApexError, BUS_NAME, BootVerdict, Channel, Deployment, ErrorKind, INTERFACE, INTROSPECTION_XML,
     OBJECT_PATH, PolkitAction, State, Update1Proxy,
@@ -448,7 +448,7 @@ fn progress(seen: &Seen) -> Vec<f64> {
 fn testing_booted() -> apex_bootc::BootEntry {
     let mut entry = booted();
     if let Some(image) = &mut entry.image {
-        image.image.image = APEX_TESTING.to_string();
+        image.image.image = apex_testing(45).to_string();
     }
     entry
 }

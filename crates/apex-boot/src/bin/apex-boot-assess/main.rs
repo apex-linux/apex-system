@@ -104,6 +104,7 @@ fn assess_system(args: &Args, handle: Handle) -> anyhow::Result<ExitCode> {
         grub_cfg: Box::new(GrubCfgMarkerCheck::new(&paths.grub_cfg)),
         reported: reported::file_checks(&paths.root),
         force_red_path: paths.force_red.clone(),
+        fedora_major: reported::fedora_major(&paths.root),
     };
 
     tracing::info!(

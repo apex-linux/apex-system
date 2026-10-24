@@ -27,6 +27,8 @@ pub(crate) struct LocalChecks {
     pub(crate) grub_cfg: Box<dyn Check>,
     pub(crate) reported: Vec<Box<dyn Check>>,
     pub(crate) force_red_path: PathBuf,
+    /// The booted manifest's `fedora`, which names the channel tags.
+    pub(crate) fedora_major: Result<u32, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +103,7 @@ pub(crate) fn gather(
         grub_cfg,
         reported: reported_checks,
         force_red_path,
+        fedora_major,
     } = local;
     // The order of names::REQUIRED, then the reported checks.
     let mut batch: Vec<Box<dyn Check>> = vec![
@@ -122,7 +125,7 @@ pub(crate) fn gather(
         (results, booted)
     });
     let mut reported = results.split_off(required_count);
-    reported.push(reported::image_source(&booted));
+    reported.push(reported::image_source(&booted, &fedora_major));
     let mut required = results;
     for result in required.iter().chain(&reported) {
         if result.outcome.is_pass() {

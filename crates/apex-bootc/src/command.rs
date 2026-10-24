@@ -32,10 +32,23 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_mins(5);
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_hours(2);
 pub const OTHER_TIMEOUT: Duration = Duration::from_mins(10);
 
-pub const APEX_STABLE: ImageRef = ImageRef::from_static("ghcr.io/apex-linux/apex:45");
-pub const APEX_TESTING: ImageRef = ImageRef::from_static("ghcr.io/apex-linux/apex-testing:45");
 pub const APEX_STABLE_REPOSITORY: &str = "ghcr.io/apex-linux/apex";
 pub const APEX_TESTING_REPOSITORY: &str = "ghcr.io/apex-linux/apex-testing";
+
+/// The stable channel of a Fedora major, the booted manifest's `fedora`: `…/apex:45`.
+pub fn apex_stable(major: u32) -> ImageRef {
+    ImageRef(Repr::Major {
+        repository: APEX_STABLE_REPOSITORY,
+        major,
+    })
+}
+
+pub fn apex_testing(major: u32) -> ImageRef {
+    ImageRef(Repr::Major {
+        repository: APEX_TESTING_REPOSITORY,
+        major,
+    })
+}
 
 pub fn program() -> PathBuf {
     program_or_override(BOOTC_PROGRAM, PROGRAM_OVERRIDE_ENV)
@@ -56,8 +69,8 @@ fn program_or_override(program: &str, env: &str) -> PathBuf {
     PathBuf::from(program)
 }
 
-/// Built only from a `&'static str`, or a static repository plus a validated digest, and
-/// never starting with `-`, so bootc can never read it as an option.
+/// Built only from a `&'static str`, or a static repository plus a validated digest or a
+/// number, and never starting with `-`, so bootc can never read it as an option.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ImageRef(Repr);
 
@@ -67,6 +80,10 @@ enum Repr {
     Pinned {
         repository: &'static str,
         digest: Digest,
+    },
+    Major {
+        repository: &'static str,
+        major: u32,
     },
 }
 
@@ -168,7 +185,7 @@ impl ImageRef {
 
     pub fn digest(&self) -> Option<&Digest> {
         match &self.0 {
-            Repr::Static(_) => None,
+            Repr::Static(_) | Repr::Major { .. } => None,
             Repr::Pinned { digest, .. } => Some(digest),
         }
     }
@@ -179,6 +196,7 @@ impl fmt::Display for ImageRef {
         match &self.0 {
             Repr::Static(s) => f.write_str(s),
             Repr::Pinned { repository, digest } => write!(f, "{repository}@{digest}"),
+            Repr::Major { repository, major } => write!(f, "{repository}:{major}"),
         }
     }
 }
@@ -332,14 +350,25 @@ mod tests {
     const D: &str = "sha256:47e5ed613a970b6574bfa954ab25bb6e85656552899aa518b5961d9645102b38";
 
     #[test]
-    fn channel_constants_are_valid() {
-        assert_eq!(APEX_STABLE.to_string(), "ghcr.io/apex-linux/apex:45");
+    fn channel_refs_follow_the_fedora_major() {
+        assert_eq!(apex_stable(45).to_string(), "ghcr.io/apex-linux/apex:45");
         assert_eq!(
-            APEX_TESTING.to_string(),
+            apex_testing(45).to_string(),
             "ghcr.io/apex-linux/apex-testing:45"
         );
+        assert_eq!(apex_stable(46).to_string(), "ghcr.io/apex-linux/apex:46");
+        assert_eq!(
+            apex_testing(46).to_string(),
+            "ghcr.io/apex-linux/apex-testing:46"
+        );
+        assert_eq!(apex_stable(45).digest(), None);
         assert!(validate_repository(APEX_STABLE_REPOSITORY).is_ok());
         assert!(validate_repository(APEX_TESTING_REPOSITORY).is_ok());
+        for major in [0, 45, u32::MAX] {
+            let image = apex_testing(major).to_string();
+            let tag: &'static str = Box::leak(image.into_boxed_str());
+            assert!(ImageRef::try_from_static(tag).is_ok(), "{tag}");
+        }
     }
 
     #[test]
@@ -371,7 +400,6 @@ mod tests {
         let r = ImageRef::at_digest(APEX_STABLE_REPOSITORY, D).unwrap();
         assert_eq!(r.to_string(), format!("ghcr.io/apex-linux/apex@{D}"));
         assert_eq!(r.digest().map(Digest::as_str), Some(D));
-        assert_eq!(APEX_STABLE.digest(), None);
         assert_eq!(
             ImageRef::at_digest("ghcr.io/apex-linux/apex:45", D),
             Err(ImageRefError::TaggedRepository)
