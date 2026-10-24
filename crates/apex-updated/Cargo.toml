@@ -38,6 +38,8 @@ zbus_polkit.workspace = true
 
 [dev-dependencies]
 apex-updated = { path = ".", features = ["testing"] }
+# The hold drill reads the daemon through apexctl's own status code.
+apexctl = { path = "../apexctl" }
 apex-bootc = { workspace = true, features = ["testing"] }
 insta.workspace = true
 proptest.workspace = true

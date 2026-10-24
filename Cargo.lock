@@ -153,6 +153,7 @@ dependencies = [
  "apex-dbus",
  "apex-update",
  "apex-updated",
+ "apexctl",
  "insta",
  "nix",
  "proptest",
