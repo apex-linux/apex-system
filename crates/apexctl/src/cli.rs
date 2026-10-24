@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::profile::DEFAULT_PROFILE;
 use crate::status::STATUS_JSON_HELP;
@@ -125,6 +125,26 @@ pub enum UpdateCommand {
         )
     )]
     Automatic,
+    #[command(
+        about = "Turn automatic downloads on or off, or show the setting",
+        long_about = concat!(
+            "Turn automatic downloads on or off, or show the setting.\n\n",
+            "Off, the daily check still runs and reports updates, but downloads only when asked ",
+            "(apexctl update download). Changing it asks for an administrator password; the ",
+            "update service keeps it across restarts."
+        )
+    )]
+    Auto {
+        #[arg(value_enum)]
+        setting: AutoSetting,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum AutoSetting {
+    On,
+    Off,
+    Status,
 }
 
 /// Validated while parsing: D-Bus activation of the update service runs `bootc status`,
@@ -289,6 +309,9 @@ mod tests {
             &["update", "changes"],
             &["update", "acknowledge"],
             &["update", "automatic"],
+            &["update", "auto", "on"],
+            &["update", "auto", "off"],
+            &["update", "auto", "status"],
             &["hw", "report", "--json"],
             &["hw", "audio", "snapshot", "--proc", "/tmp/codec", "--json"],
             &[
@@ -345,6 +368,11 @@ mod tests {
         assert!(parse(&["update", "reboot"]).is_err());
         assert!(parse(&["update", "discard"]).is_err());
         assert!(parse(&["update", "channel", "stable"]).is_err());
+        assert!(
+            parse(&["update", "auto"]).is_err(),
+            "the setting is required"
+        );
+        assert!(parse(&["update", "auto", "maybe"]).is_err());
     }
 
     static VALID_DIGEST: std::sync::LazyLock<String> =

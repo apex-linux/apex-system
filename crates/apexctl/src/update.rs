@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use apex_bootc::Digest;
 use apex_dbus::{ApexError, Deployment, ErrorKind, State};
 
-use crate::cli::UpdateCommand;
+use crate::cli::{AutoSetting, UpdateCommand};
 use crate::exit::Exit;
 use crate::service::{ClientError, ServiceStatus, UpdateService};
 use crate::status::{
@@ -397,6 +397,43 @@ pub async fn automatic<S: UpdateService>(service: &S) -> Result<String, ClientEr
     Ok(out)
 }
 
+fn automatic_downloads_sentence(enabled: bool) -> &'static str {
+    if enabled {
+        "Automatic downloads are on: the daily check downloads the updates it finds."
+    } else {
+        "Automatic downloads are off: the daily check still runs and reports updates. \
+         Download one with: apexctl update download"
+    }
+}
+
+/// `SetAutomaticDownloads`; the daily timer stays enabled either way, because checks continue.
+pub async fn auto<S: UpdateService>(
+    service: &S,
+    setting: AutoSetting,
+) -> Result<String, ClientError> {
+    let before = service.status().await?.automatic_downloads.ok_or_else(|| {
+        ClientError::Mismatch("the service does not report AutomaticDownloads".to_owned())
+    })?;
+    let wanted = match setting {
+        AutoSetting::Status => return Ok(format!("{}\n", automatic_downloads_sentence(before))),
+        AutoSetting::On => true,
+        AutoSetting::Off => false,
+    };
+    if before == wanted {
+        return Ok(format!(
+            "Already set. {}\n",
+            automatic_downloads_sentence(wanted)
+        ));
+    }
+    service.set_automatic_downloads(wanted).await?;
+    let after = service
+        .status()
+        .await?
+        .automatic_downloads
+        .unwrap_or(wanted);
+    Ok(format!("{}\n", automatic_downloads_sentence(after)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,6 +502,16 @@ mod tests {
         }
         fn automatic(&self) -> impl Future<Output = Result<(), ClientError>> {
             ready(self.call("automatic".into()))
+        }
+        fn set_automatic_downloads(
+            &self,
+            enabled: bool,
+        ) -> impl Future<Output = Result<(), ClientError>> {
+            let result = self.call(format!("set_automatic_downloads({enabled})"));
+            if result.is_ok() {
+                self.status.borrow_mut().automatic_downloads = Some(enabled);
+            }
+            ready(result)
         }
     }
 
@@ -665,6 +712,53 @@ mod tests {
             out.contains("update sha256:aaaaaaaaaaaa failed its health checks"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn auto_off_turns_automatic_downloads_off_and_says_checks_continue() {
+        let fake = Fake::new(status(State::UpToDate));
+        let out = run(auto(&fake, AutoSetting::Off)).unwrap();
+        assert_eq!(
+            fake.calls.borrow().as_slice(),
+            ["set_automatic_downloads(false)"]
+        );
+        assert_eq!(
+            out,
+            "Automatic downloads are off: the daily check still runs and reports updates. \
+             Download one with: apexctl update download\n"
+        );
+        let out = run(auto(&fake, AutoSetting::On)).unwrap();
+        assert_eq!(
+            out,
+            "Automatic downloads are on: the daily check downloads the updates it finds.\n"
+        );
+        assert_eq!(fake.calls.borrow().len(), 2);
+    }
+
+    #[test]
+    fn auto_status_and_an_unchanged_setting_call_nothing() {
+        let fake = Fake::new(status(State::UpToDate));
+        let out = run(auto(&fake, AutoSetting::Status)).unwrap();
+        assert!(out.starts_with("Automatic downloads are on"), "{out}");
+        let out = run(auto(&fake, AutoSetting::On)).unwrap();
+        assert!(
+            out.starts_with("Already set. Automatic downloads are on"),
+            "{out}"
+        );
+        assert!(fake.calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn auto_reports_a_refusal_and_an_older_service() {
+        let fake = Fake::new(status(State::UpToDate));
+        *fake.fail_with.borrow_mut() = Some(ErrorKind::NotAuthorized);
+        let error = run(auto(&fake, AutoSetting::Off)).unwrap_err();
+        assert!(error.to_string().starts_with("not authorized"), "{error}");
+
+        let mut old = status(State::UpToDate);
+        old.automatic_downloads = None;
+        let error = run(auto(&Fake::new(old), AutoSetting::Status)).unwrap_err();
+        assert!(matches!(error, ClientError::Mismatch(_)), "{error}");
     }
 
     #[test]

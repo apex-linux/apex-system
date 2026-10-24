@@ -136,6 +136,7 @@ async fn update_command(command: UpdateCommand) -> anyhow::Result<Exit> {
         UpdateCommand::Changes => update::changes(&service).await,
         UpdateCommand::Acknowledge => update::acknowledge(&service).await,
         UpdateCommand::Automatic => update::automatic(&service).await,
+        UpdateCommand::Auto { setting } => update::auto(&service, *setting).await,
     };
     match result {
         Ok(text) => emit(&text).map(|()| Exit::Ok),
