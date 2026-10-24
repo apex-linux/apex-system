@@ -38,6 +38,8 @@
     "stock"          a(ss) one record per family shipped as Fedora's build, from the same
                          lane lock: family, and the lock's reason ("" when none), such as
                          the break-glass image's break-glass: ...
+    "pin-reason"     s   only on a deployment apex-updated pinned itself, why: the booted
+                         deployment was unconfirmed or failed when an update was applied
 
   Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting

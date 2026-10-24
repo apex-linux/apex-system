@@ -71,6 +71,7 @@ pub fn deployment_dict(
         holds: None,
         stock: None,
         download_size: None,
+        pin_reason: None,
     }
 }
 

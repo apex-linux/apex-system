@@ -36,6 +36,7 @@ Properties {
         holds: None,
         stock: None,
         download_size: None,
+        pin_reason: None,
     },
     staged: Deployment {
         image: None,
@@ -49,6 +50,7 @@ Properties {
         holds: None,
         stock: None,
         download_size: None,
+        pin_reason: None,
     },
     rollback: Deployment {
         image: Some(
@@ -81,6 +83,7 @@ Properties {
         holds: None,
         stock: None,
         download_size: None,
+        pin_reason: None,
     },
     available: Deployment {
         image: Some(
@@ -102,6 +105,7 @@ Properties {
         download_size: Some(
             0,
         ),
+        pin_reason: None,
     },
     channel: Stable,
     last_check: 1790299880,

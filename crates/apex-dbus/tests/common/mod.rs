@@ -92,6 +92,7 @@ pub(crate) fn booted() -> Deployment {
         }]),
         stock: Some(Vec::new()),
         download_size: None,
+        pin_reason: None,
     }
 }
 
@@ -108,6 +109,7 @@ pub(crate) fn staged() -> Deployment {
         holds: Some(Vec::new()),
         stock: None,
         download_size: Some(1_200_000_000),
+        pin_reason: None,
     }
 }
 

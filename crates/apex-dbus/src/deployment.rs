@@ -57,6 +57,8 @@ pub struct Deployment {
     /// `Available` and `Staged` only: bytes still to download as the check found them, 0
     /// when unknown.
     pub download_size: Option<u64>,
+    /// Only on a deployment apex-updated pinned itself: why it did.
+    pub pin_reason: Option<String>,
 }
 
 const DICT_SIGNATURE: &Signature = <HashMap<String, OwnedVariant> as Type>::SIGNATURE;
@@ -73,8 +75,9 @@ impl Deployment {
     pub const HOLDS: &'static str = "holds";
     pub const DOWNLOAD_SIZE: &'static str = "download-size";
     pub const STOCK: &'static str = "stock";
+    pub const PIN_REASON: &'static str = "pin-reason";
 
-    pub const KEYS: [(&'static str, &'static Signature); 11] = [
+    pub const KEYS: [(&'static str, &'static Signature); 12] = [
         (Self::IMAGE, <String as Type>::SIGNATURE),
         (Self::DIGEST, <String as Type>::SIGNATURE),
         (Self::VERSION, <String as Type>::SIGNATURE),
@@ -86,6 +89,7 @@ impl Deployment {
         (Self::HOLDS, <Vec<HoldTuple> as Type>::SIGNATURE),
         (Self::DOWNLOAD_SIZE, <u64 as Type>::SIGNATURE),
         (Self::STOCK, <Vec<StockTuple> as Type>::SIGNATURE),
+        (Self::PIN_REASON, <String as Type>::SIGNATURE),
     ];
 
     pub fn is_empty(&self) -> bool {
@@ -114,6 +118,7 @@ impl Deployment {
                 Self::HOLDS => deployment.holds = Some(holds(key, value)?),
                 Self::DOWNLOAD_SIZE => deployment.download_size = Some(uint64(key, value)?),
                 Self::STOCK => deployment.stock = Some(stock(key, value)?),
+                Self::PIN_REASON => deployment.pin_reason = Some(string(key, value)?),
                 _ => {}
             }
         }
@@ -270,6 +275,7 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
             holds,
             stock,
             download_size,
+            pin_reason,
         } = deployment;
         let text = |value: String| OwnedVariant::from(Str::from(value));
         let entries = [
@@ -290,6 +296,7 @@ impl<S: BuildHasher + Default> From<Deployment> for HashMap<String, OwnedVariant
                 download_size.map(OwnedVariant::from),
             ),
             (Deployment::STOCK, stock.map(owned_stock)),
+            (Deployment::PIN_REASON, pin_reason.map(text)),
         ];
         entries
             .into_iter()
@@ -406,6 +413,7 @@ mod tests {
                 reason: "break-glass: Fedora's kernel".to_owned(),
             }]),
             download_size: Some(1_200_000_000),
+            pin_reason: Some("the booted deployment was never confirmed".to_owned()),
         }
     }
 
@@ -444,6 +452,7 @@ mod tests {
             option::of(vec(hold_strategy(), 0..3)),
             option::of(vec((TEXT, TEXT), 0..3)),
             option::of(any::<u64>()),
+            option::of(TEXT),
         )
             .prop_map(
                 |(
@@ -458,6 +467,7 @@ mod tests {
                     holds,
                     stock,
                     download_size,
+                    pin_reason,
                 )| Deployment {
                     image,
                     digest,
@@ -475,6 +485,7 @@ mod tests {
                             .collect()
                     }),
                     download_size,
+                    pin_reason,
                 },
             )
     }
@@ -504,7 +515,8 @@ mod tests {
                 "held:as",
                 "holds:a(sstbts)",
                 "download-size:t",
-                "stock:a(ss)"
+                "stock:a(ss)",
+                "pin-reason:s"
             ]
         );
         assert_eq!(Deployment::SIGNATURE.to_string(), "a{sv}");
