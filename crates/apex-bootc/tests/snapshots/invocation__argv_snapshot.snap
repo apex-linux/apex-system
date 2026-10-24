@@ -12,3 +12,6 @@ expression: out
 /usr/bin/bootc switch --enforce-container-sigpolicy --download-only ghcr.io/apex-linux/apex-testing:45
 /usr/bin/bootc switch --enforce-container-sigpolicy --download-only ghcr.io/apex-linux/apex@sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0
 /usr/bin/bootc switch --enforce-container-sigpolicy --download-only localhost:5000/apex:45
+/usr/bin/ostree admin pin rollback
+/usr/bin/ostree admin status
+/usr/bin/ostree admin pin --unpin 2

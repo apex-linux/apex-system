@@ -166,9 +166,18 @@ pub struct Harness {
     dir: TempDir,
 }
 
+pub fn grubenv_with(vars: &[(&str, &str)]) -> SharedGrubWriter {
+    let mut env = SharedGrubWriter::new().env();
+    for (name, value) in vars {
+        env.set(name, value).expect("grubenv variable");
+    }
+    SharedGrubWriter::with_env(env)
+}
+
 impl Harness {
+    /// This boot passed its startup check.
     pub fn new() -> Self {
-        Self::with(fake_state(), SharedGrubWriter::new())
+        Self::with(fake_state(), grubenv_with(&[("apex_ok", "1")]))
     }
 
     pub fn with(state: FakeState, grub: SharedGrubWriter) -> Self {

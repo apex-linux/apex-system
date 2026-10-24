@@ -2,13 +2,16 @@
 source: crates/apex-bootc/tests/invocation.rs
 expression: out
 ---
-status                          30 s
-upgrade --check                300 s
-upgrade --download-only       7200 s
-upgrade --download-only       7200 s
-upgrade --from-downloaded      600 s
-rollback                       600 s
-switch --download-only        7200 s
-switch --download-only        7200 s
-switch --download-only        7200 s
-switch --download-only        7200 s
+bootc status                          30 s
+bootc upgrade --check                300 s
+bootc upgrade --download-only       7200 s
+bootc upgrade --download-only       7200 s
+bootc upgrade --from-downloaded      600 s
+bootc rollback                       600 s
+bootc switch --download-only        7200 s
+bootc switch --download-only        7200 s
+bootc switch --download-only        7200 s
+bootc switch --download-only        7200 s
+ostree admin pin rollback            600 s
+ostree admin status                   30 s
+ostree admin pin --unpin             600 s

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use apex_boot::writer::GRUBENV_PATH;
 use apex_boot::{
-    ArmingRefused, BootVars, Editenv, EnvOp, GrubEnvWriter, WriteError, apply_ops, arm_ops,
+    ArmingRefused, BootVars, Booted, Editenv, EnvOp, GrubEnvWriter, WriteError, apply_ops, arm_ops,
     check_arming, disarm_ops,
 };
 use apex_bootc::{BootEntry, Bootc, CancelToken, CommandRunner, DownloadOutcome, Host};
@@ -16,9 +16,9 @@ use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind};
 use apex_update::state::is_available;
 use apex_update::{
     AfterCheck, ApplyError, AutomaticPlan, DenyEntry, FallbackRecord, HealthFailureRecord,
-    HostView, Intent, LastCheck, Manifest, RemoteView, SystemSnapshot, Trigger, UpdateSettings,
-    Version, diff, intent_is_orphaned, plan_after_check, plan_automatic, validate_apply,
-    validate_download,
+    HostView, Intent, LastCheck, Manifest, PinRecord, Pins, RemoteView, SystemSnapshot, Trigger,
+    UpdateSettings, Version, diff, intent_is_orphaned, plan_after_check, plan_automatic,
+    validate_apply, validate_download,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
@@ -49,6 +49,9 @@ pub const FALLBACK_REASON: &str =
     "The update did not start correctly in three attempts, so the previous version was restored.";
 
 pub const MARK_BAD_REASON: &str = "Marked as bad when going back to the previous version.";
+
+/// The `pin-reason` of a deployment apex-updated pinned before arming.
+pub const PIN_REASON: &str = "Kept as the last version known to work: an update was installed before the version running then had passed its startup check.";
 
 pub const STATUS_SKIPPED: &str =
     "The update state is not read again while an update operation is running.";
@@ -104,8 +107,6 @@ pub fn arming_precondition(host: &HostView) -> Result<(), ArmingError> {
 pub fn arming_refusal(refused: &ArmingRefused) -> ApexError {
     let text = match refused {
         ArmingRefused::StagedIsBooted => ArmingError::StagedIsBooted.to_string(),
-        ArmingRefused::BootedUnconfirmed { .. } => "The running version has not passed its startup check yet, and installing another update now would remove the last version known to work. Wait until the check has passed, or go back to the previous version.".to_owned(),
-        ArmingRefused::BootedFailed { .. } => "The running version failed its startup check. Go back to the previous version first, so that a version known to work stays installed.".to_owned(),
     };
     ApexError::PolicyDenied(text)
 }
@@ -512,12 +513,7 @@ impl<R: CommandRunner> Engine<R> {
                 return Err(mapped);
             }
         };
-        match self.store.read_settings() {
-            Ok(settings) => state.settings = settings,
-            Err(error) => {
-                tracing::warn!(error = %errors::with_sources(&error), "ignoring settings.json");
-            }
-        }
+        self.read_settings_and_pins(&mut state, &host, &mut summary);
         state.last_fallback = records.fallback.map(|record| record.digest);
         let file_check = self.store.read_last_check().unwrap_or_else(|error| {
             tracing::warn!(error = %errors::with_sources(&error), "ignoring last-check.json");
@@ -577,6 +573,27 @@ impl<R: CommandRunner> Engine<R> {
         self.publish();
         self.mark_settled();
         Ok(())
+    }
+
+    /// Neither file is worth failing a refresh over.
+    fn read_settings_and_pins(
+        &self,
+        state: &mut EngineState,
+        host: &Host,
+        summary: &mut HostSummary,
+    ) {
+        match self.store.read_settings() {
+            Ok(settings) => state.settings = settings,
+            Err(error) => {
+                tracing::warn!(error = %errors::with_sources(&error), "ignoring settings.json");
+            }
+        }
+        match self.store.read_pins() {
+            Ok(pins) => attach_pin_reasons(host, summary, &pins),
+            Err(error) => {
+                tracing::warn!(error = %errors::with_sources(&error), "ignoring pinned.json");
+            }
+        }
     }
 
     async fn running_manifest(&self) -> Result<Option<Arc<Manifest>>, FileError> {
@@ -943,7 +960,7 @@ impl<R: CommandRunner> Engine<R> {
     }
 
     /// State that cannot be read refuses too: the precondition cannot be shown to hold.
-    async fn confirm_arming(&self, booted: &str, staged: &str) -> Result<(), ApexError> {
+    async fn confirm_arming(&self, booted: &str, staged: &str) -> Result<Booted, ApexError> {
         let parse = |digest: &str| {
             apex_boot::Digest::parse(digest).map_err(|error| {
                 ApexError::Internal(format!(
@@ -1005,7 +1022,13 @@ impl<R: CommandRunner> Engine<R> {
 
         // Before unlocking, so the stage can never boot unprotected.
         let booted = snapshot.host.booted_digest().unwrap_or_default();
-        self.confirm_arming(booted, expected).await?;
+        if self
+            .confirm_arming(booted, expected)
+            .await?
+            .needs_a_kept_fallback()
+        {
+            self.keep_last_good(&host, cancel).await?;
+        }
         self.write_grubenv(arm_ops(&target))
             .await
             .map_err(|e| errors::internal("The boot counter could not be armed", &e))?;
@@ -1042,6 +1065,142 @@ impl<R: CommandRunner> Engine<R> {
             tracing::warn!(error = %error.message(), "refresh after the operation failed");
         }
         apply_result(expected, unlocked, &outcome)
+    }
+
+    /// Pins the rollback, the last version known to work (M1 spec §5), so that finalizing the
+    /// stage over an unconfirmed or failed running version cannot delete it.
+    async fn keep_last_good(&self, host: &Host, cancel: &CancelToken) -> Result<(), ApexError> {
+        let Some(entry) = host.rollback() else {
+            tracing::warn!("no earlier version is left to keep; installing without one");
+            return Ok(());
+        };
+        if entry.pinned {
+            tracing::info!(
+                digest = entry.digest(),
+                "the previous version is pinned already"
+            );
+            return Ok(());
+        }
+        self.marking_bootc_busy(self.bootc.pin_rollback(cancel))
+            .await
+            .map_err(|error| {
+                let mapped = from_bootc(&error);
+                ApexError::new(
+                    mapped.kind().unwrap_or(ErrorKind::Bootc),
+                    format!(
+                        "The last version known to work could not be kept, so the update was not installed. {}",
+                        mapped.message()
+                    ),
+                )
+            })?;
+        tracing::info!(
+            digest = entry.digest(),
+            "pinned the previous version before arming"
+        );
+        let Some(ostree) = &entry.ostree else {
+            return Ok(());
+        };
+        let record = PinRecord {
+            checksum: ostree.checksum.clone(),
+            serial: ostree.deploy_serial,
+            digest: entry.digest().unwrap_or_default().to_owned(),
+            at: self.now(),
+        };
+        let saved = self.store.read_pins().and_then(|mut pins| {
+            pins.pins.push(record);
+            unflushed_is_done(self.store.write_pins(&pins), "saving the pin")
+        });
+        if let Err(error) = saved {
+            // The pin protects all the same; only its later removal is lost.
+            tracing::error!(error = %errors::with_sources(&error), "cannot record the pin");
+        }
+        Ok(())
+    }
+
+    /// Unpins what [`Self::keep_last_good`] pinned, once a later version has passed its
+    /// startup check and the kept one is neither booted, staged nor the rollback.
+    async fn release_pins(&self, cancel: &CancelToken) {
+        let pins = match self.store.read_pins() {
+            Ok(pins) if !pins.pins.is_empty() => pins,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(error = %errors::with_sources(&error), "ignoring pinned.json");
+                return;
+            }
+        };
+        let Some(host) = self.host() else { return };
+        let health_failure = self
+            .lock()
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.health_failure.clone());
+        let booted_digest = host.booted_digest();
+        let confirmed = booted_digest.is_some()
+            && health_failure.as_deref() != booted_digest
+            && self
+                .boot_vars()
+                .await
+                .is_ok_and(|vars| vars.apex_ok == Some(true));
+        let in_use = |pin: &PinRecord| {
+            [host.booted(), host.staged(), host.rollback()]
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ostree.as_ref())
+                .any(|o| o.checksum == pin.checksum && o.deploy_serial == pin.serial)
+        };
+        if !confirmed || pins.pins.iter().all(in_use) {
+            return;
+        }
+        let listed = match self
+            .marking_bootc_busy(self.bootc.ostree_status(cancel))
+            .await
+        {
+            Ok(listed) => listed,
+            Err(error) => {
+                tracing::warn!(error = %error, "cannot list the deployments to unpin");
+                return;
+            }
+        };
+        let mut kept = Vec::new();
+        for pin in pins.pins {
+            if in_use(&pin) {
+                kept.push(pin);
+                continue;
+            }
+            let found: Vec<_> = listed
+                .iter()
+                .filter(|d| d.checksum == pin.checksum && d.serial == pin.serial)
+                .collect();
+            match found.as_slice() {
+                [] => tracing::info!(digest = pin.digest, "the kept version is gone"),
+                [deployment] if !deployment.pinned => {
+                    tracing::info!(digest = pin.digest, "the kept version was unpinned by hand");
+                }
+                [deployment] => {
+                    let unpinned = self
+                        .marking_bootc_busy(self.bootc.unpin(deployment.index, cancel))
+                        .await;
+                    match unpinned {
+                        Ok(()) => tracing::info!(digest = pin.digest, "unpinned the kept version"),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "cannot unpin the kept version");
+                            kept.push(pin);
+                        }
+                    }
+                }
+                _ => {
+                    tracing::warn!(digest = pin.digest, "the kept version is listed twice");
+                    kept.push(pin);
+                }
+            }
+        }
+        if let Err(error) = unflushed_is_done(
+            self.store.write_pins(&Pins { pins: kept }),
+            "saving the pins",
+        ) {
+            tracing::warn!(error = %errors::with_sources(&error), "cannot save pinned.json");
+        }
+        self.refresh_after_acting(cancel).await;
     }
 
     /// With a token of its own: the operation's is cancelled when the service stops, and
@@ -1133,6 +1292,7 @@ impl<R: CommandRunner> Engine<R> {
     /// A deferral is a success: the timer did its job, and `DeferredReason` explains it.
     async fn automatic(&self, cancel: &CancelToken) -> Result<(), ApexError> {
         self.refresh(cancel).await?;
+        self.release_pins(cancel).await;
         match plan_automatic(&self.snapshot()?) {
             AutomaticPlan::Skip(deferral) => {
                 tracing::info!(reason = %deferral, "automatic run skipped");
@@ -1515,6 +1675,26 @@ fn summarize(host: &Host, manifests: &Manifests<'_>) -> HostSummary {
     }
 }
 
+/// Only on deployments still pinned: the owner may have unpinned one by hand.
+fn attach_pin_reasons(host: &Host, summary: &mut HostSummary, pins: &Pins) {
+    let entries = [host.booted(), host.staged(), host.rollback()];
+    let dicts = [
+        &mut summary.booted,
+        &mut summary.staged,
+        &mut summary.rollback,
+    ];
+    for (entry, dict) in entries.into_iter().zip(dicts) {
+        let kept = entry.is_some_and(|entry| {
+            entry.pinned
+                && entry
+                    .ostree
+                    .as_ref()
+                    .is_some_and(|o| pins.contains(&o.checksum, o.deploy_serial))
+        });
+        dict.pin_reason = kept.then(|| PIN_REASON.to_owned());
+    }
+}
+
 fn logged<T>(result: Result<Option<T>, FileError>, what: &str) -> Option<T> {
     result.unwrap_or_else(|error| {
         tracing::warn!(error = %errors::with_sources(&error), "cannot read the manifest of {what}");
@@ -1710,34 +1890,18 @@ mod tests {
 
     #[test]
     fn arming_refusals_are_policy_denied_in_plain_words() {
-        let booted = apex_boot::Digest::parse(
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        )
-        .unwrap();
-        for (refused, needle) in [
-            (ArmingRefused::StagedIsBooted, "already running"),
-            (
-                ArmingRefused::BootedUnconfirmed {
-                    booted: booted.clone(),
-                },
-                "has not passed its startup check yet",
-            ),
-            (
-                ArmingRefused::BootedFailed {
-                    booted: booted.clone(),
-                },
-                "failed its startup check",
-            ),
-        ] {
-            let error = arming_refusal(&refused);
-            assert_eq!(error.kind(), Some(ErrorKind::PolicyDenied));
-            assert!(error.message().contains(needle), "{}", error.message());
-            assert!(
-                !error.message().contains("sha256:"),
-                "plain words, no digest: {}",
-                error.message()
-            );
-        }
+        let error = arming_refusal(&ArmingRefused::StagedIsBooted);
+        assert_eq!(error.kind(), Some(ErrorKind::PolicyDenied));
+        assert!(
+            error.message().contains("already running"),
+            "{}",
+            error.message()
+        );
+        assert!(
+            !error.message().contains("sha256:"),
+            "plain words, no digest: {}",
+            error.message()
+        );
     }
 
     #[test]

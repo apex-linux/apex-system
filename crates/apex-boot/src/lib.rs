@@ -20,7 +20,7 @@ pub use digest::{Digest, DigestError};
 pub use grubenv::GrubEnv;
 pub use health::HealthFailure;
 pub use vars::{
-    ArmingRefused, BOOT_ATTEMPTS, BootVar, BootVars, BootVarsError, CounterState, EnvOp,
+    ArmingRefused, BOOT_ATTEMPTS, BootVar, BootVars, BootVarsError, Booted, CounterState, EnvOp,
     ValueError, arm_ops, check_arming, disarm_ops,
 };
 pub use writer::{Editenv, GrubEnvWriter, RecordingWriter, WriteError, apply_ops};

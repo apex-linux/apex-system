@@ -7,6 +7,7 @@ mod error;
 #[cfg(any(test, feature = "testing"))]
 mod fake;
 mod lock;
+mod ostree_status;
 pub mod progress;
 mod query;
 mod runner;
@@ -18,8 +19,8 @@ pub use client::Bootc;
 pub use command::{
     APEX_STABLE, APEX_STABLE_REPOSITORY, APEX_TESTING, APEX_TESTING_REPOSITORY, BOOTC_PROGRAM,
     BootcCommand, CHECK_TIMEOUT, CommandKind, DOWNLOAD_TIMEOUT, ENVIRONMENT, ImageRef,
-    ImageRefError, OTHER_TIMEOUT, POLICY_JSON, PROGRAM_OVERRIDE_ENV, PROGRESS_FD, STATUS_TIMEOUT,
-    program,
+    ImageRefError, OSTREE_OVERRIDE_ENV, OSTREE_PROGRAM, OTHER_TIMEOUT, POLICY_JSON,
+    PROGRAM_OVERRIDE_ENV, PROGRESS_FD, Program, STATUS_TIMEOUT, ostree_program, program,
 };
 pub use digest::{Digest, DigestError};
 pub use download::{DownloadOutcome, parse_download_output};
@@ -29,6 +30,7 @@ pub use error::{
 #[cfg(any(test, feature = "testing"))]
 pub use fake::{FakeRunner, Scripted};
 pub use lock::{SYSROOT_LOCK_PATH, sysroot_lock_held};
+pub use ostree_status::{OstreeDeployment, parse_ostree_status};
 pub use progress::{ByteProgress, Progress, ProgressDecoder, Stage};
 pub use query::{DeploymentLocation, LocationError, SYSROOT};
 pub use runner::{

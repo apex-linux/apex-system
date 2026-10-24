@@ -123,40 +123,42 @@ pub fn arm_ops(target: &Digest) -> Vec<EnvOp> {
 pub enum ArmingRefused {
     #[error("the downloaded update is the version that is already running")]
     StagedIsBooted,
-    #[error(
-        "the running version {booted} has not passed its startup checks yet; \
-         installing another update now would remove the last version known to work"
-    )]
-    BootedUnconfirmed { booted: Digest },
-    #[error(
-        "the running version {booted} failed its startup checks; roll back first, so a \
-         version known to work stays installed"
-    )]
-    BootedFailed { booted: Digest },
 }
 
-/// Finalizing keeps only the new and the booted deployment, so an unconfirmed or failed booted one
-/// must not become the only fallback. The caller checks that the booted one comes from an image.
+/// What the startup check made of the running version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Booted {
+    Confirmed,
+    Unconfirmed,
+    Failed,
+}
+
+impl Booted {
+    /// Finalizing keeps only the new and the booted deployment, so before arming over an
+    /// unconfirmed or failed one the caller pins the last version known to work.
+    pub fn needs_a_kept_fallback(self) -> bool {
+        self != Self::Confirmed
+    }
+}
+
+/// Every green boot sets `apex_ok=1` and GRUB resets it at each boot, so anything else means
+/// this boot is unconfirmed. The caller checks that the booted one comes from an image.
 pub fn check_arming(
     vars: &BootVars,
     booted: &Digest,
     staged: &Digest,
     health_failure: Option<&Digest>,
-) -> Result<(), ArmingRefused> {
+) -> Result<Booted, ArmingRefused> {
     if staged == booted {
         return Err(ArmingRefused::StagedIsBooted);
     }
-    if health_failure == Some(booted) {
-        return Err(ArmingRefused::BootedFailed {
-            booted: booted.clone(),
-        });
-    }
-    if vars.apex_target.as_ref() == Some(booted) {
-        return Err(ArmingRefused::BootedUnconfirmed {
-            booted: booted.clone(),
-        });
-    }
-    Ok(())
+    Ok(if health_failure == Some(booted) {
+        Booted::Failed
+    } else if vars.apex_ok == Some(true) {
+        Booted::Confirmed
+    } else {
+        Booted::Unconfirmed
+    })
 }
 
 /// Leaves `apex_ok` alone: GRUB resets it on every boot and ignores it while disarmed.
@@ -405,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn arming_needs_a_confirmed_running_version() {
+    fn arming_reports_what_the_startup_check_made_of_the_running_version() {
         let t1 = Digest::parse(TARGET).unwrap();
         let t2 = Digest::parse(
             "sha256:3333333333333333333333333333333333333333333333333333333333333333",
@@ -415,10 +417,16 @@ mod tests {
             "sha256:4444444444444444444444444444444444444444444444444444444444444444",
         )
         .unwrap();
-        let unarmed = BootVars::default();
-        assert_eq!(check_arming(&unarmed, &p, &t1, None), Ok(()));
+        let confirmed = BootVars {
+            apex_ok: Some(true),
+            ..BootVars::default()
+        };
         assert_eq!(
-            check_arming(&unarmed, &p, &p, None),
+            check_arming(&confirmed, &p, &t1, None),
+            Ok(Booted::Confirmed)
+        );
+        assert_eq!(
+            check_arming(&confirmed, &p, &p, None),
             Err(ArmingRefused::StagedIsBooted)
         );
         let armed_for_t1 = BootVars {
@@ -428,19 +436,30 @@ mod tests {
         };
         assert_eq!(
             check_arming(&armed_for_t1, &t1, &t2, None),
-            Err(ArmingRefused::BootedUnconfirmed { booted: t1.clone() })
+            Ok(Booted::Unconfirmed)
         );
-        assert_eq!(check_arming(&armed_for_t1, &p, &t2, None), Ok(()));
         assert_eq!(
-            check_arming(&unarmed, &t1, &t2, Some(&t1)),
-            Err(ArmingRefused::BootedFailed { booted: t1.clone() })
+            check_arming(&armed_for_t1, &p, &t2, None),
+            Ok(Booted::Unconfirmed),
+            "an arming for another update does not confirm this boot"
         );
-        assert_eq!(check_arming(&unarmed, &t1, &t2, Some(&p)), Ok(()));
-        assert!(
-            ArmingRefused::BootedUnconfirmed { booted: t1 }
-                .to_string()
-                .contains("last version known to work")
+        assert_eq!(
+            check_arming(&BootVars::default(), &p, &t2, None),
+            Ok(Booted::Unconfirmed),
+            "no grubenv record of a confirmation"
         );
+        assert_eq!(
+            check_arming(&confirmed, &t1, &t2, Some(&t1)),
+            Ok(Booted::Failed),
+            "a later health failure outweighs the boot's confirmation"
+        );
+        assert_eq!(
+            check_arming(&confirmed, &t1, &t2, Some(&p)),
+            Ok(Booted::Confirmed)
+        );
+        assert!(!Booted::Confirmed.needs_a_kept_fallback());
+        assert!(Booted::Unconfirmed.needs_a_kept_fallback());
+        assert!(Booted::Failed.needs_a_kept_fallback());
     }
 
     #[test]

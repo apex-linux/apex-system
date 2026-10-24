@@ -50,7 +50,8 @@ A deployment has these keys, each null when unknown:
                    limit (Unix seconds), side (\"kernel\" or \"kmod\" for the kernel pair),
                    each null when unknown; security, true or false
   stock            one object per family shipped as Fedora's build: family; reason, null
-                   when the image gives none (the break-glass image says why)";
+                   when the image gives none (the break-glass image says why)
+  pin_reason       why the update service pinned it; null unless it did";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeploymentJson {
@@ -64,6 +65,7 @@ pub struct DeploymentJson {
     pub held: Option<Vec<String>>,
     pub holds: Option<Vec<HoldJson>>,
     pub stock: Option<Vec<StockJson>>,
+    pub pin_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -126,6 +128,7 @@ impl DeploymentJson {
             held: d.held,
             holds: holds_json(d.holds.as_ref()),
             stock: stock_json(d.stock.as_ref()),
+            pin_reason: d.pin_reason,
         })
     }
 }
@@ -480,6 +483,9 @@ fn deployment_rows(
     }
     if let Some(origin) = other_origin(booted, deployment) {
         row(out, "", &format!("from {origin}"));
+    }
+    if let Some(reason) = &deployment.pin_reason {
+        row(out, "", reason);
     }
 }
 
@@ -1029,6 +1035,27 @@ pub(crate) mod tests {
             "the_break_glass_image_json",
             serde_json::to_value(StatusJson::new(&status)).unwrap()
         );
+    }
+
+    #[test]
+    fn a_version_kept_before_an_update_says_why() {
+        let mut status = staged_status();
+        status.state = State::ReadyForReboot;
+        status.staged.download_only = Some(false);
+        status.rollback.pinned = Some(true);
+        status.rollback.pin_reason = Some(
+            "Kept as the last version known to work: an update was installed before the \
+             version running then had passed its startup check."
+                .to_owned(),
+        );
+        let text = render_status(&status);
+        insta::assert_snapshot!(text);
+        let json = StatusJson::new(&status);
+        assert_eq!(
+            json.rollback.unwrap().pin_reason,
+            status.rollback.pin_reason
+        );
+        assert_eq!(json.booted.unwrap().pin_reason, None);
     }
 
     #[test]

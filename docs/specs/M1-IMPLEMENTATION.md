@@ -102,6 +102,7 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 | `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; removed by `AcknowledgeHealthFailure` and by a green boot |
 | `settings.json` | `{ "automatic_downloads": true or false }`, written by `SetAutomaticDownloads`; a missing file or key means true |
 | `last-fallback.json` | `{ "digest": "sha256:…", "at": <unix> }`, written when a `fallback` report denylists a digest (`LastFallback`); removed by `AcknowledgeHealthFailure` |
+| `pinned.json` | `{ "pins": [ { "checksum": "…", "serial": <deploy serial>, "digest": "sha256:…", "at": <unix> } ] }`: the deployments `apex-updated` pinned itself before arming (§5), which carry `pin-reason`; an entry leaves when the daily run unpins it, or finds it unpinned by hand or deleted |
 | `force-red` | qualification hook only: a root-owned regular file (mode 0600, at most 4 KiB) holding one digest; when it names the booted digest, `apex-boot-assess` adds the failing required check `forced-red` |
 
 Everything else is derived from `bootc status --format=json --format-version=1`.
@@ -123,12 +124,24 @@ load falls through to the previous deployment immediately.
 
 Arming precondition (the daemon's arming precondition plus `apex_boot::check_arming`):
 - the booted deployment comes from an image;
-- a different image is staged;
-- grubenv is not armed for the booted digest;
-- `health-failure.json` does not name the booted digest.
+- a different image is staged.
 
-After finalization ostree makes the staged deployment entry 0 and keeps only the booted
-one as entry 1. Entry 1 therefore always exists, and it must be a confirmed deployment.
+After finalization ostree makes the staged deployment entry 0 and keeps the booted one
+as entry 1, plus any pinned deployment. Entry 1 therefore always exists. When the running
+boot is unconfirmed (grubenv `apex_ok` is not 1) or failed (`health-failure.json` names
+the booted digest), entry 1 is not known to work, so `Apply` first keeps the last version
+that is:
+- it runs `ostree admin pin rollback` (ostree's rollback is bootc's) unless the rollback is
+  pinned already, and records the pin in `pinned.json`;
+- a failed pin fails `Apply` before anything is armed;
+- without a rollback deployment it logs that nothing is left to keep and goes on.
+
+The daily run unpins only what `pinned.json` records, once the booted deployment is
+another one that passed its startup check (`apex_ok=1`, not named by
+`health-failure.json`) and the kept one is neither booted, staged nor the rollback. It
+finds the index in `ostree admin status` by checksum and serial, then runs
+`ostree admin pin --unpin INDEX`. Pins made by the owner or by a major upgrade are never
+touched.
 
 `Apply` never installs the running build or an older one, and it always arms.
 
@@ -153,7 +166,7 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
 ## 7. `apexctl` command surface (M1)
 
 ```
-apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock; JSON schema 2
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, why the daemon pinned a deployment; JSON schema 2
 apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"
