@@ -101,6 +101,14 @@ async fn every_method_matches_the_contract_on_the_wire() {
         .report_boot(BootVerdict::Green, STAGED_DIGEST)
         .await
         .expect("ReportBoot");
+    proxy
+        .set_automatic_downloads(true)
+        .await
+        .expect("SetAutomaticDownloads");
+    assert!(matches!(
+        proxy.set_automatic_downloads(false).await,
+        Err(ApexError::NotAuthorized(_))
+    ));
 
     let calls = log.calls();
     let called: BTreeSet<String> = calls.iter().map(|call| call.member.clone()).collect();
@@ -121,6 +129,7 @@ async fn every_method_matches_the_contract_on_the_wire() {
         "Apply",
         "Rollback",
         "AcknowledgeHealthFailure",
+        "SetAutomaticDownloads",
     ]
     .into();
     assert_eq!(interactive, expected);
@@ -156,6 +165,16 @@ async fn every_property_matches_the_contract_on_the_wire() {
     );
     assert_eq!(proxy.last_error().await.expect("LastError"), "");
     assert_eq!(proxy.health_failure().await.expect("HealthFailure"), "");
+    assert_eq!(
+        proxy.last_fallback().await.expect("LastFallback"),
+        STAGED_DIGEST
+    );
+    assert!(
+        !proxy
+            .automatic_downloads()
+            .await
+            .expect("AutomaticDownloads")
+    );
 
     let read: BTreeSet<String> = log.properties().into_iter().collect();
     assert_eq!(

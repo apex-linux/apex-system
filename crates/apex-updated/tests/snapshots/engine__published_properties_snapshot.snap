@@ -33,6 +33,8 @@ Properties {
                 "nautilus",
             ],
         ),
+        holds: None,
+        download_size: None,
     },
     staged: Deployment {
         image: None,
@@ -43,6 +45,8 @@ Properties {
         download_only: None,
         degraded: None,
         held: None,
+        holds: None,
+        download_size: None,
     },
     rollback: Deployment {
         image: Some(
@@ -72,6 +76,8 @@ Properties {
                 "nautilus",
             ],
         ),
+        holds: None,
+        download_size: None,
     },
     available: Deployment {
         image: Some(
@@ -88,10 +94,16 @@ Properties {
         download_only: None,
         degraded: None,
         held: None,
+        holds: None,
+        download_size: Some(
+            0,
+        ),
     },
     channel: Stable,
     last_check: 1790299880,
     deferred_reason: "",
     last_error: "",
     health_failure: "",
+    last_fallback: "",
+    automatic_downloads: true,
 }

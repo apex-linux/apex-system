@@ -97,8 +97,10 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 |---|---|
 | `intent.json` | `{ "digest": "sha256:…", "created": <unix seconds> }`, present only between `Apply` and the boot assessment of that digest |
 | `denylist.json` | `{ "digests": [ { "digest": "sha256:…", "reason": "…", "at": <unix seconds> } ] }` |
-| `last-check.json` | `{ "at": <unix>, "remote_digest": "sha256:…" or null, "remote_version": "…" or null }` |
+| `last-check.json` | `{ "at": <unix>, "remote_digest": "sha256:…" or null, "remote_version": "…" or null, "remote_size": <bytes> or null }`; `remote_size` is the new-layer size `bootc upgrade --check` printed, rounded, and becomes `download-size` |
 | `health-failure.json` | `{ "digest": "sha256:…", "failed_checks": ["…"], "at": <unix> }`; written by `apex-boot-assess` on a red armed boot, or by `apex-updated` on a `red` report when absent; removed by `AcknowledgeHealthFailure` and by a green boot |
+| `settings.json` | `{ "automatic_downloads": true or false }`, written by `SetAutomaticDownloads`; a missing file or key means true |
+| `last-fallback.json` | `{ "digest": "sha256:…", "at": <unix> }`, written when a `fallback` report denylists a digest (`LastFallback`); removed by `AcknowledgeHealthFailure` |
 | `force-red` | qualification hook only: a root-owned regular file (mode 0600, at most 4 KiB) holding one digest; when it names the booted digest, `apex-boot-assess` adds the failing required check `forced-red` |
 
 Everything else is derived from `bootc status --format=json --format-version=1`.
@@ -174,6 +176,7 @@ measurements exist. `--check` exits 1 and prints a diff when committed files dif
 |---|---|---|---|
 | check, download, apply, discard (AcknowledgeHealthFailure) | no | no | yes |
 | rollback | no | no | auth_admin |
+| configure (SetAutomaticDownloads) | no | no | auth_admin |
 
 `Automatic` and `ReportBoot` are accepted only from uid 0 (checked with the bus
 credentials, not polkit). uid 0 is allowed every action without polkit. No action
@@ -198,6 +201,6 @@ Rendered hardware files live in `hardware/<machine>/generated/`. The legacy allo
 | What | Contract |
 |---|---|
 | Apex keys read (`io.github.apex_linux.Apex.Desktop`) | `window-corner-radius`, `layer-enabled`, `lower-refresh-rate-on-battery`; each feature is off, with a warning, when its key is missing |
-| Files written | `$XDG_CONFIG_HOME/gtk-4.0/apex.css` and its `gtk.css` import, `$XDG_DATA_HOME/org.gnome.Ptyxis/palettes/apex.palette`, `$XDG_STATE_HOME/apex/updates-notified` (one digest and a newline); atomic, and only inside those three homes |
-| Crash-guard offer and "Updates Ready" | `org.freedesktop.Notifications` on the session bus. Updates Ready follows `Update1.Staged` on the system bus and never starts `apex-updated`; its action calls `org.gnome.Settings` `launch-panel ('system', [])` |
+| Files written | `$XDG_CONFIG_HOME/gtk-4.0/apex.css` and its `gtk.css` import, `$XDG_DATA_HOME/org.gnome.Ptyxis/palettes/apex.palette`, and under `$XDG_STATE_HOME/apex/` `updates-notified`, `available-notified` and `failure-notified` (one digest and a newline each); atomic, and only inside those three homes |
+| Crash-guard offer and the update notices | `org.freedesktop.Notifications` on the session bus; the update notices carry the application name "Apex Updates". The agent follows `Update1`'s `Booted`, `Staged`, `Available`, `AutomaticDownloads`, `HealthFailure` and `LastFallback` on the system bus (`GetAll` when the name appears, then `PropertiesChanged`) and never starts `apex-updated`. Each notice is posted once per digest and withdrawn when its property clears. "Updates Ready": a staged, unapplied update; its action calls `org.gnome.Settings` `launch-panel ('system', [])`. "Update Available": an `Available` update while `AutomaticDownloads` is false. The failure notice (board 26): `LastFallback` ("Apex Went Back to the Previous Version") or else `HealthFailure` ("Update Failed Its Startup Check", naming the booted version). The last two open `launch-panel ('system', ['software-updates'])` |
 | Refresh rate on battery | while the key is true and UPower's `OnBattery` is true, the built-in panel (mutter's `is-builtin`) gets its lowest mode of 60 Hz or more at the current resolution; on AC, or with the key false, the highest one, but only after the agent lowered it. `ApplyMonitorsConfig` with method 1 (temporary, monitors.xml untouched), every logical monitor's position, scale, transform and primary flag kept. Nothing happens without a built-in panel with two rates, without UPower, or while a mode the user picked stands (until the next power or key change, or a hotplug) |

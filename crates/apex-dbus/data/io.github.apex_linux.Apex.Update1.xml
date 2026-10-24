@@ -24,8 +24,16 @@
     "degraded"       as  components shipped degraded, from the deployment's own manifest,
                          so absent for Available
     "held"           as  lane families kept at their last good build, from the same
-                         manifest, so absent for Available; a later "hold-since" a{st}
-                         (family to Unix seconds) will carry the kernel hold's clock
+                         manifest, so absent for Available
+    "holds"          a(sstbt) one record per held family, from the deployment's lane lock
+                         (/usr/share/apex/rpms.lock), so absent for Available: family; the
+                         newer Fedora builds it holds back from, comma-separated, "" when
+                         unknown; held since, Unix seconds, 0 when unknown; whether the
+                         newer builds carry a security update, false when unknown; the
+                         hold's limit, Unix seconds, 0 when unknown
+    "download-size"  t   Available and Staged only: bytes of layers not present yet, from
+                         the check that found the image; bootc rounds it to one decimal
+                         (1.2 GB, so about 50 MB either way); 0 when unknown
 
   Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting
@@ -44,6 +52,7 @@
     io.github.apex-linux.apex.update.apply           yes
     io.github.apex-linux.apex.update.discard         yes         AcknowledgeHealthFailure
     io.github.apex-linux.apex.update.rollback        auth_admin
+    io.github.apex-linux.apex.update.configure       auth_admin  SetAutomaticDownloads
 -->
 <node>
   <interface name="io.github.apex_linux.Apex.Update1">
@@ -84,6 +93,14 @@
          AcknowledgeHealthFailure or a green boot. -->
     <property name="HealthFailure" type="s" access="read"/>
 
+    <!-- The digest a "fallback" ReportBoot denylisted (the update did not start), or "";
+         cleared by AcknowledgeHealthFailure. -->
+    <property name="LastFallback" type="s" access="read"/>
+
+    <!-- Whether Automatic downloads what its check finds; true unless the user turned it
+         off. Off, Automatic still checks and publishes Available. -->
+    <property name="AutomaticDownloads" type="b" access="read"/>
+
     <!-- Liveness probe for the boot health check, no polkit check; Internal when bootc
          cannot be used. -->
     <method name="Ping"/>
@@ -116,7 +133,13 @@
       <arg name="changes" type="a(sssss)" direction="out"/>
     </method>
 
+    <!-- Clears HealthFailure and LastFallback. -->
     <method name="AcknowledgeHealthFailure"/>
+
+    <!-- Persisted across restarts; setting the current value again succeeds. -->
+    <method name="SetAutomaticDownloads">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
 
     <!-- uid 0 only: check, then download if every gate passes and no user intent exists. -->
     <method name="Automatic"/>

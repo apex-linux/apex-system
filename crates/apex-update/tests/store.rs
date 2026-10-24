@@ -142,6 +142,7 @@ fn last_check_round_trips_with_nulls() {
         at: 1_790_000_000,
         remote_digest: None,
         remote_version: None,
+        remote_size: None,
     };
     dir.write_last_check(&check).expect("write");
     assert_eq!(dir.read_last_check().expect("read"), check);
@@ -149,7 +150,12 @@ fn last_check_round_trips_with_nulls() {
     let json: serde_json::Value = serde_json::from_str(&text).expect("json");
     assert_eq!(
         json,
-        serde_json::json!({ "at": 1_790_000_000, "remote_digest": null, "remote_version": null })
+        serde_json::json!({
+            "at": 1_790_000_000,
+            "remote_digest": null,
+            "remote_version": null,
+            "remote_size": null
+        })
     );
 }
 
@@ -283,6 +289,7 @@ fn many_writes_leave_exactly_one_file() {
             at: n,
             remote_digest: Some(format!("sha256:{n}")),
             remote_version: Some("45.20260924.1".into()),
+            remote_size: None,
         })
         .expect("write");
     }

@@ -46,7 +46,7 @@ impl Notifier for FakeNotifier {
         self.calls.borrow_mut().withdrawn.push(id);
     }
 
-    fn open_settings(&self, _panel: &str) {}
+    fn open_settings(&self, _panel: &str, _page: Option<&str>) {}
 }
 
 /// One test, because the `GLib` main context and the file monitor belong to one thread.

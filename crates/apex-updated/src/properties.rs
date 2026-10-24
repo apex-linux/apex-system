@@ -22,6 +22,8 @@ pub struct Properties {
     pub deferred_reason: String,
     pub last_error: String,
     pub health_failure: String,
+    pub last_fallback: String,
+    pub automatic_downloads: bool,
 }
 
 impl Default for Properties {
@@ -38,6 +40,8 @@ impl Default for Properties {
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
+            last_fallback: String::new(),
+            automatic_downloads: true,
         }
     }
 }
@@ -76,11 +80,16 @@ impl Properties {
             for text in lists.flatten() {
                 *text = display_text(text);
             }
+            for hold in deployment.holds.iter_mut().flatten() {
+                hold.family = display_text(&hold.family);
+                hold.newer = display_text(&hold.newer);
+            }
         }
         for text in [
             &mut self.deferred_reason,
             &mut self.last_error,
             &mut self.health_failure,
+            &mut self.last_fallback,
         ] {
             *text = display_text(text);
         }
@@ -147,6 +156,16 @@ impl Properties {
             "HealthFailure",
             self.health_failure != previous.health_failure,
             Variant::from(self.health_failure.clone()),
+        );
+        put(
+            "LastFallback",
+            self.last_fallback != previous.last_fallback,
+            Variant::from(self.last_fallback.clone()),
+        );
+        put(
+            "AutomaticDownloads",
+            self.automatic_downloads != previous.automatic_downloads,
+            Variant::Bool(self.automatic_downloads),
         );
         changed
     }
@@ -437,7 +456,7 @@ mod tests {
     #[test]
     fn every_contract_property_is_signalled_alone_when_it_changes() {
         let before = Properties::default();
-        let edits: [(&str, Edit); 11] = [
+        let edits: [(&str, Edit); 13] = [
             ("State", |p| p.state = State::Staged),
             ("Progress", |p| p.progress = 0.5),
             ("Booted", |p| p.booted = deployment("b")),
@@ -453,9 +472,15 @@ mod tests {
             ("DeferredReason", |p| p.deferred_reason = "later".into()),
             ("LastError", |p| p.last_error = "failed".into()),
             ("HealthFailure", |p| p.health_failure = "sha256:h".into()),
+            ("LastFallback", |p| p.last_fallback = "sha256:f".into()),
+            ("AutomaticDownloads", |p| p.automatic_downloads = false),
         ];
         let contract = contract_properties();
-        assert_eq!(contract.len(), edits.len(), "the XML has eleven properties");
+        assert_eq!(
+            contract.len(),
+            edits.len(),
+            "the XML has thirteen properties"
+        );
         let mut all = before.clone();
         for (name, edit) in edits {
             let mut after = before.clone();
@@ -508,11 +533,17 @@ mod tests {
             last_error: dirty.into(),
             deferred_reason: dirty.into(),
             health_failure: dirty.into(),
+            last_fallback: dirty.into(),
             available: Deployment {
                 image: Some(dirty.into()),
                 digest: Some(dirty.into()),
                 version: Some(dirty.into()),
                 degraded: Some(vec![dirty.into()]),
+                holds: Some(vec![apex_dbus::Hold {
+                    family: dirty.into(),
+                    newer: dirty.into(),
+                    ..apex_dbus::Hold::default()
+                }]),
                 ..Deployment::default()
             },
             ..Properties::default()
@@ -523,6 +554,12 @@ mod tests {
         assert_eq!(properties.last_error, clean);
         assert_eq!(properties.deferred_reason, clean);
         assert_eq!(properties.health_failure, clean);
+        assert_eq!(properties.last_fallback, clean);
+        let holds = properties.available.holds.clone().unwrap();
+        assert_eq!(
+            (holds[0].family.as_str(), holds[0].newer.as_str()),
+            (clean.as_str(), clean.as_str())
+        );
         assert_eq!(properties.available.image.as_deref(), Some(clean.as_str()));
         assert_eq!(properties.available.digest.as_deref(), Some(clean.as_str()));
         assert_eq!(

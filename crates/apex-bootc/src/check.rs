@@ -10,6 +10,8 @@ pub enum CheckOutcome {
     Available {
         version: Option<String>,
         digest: Option<Digest>,
+        /// Bytes of new layers, as bootc rounded them for display.
+        size: Option<u64>,
     },
     Unknown,
 }
@@ -26,8 +28,46 @@ pub fn parse_check_output(stdout: &str) -> CheckOutcome {
     if !first.starts_with("Update available for:") {
         return CheckOutcome::Unknown;
     }
-    let (version, digest) = version_and_digest(lines);
-    CheckOutcome::Available { version, digest }
+    let lines: Vec<&str> = lines.collect();
+    let (version, digest) = version_and_digest(lines.iter().copied());
+    let size = lines
+        .iter()
+        .find_map(|line| line.strip_prefix("Total new layers:"))
+        .and_then(|rest| rest.split_once("Size:"))
+        .and_then(|(_, size)| parse_size(size));
+    CheckOutcome::Available {
+        version,
+        digest,
+        size,
+    }
+}
+
+/// glib's `format_size`, which bootc prints: SI units by default, IEC with a flag.
+fn parse_size(text: &str) -> Option<u64> {
+    let (number, unit) = text.trim().split_once(char::is_whitespace)?;
+    let number: f64 = number.replace(',', ".").parse().ok()?;
+    let scale: f64 = match unit.trim() {
+        "byte" | "bytes" | "B" => 1.0,
+        "kB" | "KB" => 1e3,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        "TB" => 1e12,
+        "KiB" => 1024.0,
+        "MiB" => 1_048_576.0,
+        "GiB" => 1_073_741_824.0,
+        "TiB" => 1_099_511_627_776.0,
+        _ => return None,
+    };
+    let bytes = (number * scale).round();
+    (0.0..1.8e19).contains(&bytes).then(|| {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "checked to be a non-negative integer below u64::MAX"
+        )]
+        let bytes = bytes as u64;
+        bytes
+    })
 }
 
 pub(crate) fn version_and_digest<'a>(
@@ -73,6 +113,7 @@ mod tests {
             CheckOutcome::Available {
                 version: Some("45.20260924.117".into()),
                 digest: Some(Digest::parse(D).unwrap()),
+                size: Some(1_200_000_000),
             }
         );
     }
@@ -83,9 +124,24 @@ mod tests {
             parse_check_output("Update available for: x\n  Digest: sha256:nothex\n"),
             CheckOutcome::Available {
                 version: None,
-                digest: None
+                digest: None,
+                size: None,
             }
         );
+    }
+
+    #[test]
+    fn sizes_in_glib_units() {
+        assert_eq!(parse_size("1.2 GB"), Some(1_200_000_000));
+        assert_eq!(parse_size(" 512 bytes"), Some(512));
+        assert_eq!(parse_size("1 byte"), Some(1));
+        assert_eq!(parse_size("830.5 kB"), Some(830_500));
+        assert_eq!(parse_size("1,5 MB"), Some(1_500_000), "a decimal comma");
+        assert_eq!(parse_size("2.0 GiB"), Some(2_147_483_648));
+        assert_eq!(parse_size("1.2"), None);
+        assert_eq!(parse_size("lots GB"), None);
+        assert_eq!(parse_size("-1 GB"), None);
+        assert_eq!(parse_size("3 parsecs"), None);
     }
 
     #[test]

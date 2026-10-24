@@ -16,6 +16,8 @@ pub const INTENT_FILE: &str = "intent.json";
 pub const DENYLIST_FILE: &str = "denylist.json";
 pub const LAST_CHECK_FILE: &str = "last-check.json";
 pub const HEALTH_FAILURE_FILE: &str = "health-failure.json";
+pub const SETTINGS_FILE: &str = "settings.json";
+pub const FALLBACK_FILE: &str = "last-fallback.json";
 /// The largest file, the denylist, holds about 150 bytes per failed build.
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
@@ -505,6 +507,7 @@ mod tests {
             at: 5,
             remote_digest: Some("sha256:c".into()),
             remote_version: None,
+            remote_size: None,
         };
         store.write_last_check(&check).expect("write");
         assert_eq!(store.read_last_check().expect("read"), check);

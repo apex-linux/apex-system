@@ -208,6 +208,20 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
         reply("ReportBoot", result.await)
     }
 
+    async fn set_automatic_downloads(
+        &self,
+        enabled: bool,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<(), ApexError> {
+        let result = async {
+            self.auth
+                .authorize(&header, PolkitAction::Configure)
+                .await?;
+            self.daemon.engine().set_automatic_downloads(enabled)
+        };
+        reply("SetAutomaticDownloads", result.await)
+    }
+
     #[zbus(property)]
     async fn state(&self) -> State {
         self.read_property(|p| p.state).await
@@ -261,6 +275,16 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     #[zbus(property)]
     async fn health_failure(&self) -> String {
         self.read_property(|p| p.health_failure.clone()).await
+    }
+
+    #[zbus(property)]
+    async fn last_fallback(&self) -> String {
+        self.read_property(|p| p.last_fallback.clone()).await
+    }
+
+    #[zbus(property)]
+    async fn automatic_downloads(&self) -> bool {
+        self.read_property(|p| p.automatic_downloads).await
     }
 }
 

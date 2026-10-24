@@ -28,7 +28,7 @@ use zbus::{Connection, Guid, connection};
 /// Returns once the emitter's first signal has arrived, so later streams see only changes.
 async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
     let (server, client, first) = connect_announced(h, auth).await;
-    assert_eq!(first.len(), 11, "{first:?}");
+    assert_eq!(first.len(), 13, "{first:?}");
     (server, client)
 }
 
@@ -338,6 +338,10 @@ async fn each_method_asks_polkit_for_its_contract_action() {
             "AcknowledgeHealthFailure",
             p.acknowledge_health_failure().await,
         ),
+        (
+            "SetAutomaticDownloads",
+            p.set_automatic_downloads(false).await,
+        ),
     ];
     for (member, result) in &refused {
         assert!(
@@ -367,6 +371,10 @@ async fn each_method_asks_polkit_for_its_contract_action() {
     assert!(
         auth.requests()
             .contains(&("AcknowledgeHealthFailure".to_owned(), PolkitAction::Discard))
+    );
+    assert!(
+        p.automatic_downloads().await.unwrap(),
+        "a refused setter changes nothing"
     );
     h.fake.assert_finished();
 }
@@ -438,6 +446,45 @@ fn testing_booted() -> apex_bootc::BootEntry {
     entry
 }
 
+/// `HealthFailure`, `AutomaticDownloads` and `LastFallback`, after a download staged `staged`.
+async fn warning_and_setting_signals(
+    h: &Harness,
+    p: &Update1Proxy<'static>,
+    stream: &mut PropertiesChangedStream,
+    seen: &mut Seen,
+    staged: apex_bootc::BootEntry,
+) {
+    p.report_boot(BootVerdict::Red, BOOTED).await.expect("red");
+    watch_until(stream, seen, |s| {
+        texts(s, "HealthFailure").last().map(String::as_str) == Some(BOOTED)
+    })
+    .await;
+    p.acknowledge_health_failure().await.expect("acknowledge");
+    watch_until(stream, seen, |s| {
+        texts(s, "HealthFailure").last().map(String::as_str) == Some("")
+    })
+    .await;
+    assert_eq!(texts(seen, "HealthFailure"), [BOOTED, ""]);
+    assert_eq!(
+        texts(seen, "State").last().map(String::as_str),
+        Some("staged")
+    );
+
+    p.set_automatic_downloads(false)
+        .await
+        .expect("automatic downloads off");
+    watch_until(stream, seen, |s| s.contains_key("AutomaticDownloads")).await;
+    let staged_now = host(testing_booted(), Some(staged), Some(rollback()));
+    h.push(status(&staged_now)).push(status(&staged_now));
+    p.report_boot(BootVerdict::Fallback, ROLLBACK)
+        .await
+        .expect("fallback");
+    watch_until(stream, seen, |s| {
+        texts(s, "LastFallback").last().map(String::as_str) == Some(ROLLBACK)
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn every_property_signals_its_changes() {
     const REMOTE_VERSION: &str = "45.20260924.9";
@@ -484,7 +531,7 @@ async fn every_property_signals_its_changes() {
         )
         .push(status(&host(
             testing_booted(),
-            Some(staged_remote),
+            Some(staged_remote.clone()),
             Some(rollback()),
         )));
     p.download(true).await.expect("download");
@@ -510,28 +557,14 @@ async fn every_property_signals_its_changes() {
     watch_until(&mut stream, &mut seen, |s| s.contains_key("LastError")).await;
     assert!(texts(&seen, "LastError")[0].contains("no such host"));
 
-    p.report_boot(BootVerdict::Red, BOOTED).await.expect("red");
-    watch_until(&mut stream, &mut seen, |s| {
-        texts(s, "HealthFailure").last().map(String::as_str) == Some(BOOTED)
-    })
-    .await;
-    p.acknowledge_health_failure().await.expect("acknowledge");
-    watch_until(&mut stream, &mut seen, |s| {
-        texts(s, "HealthFailure").last().map(String::as_str) == Some("")
-    })
-    .await;
-    assert_eq!(texts(&seen, "HealthFailure"), [BOOTED, ""]);
-    assert_eq!(
-        texts(&seen, "State").last().map(String::as_str),
-        Some("staged")
-    );
+    warning_and_setting_signals(&h, &p, &mut stream, &mut seen, staged_remote).await;
 
     let signalled: BTreeSet<String> = seen.keys().cloned().collect();
     let contract: BTreeSet<String> = members(INTROSPECTION_XML)
         .into_keys()
         .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
         .collect();
-    assert_eq!(contract.len(), 11);
+    assert_eq!(contract.len(), 13);
     assert_eq!(signalled, contract);
     h.fake.assert_finished();
 }

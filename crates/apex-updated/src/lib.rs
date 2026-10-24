@@ -7,6 +7,7 @@ pub mod channel;
 pub mod daemon;
 pub mod engine;
 pub mod errors;
+pub mod lane_lock;
 pub mod properties;
 pub mod providers;
 pub mod queue;

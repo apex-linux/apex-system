@@ -117,6 +117,37 @@ pub struct LastCheck {
     /// As found: it may not be a valid version.
     #[serde(default)]
     pub remote_version: Option<String>,
+    /// Bytes of the remote image's layers not present yet, as the check rounded them.
+    #[serde(default)]
+    pub remote_size: Option<u64>,
+}
+
+/// What the user chose in Settings; a missing file means the defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct UpdateSettings {
+    #[serde(default = "enabled")]
+    pub automatic_downloads: bool,
+}
+
+const fn enabled() -> bool {
+    true
+}
+
+impl Default for UpdateSettings {
+    fn default() -> Self {
+        Self {
+            automatic_downloads: true,
+        }
+    }
+}
+
+/// The update a "fallback" boot report denylisted, kept until acknowledged.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FallbackRecord {
+    pub digest: String,
+    /// Unix seconds.
+    #[serde(default)]
+    pub at: u64,
 }
 
 /// Written by `apex-boot-assess` when an applied deployment failed its required checks
@@ -135,6 +166,15 @@ pub struct HealthFailureRecord {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    #[test]
+    fn settings_default_to_automatic_downloads() {
+        assert!(UpdateSettings::default().automatic_downloads);
+        let empty: UpdateSettings = serde_json::from_str("{}").unwrap();
+        assert!(empty.automatic_downloads, "a file without the key");
+        let off: UpdateSettings = serde_json::from_str(r#"{"automatic_downloads":false}"#).unwrap();
+        assert!(!off.automatic_downloads);
+    }
     use std::collections::BTreeMap;
 
     fn entry(digest: &str, at: u64) -> DenyEntry {

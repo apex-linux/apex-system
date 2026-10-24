@@ -129,14 +129,15 @@ pub fn ensure_import(paths: &Paths) -> Result<bool, FileError> {
     write_atomic(&path, &edited, mode)
 }
 
-pub fn write_notified(paths: &Paths, digest: &str) -> Result<bool, FileError> {
-    let path = contained(&paths.updates_notified(), paths)?;
+/// One digest and a newline: the last update a notification was posted for.
+pub fn write_notified(paths: &Paths, file: &Path, digest: &str) -> Result<bool, FileError> {
+    let path = contained(file, paths)?;
     write_atomic(&path, format!("{digest}\n").as_bytes(), 0o644)
 }
 
 /// An unreadable or odd file counts as none: the worst case is one more notification.
-pub fn read_notified(paths: &Paths) -> Option<String> {
-    let path = contained(&paths.updates_notified(), paths).ok()?;
+pub fn read_notified(paths: &Paths, file: &Path) -> Option<String> {
+    let path = contained(file, paths).ok()?;
     let text = fs::read_to_string(path).ok()?;
     let digest = text.strip_suffix('\n')?;
     let valid = !digest.is_empty() && !digest.contains(char::is_whitespace);
@@ -342,24 +343,31 @@ mod tests {
     #[test]
     fn the_notified_digest_round_trips() {
         let (dir, paths) = tree();
-        assert_eq!(read_notified(&paths), None);
+        assert_eq!(read_notified(&paths, &paths.updates_notified()), None);
         let digest = format!("sha256:{}", "b".repeat(64));
-        assert!(write_notified(&paths, &digest).unwrap());
-        assert!(!write_notified(&paths, &digest).unwrap());
-        assert_eq!(read_notified(&paths), Some(digest));
+        assert!(write_notified(&paths, &paths.updates_notified(), &digest).unwrap());
+        assert!(!write_notified(&paths, &paths.updates_notified(), &digest).unwrap());
+        assert_eq!(
+            read_notified(&paths, &paths.updates_notified()),
+            Some(digest)
+        );
         assert_eq!(mode(&paths.updates_notified()), 0o644);
         for odd in ["", "\n", "two words\n", "no newline"] {
             fs::write(paths.updates_notified(), odd).unwrap();
-            assert_eq!(read_notified(&paths), None, "{odd:?}");
+            assert_eq!(
+                read_notified(&paths, &paths.updates_notified()),
+                None,
+                "{odd:?}"
+            );
         }
 
         let outside = dir.path().join("elsewhere");
         fs::write(&outside, "sha256:x\n").unwrap();
         fs::remove_file(paths.updates_notified()).unwrap();
         symlink(&outside, paths.updates_notified()).unwrap();
-        assert_eq!(read_notified(&paths), None);
+        assert_eq!(read_notified(&paths, &paths.updates_notified()), None);
         assert!(matches!(
-            write_notified(&paths, "sha256:y"),
+            write_notified(&paths, &paths.updates_notified(), "sha256:y"),
             Err(FileError::Outside { .. })
         ));
         assert_eq!(fs::read_to_string(&outside).unwrap(), "sha256:x\n");

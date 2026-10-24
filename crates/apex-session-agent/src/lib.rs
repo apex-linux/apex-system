@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod css;
 pub mod display;
+pub mod failure;
 pub mod files;
 pub mod guard;
 pub mod notifications;

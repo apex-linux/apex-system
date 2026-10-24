@@ -122,7 +122,7 @@ fn notify_parameters(notification: &Notification) -> glib::Variant {
         .flat_map(|&(key, label)| [key, label])
         .collect();
     (
-        "Apex",
+        notification.app,
         0u32,
         notification.icon,
         notification.summary.as_str(),
@@ -135,9 +135,10 @@ fn notify_parameters(notification: &Notification) -> glib::Variant {
 }
 
 /// gnome-control-center's `launch-panel` action takes `(sav)`: the panel id and its arguments.
-fn launch_panel_parameters(panel: &str) -> glib::Variant {
+fn launch_panel_parameters(panel: &str, page: Option<&str>) -> glib::Variant {
     let platform_data: HashMap<String, glib::Variant> = HashMap::new();
-    let target = (panel, Vec::<glib::Variant>::new()).to_variant();
+    let arguments: Vec<glib::Variant> = page.iter().map(ToVariant::to_variant).collect();
+    let target = (panel, arguments).to_variant();
     ("launch-panel", vec![target], platform_data).to_variant()
 }
 
@@ -183,14 +184,15 @@ impl Notifier for DbusNotifier {
         );
     }
 
-    fn open_settings(&self, panel: &str) {
+    fn open_settings(&self, panel: &str, page: Option<&str>) {
+        let parameters = launch_panel_parameters(panel, page);
         let panel = panel.to_owned();
         self.connection.call(
             Some(SETTINGS_NAME),
             SETTINGS_PATH,
             APPLICATION_INTERFACE,
             "ActivateAction",
-            Some(&launch_panel_parameters(&panel)),
+            Some(&parameters),
             None,
             gio::DBusCallFlags::NONE,
             CALL_TIMEOUT_MS,
@@ -222,7 +224,7 @@ mod tests {
 
     #[test]
     fn launch_panel_has_the_application_signature() {
-        let parameters = launch_panel_parameters("system");
+        let parameters = launch_panel_parameters("system", None);
         assert_eq!(parameters.type_().as_str(), "(sava{sv})");
         let targets = parameters
             .child_value(1)
@@ -230,5 +232,13 @@ mod tests {
             .unwrap();
         assert_eq!(targets[0].type_().as_str(), "(sav)");
         assert_eq!(targets[0].child_value(0).get::<String>().unwrap(), "system");
+        let page = launch_panel_parameters("system", Some("software-updates"));
+        let target = page.child_value(1).child_value(0).as_variant().unwrap();
+        let arguments = target.child_value(1).get::<Vec<glib::Variant>>().unwrap();
+        assert_eq!(arguments.len(), 1);
+        assert_eq!(
+            arguments[0].get::<String>().as_deref(),
+            Some("software-updates")
+        );
     }
 }

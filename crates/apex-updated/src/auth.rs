@@ -45,6 +45,7 @@ pub fn describe(action: PolkitAction) -> &'static str {
         PolkitAction::Apply => "install updates",
         PolkitAction::Discard => "dismiss update warnings",
         PolkitAction::Rollback => "go back to the previous version",
+        PolkitAction::Configure => "change how updates are downloaded",
     }
 }
 
