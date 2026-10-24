@@ -26,6 +26,7 @@ pub mod names {
     pub const AUDIO_INIT_VERBS: &str = "audio-init-verbs";
     pub const CHARGE_THRESHOLD: &str = "charge-threshold";
     pub const DGPU_RUNTIME_PM: &str = "dgpu-runtime-pm";
+    pub const NVIDIA_DRIVER: &str = "nvidia-driver";
     pub const FINGERPRINT_DEVICE: &str = "fingerprint-device";
     pub const GRUB_CFG_CURRENT: &str = "grub-cfg-current";
     pub const IMAGE_SOURCE: &str = "image-source";
@@ -39,10 +40,11 @@ pub mod names {
     ];
 
     /// Never influence the decision.
-    pub const REPORTED: [&str; 6] = [
+    pub const REPORTED: [&str; 7] = [
         AUDIO_INIT_VERBS,
         CHARGE_THRESHOLD,
         DGPU_RUNTIME_PM,
+        NVIDIA_DRIVER,
         FINGERPRINT_DEVICE,
         GRUB_CFG_CURRENT,
         IMAGE_SOURCE,

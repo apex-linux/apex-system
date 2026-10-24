@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use apex_boot::checks::grub_cfg::{GRUB_CFG_PATH, GrubCfgCurrentCheck};
 use apex_boot::checks::names;
+use apex_boot::nvidia::{self, DiscreteGpu};
 use apex_boot::{Check, CheckOutcome, CheckResult, FnCheck};
 use apex_bootc::{APEX_STABLE, APEX_TESTING, ImageSignature};
 
@@ -37,6 +38,7 @@ pub(crate) fn file_checks(root: &Path) -> Vec<Box<dyn Check>> {
         check(names::AUDIO_INIT_VERBS, audio_init_verbs),
         check(names::CHARGE_THRESHOLD, charge_threshold),
         check(names::DGPU_RUNTIME_PM, dgpu_runtime_pm),
+        check(names::NVIDIA_DRIVER, nvidia_driver),
         check(names::FINGERPRINT_DEVICE, fingerprint_device),
         Box::new(GrubCfgCurrentCheck::new(under(root, GRUB_CFG_PATH))),
     ]
@@ -275,6 +277,16 @@ fn dgpu_runtime_pm(root: &Path) -> Result<(), String> {
     }
 }
 
+fn nvidia_driver(root: &Path) -> Result<(), String> {
+    let gpu = DiscreteGpu::of_this_machine()?;
+    let report = nvidia::report(root, &gpu);
+    if report.is_ok() {
+        Ok(())
+    } else {
+        Err(report.to_string())
+    }
+}
+
 fn fingerprint_device(root: &Path) -> Result<(), String> {
     let usb = under(root, "/sys/bus/usb/devices");
     let entries = fs::read_dir(&usb).map_err(|err| describe_read_error(&usb, &err))?;
@@ -342,6 +354,19 @@ headset-mic
             "80\n",
         );
         write("/sys/bus/pci/devices/0000:01:00.0/power/control", "auto\n");
+        write("/sys/bus/pci/devices/0000:01:00.0/vendor", "0x10de\n");
+        write("/sys/bus/pci/devices/0000:01:00.0/device", "0x25a2\n");
+        fs::create_dir_all(under(root.path(), "/sys/bus/pci/drivers/nvidia")).unwrap();
+        std::os::unix::fs::symlink(
+            under(root.path(), "/sys/bus/pci/drivers/nvidia"),
+            under(root.path(), "/sys/bus/pci/devices/0000:01:00.0/driver"),
+        )
+        .unwrap();
+        write("/sys/module/nvidia/version", "615.78.08\n");
+        write(
+            nvidia::MANIFEST_PATH,
+            r#"{"degraded": [], "packages": [{"name": "kmod-nvidia-7.3.0-4.cachyos1.fc45.x86_64", "version": "615.78.08"}]}"#,
+        );
         write("/sys/bus/usb/devices/1-1/idVendor", "0bda\n");
         write("/sys/bus/usb/devices/1-1/idProduct", "0129\n");
         write("/sys/bus/usb/devices/3-4/idVendor", "04f3\n");
@@ -365,7 +390,7 @@ headset-mic
         let root = healthy_root();
         let results = outcomes(root.path());
         let names: Vec<&str> = results.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, names::REPORTED[..5]);
+        assert_eq!(names, names::REPORTED[..6]);
         assert!(results.iter().all(|(_, o)| o.is_pass()), "{results:?}");
     }
 
@@ -388,6 +413,7 @@ headset-mic
             "on\n",
         )
         .unwrap();
+        fs::write(path("/sys/module/nvidia/version"), "615.80.01\n").unwrap();
         fs::remove_dir_all(path("/sys/bus/usb/devices/3-4")).unwrap();
         fs::write(path(GRUB_CFG_PATH), "# apex-bootcount v0\nblscfg\n").unwrap();
         let reasons: Vec<String> = outcomes(root.path())
@@ -406,6 +432,9 @@ headset-mic
                 "charge-threshold: fail: BAT0 charge_control_end_threshold is 100, expected 80"
                     .to_owned(),
                 "dgpu-runtime-pm: fail: dGPU 0000:01:00.0 runtime PM is \"on\", expected \"auto\""
+                    .to_owned(),
+                "nvidia-driver: fail: the loaded NVIDIA driver is 615.80.01, but the image ships \
+                 615.78.08"
                     .to_owned(),
                 "fingerprint-device: fail: no USB device 04f3:0c6e".to_owned(),
                 format!(
@@ -431,6 +460,11 @@ headset-mic
              (the image ships audio degraded)"
         );
         assert_eq!(reasons[2], "fail: dGPU 0000:01:00.0 is not present");
+        assert!(
+            reasons[3].starts_with("fail: cannot read ") && reasons[3].contains("manifest.json"),
+            "{}",
+            reasons[3]
+        );
     }
 
     fn booted(image: &str, transport: &str, signature: Option<ImageSignature>) -> BootedImage {

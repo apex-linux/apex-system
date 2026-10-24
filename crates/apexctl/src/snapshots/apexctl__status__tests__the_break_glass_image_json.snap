@@ -30,6 +30,7 @@ expression: "serde_json::to_value(StatusJson::new(&status)).unwrap()"
   "degraded": [
     "nvidia"
   ],
+  "hardware": [],
   "health_failure": null,
   "held": [],
   "holds": [],

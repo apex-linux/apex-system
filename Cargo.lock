@@ -176,6 +176,7 @@ name = "apexctl"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "apex-boot",
  "apex-bootc",
  "apex-dbus",
  "apex-update",

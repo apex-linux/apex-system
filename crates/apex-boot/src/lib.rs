@@ -4,6 +4,7 @@ pub mod digest;
 pub mod emergency;
 pub mod grubenv;
 pub mod health;
+pub mod nvidia;
 mod process;
 pub mod snippet;
 pub mod vars;
