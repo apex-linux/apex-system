@@ -305,6 +305,7 @@ fn degraded_meaning(component: &str) -> &'static str {
         "fingerprint" => "the fingerprint reader may fail to enroll fingers",
         "nvidia" => "no NVIDIA driver",
         "shell" => "stock GNOME Shell, without the Apex layer and theme",
+        "terminal" => "stock Ptyxis, without the Apex terminal",
         _ => "degraded",
     }
 }
@@ -800,6 +801,20 @@ pub(crate) mod tests {
         let text = render_status(&status);
         assert!(!text.contains("Held") && !text.contains("held:"), "{text}");
         assert_eq!(StatusJson::new(&status).held, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_terminal_degraded_image_names_stock_ptyxis() {
+        let mut status = staged_status();
+        status.booted.degraded = Some(vec!["shell".to_owned(), "terminal".to_owned()]);
+        let text = render_status(&status);
+        assert!(
+            text.contains(
+                "\nDegraded   shell: stock GNOME Shell, without the Apex layer and theme\n           \
+                 terminal: stock Ptyxis, without the Apex terminal\n"
+            ),
+            "{text}"
+        );
     }
 
     #[test]
