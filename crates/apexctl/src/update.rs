@@ -495,6 +495,7 @@ mod tests {
             health_failure: String::new(),
             last_fallback: String::new(),
             automatic_downloads: Some(true),
+            kept: Vec::new(),
         }
     }
 

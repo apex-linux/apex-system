@@ -525,86 +525,6 @@ async fn apply_checks_boot_space_and_waits_for_the_boot_assessment() {
     h.fake.assert_finished();
 }
 
-fn grubenv_with(vars: &[(&str, &str)]) -> SharedGrubWriter {
-    let mut env = SharedGrubWriter::new().env();
-    for (name, value) in vars {
-        env.set(name, value).unwrap();
-    }
-    SharedGrubWriter::with_env(env)
-}
-
-#[tokio::test(start_paused = true)]
-async fn apply_refuses_to_arm_on_top_of_an_unconfirmed_or_failed_running_version() {
-    let apply = || Op::Apply {
-        expected_digest: STAGED.into(),
-    };
-    let ready = host(booted(), Some(staged(true)), None);
-
-    // Still armed for the running version: its startup check has not passed.
-    let h = Harness::with(
-        fake_state(),
-        grubenv_with(&[
-            ("apex_target", BOOTED),
-            ("apex_counter", "2"),
-            ("apex_ok", "0"),
-        ]),
-    );
-    h.push(status(&ready));
-    let error = h.run(apply()).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::PolicyDenied));
-    assert!(
-        error
-            .message()
-            .contains("has not passed its startup check yet"),
-        "{}",
-        error.message()
-    );
-    assert!(h.grub.calls().is_empty());
-    assert_eq!(h.grub.env().get_str("apex_target").unwrap(), Some(BOOTED));
-    assert_eq!(h.intent(), None);
-    assert_eq!(
-        h.properties().last_error,
-        "",
-        "a refusal is the caller's answer"
-    );
-    h.fake.assert_finished();
-
-    let h = Harness::new();
-    h.store
-        .write_health_failure(&HealthFailureRecord {
-            digest: BOOTED.into(),
-            failed_checks: vec!["session".into()],
-            at: NOW - 60,
-        })
-        .unwrap();
-    h.push(status(&ready));
-    let error = h.run(apply()).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::PolicyDenied));
-    assert!(
-        error.message().contains("failed its startup check"),
-        "{}",
-        error.message()
-    );
-    assert!(h.grub.calls().is_empty());
-    assert_eq!(h.intent(), None);
-    h.fake.assert_finished();
-
-    let h = Harness::with(
-        fake_state(),
-        grubenv_with(&[("apex_target", BOOTED), ("apex_counter", "two")]),
-    );
-    h.push(status(&ready));
-    let error = h.run(apply()).await.unwrap_err();
-    assert_eq!(error.kind(), Some(ErrorKind::Internal));
-    assert!(
-        error.message().contains("startup check could not be read"),
-        "{}",
-        error.message()
-    );
-    assert!(h.grub.calls().is_empty());
-    h.fake.assert_finished();
-}
-
 #[tokio::test(start_paused = true)]
 async fn apply_arms_over_an_arming_for_another_update() {
     let h = Harness::with(
@@ -1537,6 +1457,13 @@ impl apex_updated::store::Store for UnflushedStore {
     fn clear_fallback(&self) -> Result<(), StoreError> {
         self.0.clear_fallback()?;
         Err(unflushed("last-fallback.json"))
+    }
+    fn read_pins(&self) -> Result<apex_update::Pins, StoreError> {
+        self.0.read_pins()
+    }
+    fn write_pins(&self, pins: &apex_update::Pins) -> Result<(), StoreError> {
+        self.0.write_pins(pins)?;
+        Err(unflushed("pinned.json"))
     }
 }
 

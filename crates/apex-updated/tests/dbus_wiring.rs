@@ -506,6 +506,39 @@ async fn warning_and_setting_signals(
     .await;
 }
 
+/// A deployment the daemon pinned, now fourth in line.
+async fn kept_signal(h: &Harness, stream: &mut PropertiesChangedStream, seen: &mut Seen) {
+    const KEPT: &str = "sha256:7777777777777777777777777777777777777777777777777777777777777777";
+    const KEPT_CSUM: &str = "6666666666666666666666666666666666666666666666666666666666666666";
+    h.store
+        .write_pins(&apex_update::Pins {
+            pins: vec![apex_update::PinRecord {
+                checksum: KEPT_CSUM.into(),
+                serial: 0,
+                digest: KEPT.into(),
+                at: NOW,
+            }],
+        })
+        .unwrap();
+    let mut current = host(testing_booted(), None, Some(rollback()));
+    current.status.other_deployments = vec![apex_bootc::BootEntry {
+        pinned: true,
+        ..entry(KEPT, "45.20260901.1", KEPT_CSUM)
+    }];
+    h.refresh(&current).await;
+    watch_until(stream, seen, |s| s.contains_key("Kept")).await;
+    let zbus::Variant::Array(array) = &**seen["Kept"].last().expect("a value") else {
+        panic!("Kept is an array");
+    };
+    let kept: Vec<Deployment> = array
+        .iter()
+        .map(|dict| Deployment::try_from(dict).expect("a deployment dict"))
+        .collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].digest.as_deref(), Some(KEPT));
+    assert!(kept[0].pin_reason.is_some());
+}
+
 #[tokio::test]
 async fn every_property_signals_its_changes() {
     const REMOTE_VERSION: &str = "45.20260924.9";
@@ -579,6 +612,7 @@ async fn every_property_signals_its_changes() {
     assert!(texts(&seen, "LastError")[0].contains("no such host"));
 
     warning_and_setting_signals(&h, &p, &mut stream, &mut seen, staged_remote).await;
+    kept_signal(&h, &mut stream, &mut seen).await;
 
     let signalled: BTreeSet<String> = seen.keys().cloned().collect();
     let contract: BTreeSet<String> = members(INTROSPECTION_XML)
@@ -586,9 +620,7 @@ async fn every_property_signals_its_changes() {
         .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
         .collect();
     assert_eq!(contract.len(), 15);
-    // Only the pin-before-arm change fills Kept; properties.rs tests its signal.
-    let expected: BTreeSet<String> = contract.into_iter().filter(|name| name != "Kept").collect();
-    assert_eq!(signalled, expected);
+    assert_eq!(signalled, contract);
     h.fake.assert_finished();
 }
 

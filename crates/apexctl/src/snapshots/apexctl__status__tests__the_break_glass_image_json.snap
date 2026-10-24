@@ -14,6 +14,7 @@ expression: "serde_json::to_value(StatusJson::new(&status)).unwrap()"
     "held": [],
     "holds": [],
     "image": "ghcr.io/apex-linux/apex:45",
+    "pin_reason": null,
     "pinned": false,
     "stock": [
       {
@@ -32,6 +33,7 @@ expression: "serde_json::to_value(StatusJson::new(&status)).unwrap()"
   "health_failure": null,
   "held": [],
   "holds": [],
+  "kept": [],
   "last_check": 1790240400,
   "last_error": null,
   "last_fallback": null,

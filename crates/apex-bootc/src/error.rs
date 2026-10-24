@@ -54,17 +54,17 @@ pub enum BootcError {
     NoSpace { detail: String },
     #[error("this system is not booted from a bootc image: {detail}")]
     NotBootcHost { detail: String },
-    #[error("the installed bootc does not support `bootc {command}`: {detail}")]
+    #[error("the installed {} does not support `{command}`: {detail}", .command.program())]
     Unsupported {
         command: CommandKind,
         detail: String,
     },
-    #[error("`bootc {command}` timed out after {} s", .timeout.as_secs())]
+    #[error("`{command}` timed out after {} s", .timeout.as_secs())]
     Timeout {
         command: CommandKind,
         timeout: Duration,
     },
-    #[error("`bootc {command}` was cancelled")]
+    #[error("`{command}` was cancelled")]
     Cancelled { command: CommandKind },
     #[error("could not run {}: {source}", .program.display())]
     Spawn {
@@ -74,7 +74,7 @@ pub enum BootcError {
     },
     #[error(transparent)]
     InvalidStatus(#[from] StatusParseError),
-    #[error("`bootc {command}` failed ({exit}): {detail}")]
+    #[error("`{command}` failed ({exit}): {detail}")]
     Other {
         command: CommandKind,
         exit: ExitState,

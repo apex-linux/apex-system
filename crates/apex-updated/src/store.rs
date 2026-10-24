@@ -1,20 +1,21 @@
 use apex_update::store::{
-    DENYLIST_FILE, FALLBACK_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE, SETTINGS_FILE,
-    read_json, remove_durable, write_json_atomic,
+    DENYLIST_FILE, FALLBACK_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE, PINNED_FILE,
+    SETTINGS_FILE, read_json, remove_durable, write_json_atomic,
 };
 use apex_update::{
-    FallbackRecord, HealthFailureRecord, StateDir, StateStore, StoreError, UpdateSettings,
+    FallbackRecord, HealthFailureRecord, Pins, StateDir, StateStore, StoreError, UpdateSettings,
 };
 
 use crate::errors::with_sources;
 
-pub const STATE_FILES: [&str; 6] = [
+pub const STATE_FILES: [&str; 7] = [
     INTENT_FILE,
     DENYLIST_FILE,
     LAST_CHECK_FILE,
     HEALTH_FAILURE_FILE,
     SETTINGS_FILE,
     FALLBACK_FILE,
+    PINNED_FILE,
 ];
 
 pub trait Store: StateStore + Send + Sync {
@@ -24,6 +25,8 @@ pub trait Store: StateStore + Send + Sync {
     fn read_fallback(&self) -> Result<Option<FallbackRecord>, StoreError>;
     fn write_fallback(&self, record: &FallbackRecord) -> Result<(), StoreError>;
     fn clear_fallback(&self) -> Result<(), StoreError>;
+    fn read_pins(&self) -> Result<Pins, StoreError>;
+    fn write_pins(&self, pins: &Pins) -> Result<(), StoreError>;
 
     /// Every write cleans up after earlier writes of its own file; this, at startup, covers
     /// files rarely written, such as the denylist.
@@ -55,6 +58,14 @@ impl Store for StateDir {
 
     fn clear_fallback(&self) -> Result<(), StoreError> {
         remove_durable(&self.file(FALLBACK_FILE))
+    }
+
+    fn read_pins(&self) -> Result<Pins, StoreError> {
+        Ok(read_json(&self.file(PINNED_FILE))?.unwrap_or_default())
+    }
+
+    fn write_pins(&self, pins: &Pins) -> Result<(), StoreError> {
+        write_json_atomic(&self.file(PINNED_FILE), pins)
     }
 
     fn remove_stale_temp_files(&self) -> usize {
@@ -130,6 +141,29 @@ mod tests {
         assert_eq!(store.read_fallback().unwrap(), Some(record));
         store.clear_fallback().unwrap();
         assert_eq!(store.read_fallback().unwrap(), None);
+    }
+
+    #[test]
+    fn pins_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = StateDir::new(dir.path());
+        assert_eq!(store.read_pins().unwrap(), Pins::default(), "no file");
+        let pins = Pins {
+            pins: vec![apex_update::PinRecord {
+                checksum: "33".into(),
+                serial: 1,
+                digest: "sha256:aa".into(),
+                at: 9,
+            }],
+        };
+        store.write_pins(&pins).unwrap();
+        assert_eq!(StateDir::new(dir.path()).read_pins().unwrap(), pins);
+        assert!(pins.contains("33", 1));
+        assert!(
+            !pins.contains("33", 0),
+            "another deployment of the same commit"
+        );
+        assert!(!pins.contains("44", 1));
     }
 
     /// Above the kernel's `PID_MAX_LIMIT` (4194304).

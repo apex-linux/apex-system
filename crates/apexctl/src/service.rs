@@ -26,6 +26,8 @@ pub struct ServiceStatus {
     pub last_fallback: String,
     /// `None` when the service predates the property.
     pub automatic_downloads: Option<bool>,
+    /// Pinned by the service and in the boot menu only; empty when the service predates it.
+    pub kept: Vec<Deployment>,
 }
 
 // `impl Future` rather than `async fn`: public async trait methods trip the
@@ -282,6 +284,7 @@ impl UpdateService for DbusService {
             health_failure: p.health_failure().await?,
             last_fallback: p.last_fallback().await.unwrap_or_default(),
             automatic_downloads: p.automatic_downloads().await.ok(),
+            kept: p.kept().await.unwrap_or_default(),
         })
     }
 

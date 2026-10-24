@@ -150,6 +150,33 @@ pub struct FallbackRecord {
     pub at: u64,
 }
 
+/// A deployment apex-updated pinned itself, so it unpins only these.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PinRecord {
+    /// The ostree commit checksum and deploy serial, which name the deployment.
+    pub checksum: String,
+    #[serde(default)]
+    pub serial: u32,
+    pub digest: String,
+    /// Unix seconds.
+    #[serde(default)]
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Pins {
+    #[serde(default)]
+    pub pins: Vec<PinRecord>,
+}
+
+impl Pins {
+    pub fn contains(&self, checksum: &str, serial: u32) -> bool {
+        self.pins
+            .iter()
+            .any(|pin| pin.checksum == checksum && pin.serial == serial)
+    }
+}
+
 /// Written by `apex-boot-assess` when an applied deployment failed its required checks
 /// during a user session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

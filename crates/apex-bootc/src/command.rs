@@ -10,6 +10,12 @@ pub const BOOTC_PROGRAM: &str = "/usr/bin/bootc";
 /// Replaces [`BOOTC_PROGRAM`] in debug builds only.
 pub const PROGRAM_OVERRIDE_ENV: &str = "APEX_BOOTC";
 
+/// bootc cannot pin a deployment, so `ostree admin pin` does.
+pub const OSTREE_PROGRAM: &str = "/usr/bin/ostree";
+
+/// Replaces [`OSTREE_PROGRAM`] in debug builds only.
+pub const OSTREE_OVERRIDE_ENV: &str = "APEX_OSTREE";
+
 pub const POLICY_JSON: &str = "/usr/share/apex/containers/policy.json";
 
 /// The complete environment of a bootc child: the runner clears everything else.
@@ -32,13 +38,22 @@ pub const APEX_STABLE_REPOSITORY: &str = "ghcr.io/apex-linux/apex";
 pub const APEX_TESTING_REPOSITORY: &str = "ghcr.io/apex-linux/apex-testing";
 
 pub fn program() -> PathBuf {
+    program_or_override(BOOTC_PROGRAM, PROGRAM_OVERRIDE_ENV)
+}
+
+pub fn ostree_program() -> PathBuf {
+    program_or_override(OSTREE_PROGRAM, OSTREE_OVERRIDE_ENV)
+}
+
+#[cfg_attr(not(debug_assertions), allow(unused_variables))]
+fn program_or_override(program: &str, env: &str) -> PathBuf {
     #[cfg(debug_assertions)]
-    if let Some(path) = std::env::var_os(PROGRAM_OVERRIDE_ENV).map(PathBuf::from)
+    if let Some(path) = std::env::var_os(env).map(PathBuf::from)
         && path.is_absolute()
     {
         return path;
     }
-    PathBuf::from(BOOTC_PROGRAM)
+    PathBuf::from(program)
 }
 
 /// Built only from a `&'static str`, or a static repository plus a validated digest, and
@@ -172,10 +187,21 @@ impl fmt::Display for ImageRef {
 pub enum BootcCommand {
     Status,
     UpgradeCheck,
-    UpgradeDownloadOnly { progress: bool },
+    UpgradeDownloadOnly {
+        progress: bool,
+    },
     UpgradeFromDownloaded,
     Rollback,
-    SwitchDownloadOnly { target: ImageRef },
+    SwitchDownloadOnly {
+        target: ImageRef,
+    },
+    /// ostree resolves `rollback` as bootc does: the first deployment after the booted one.
+    PinRollback,
+    OstreeStatus,
+    /// The index counts `ostree admin status` lines, the staged deployment first.
+    Unpin {
+        index: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -186,6 +212,16 @@ pub enum CommandKind {
     UpgradeFromDownloaded,
     Rollback,
     SwitchDownloadOnly,
+    PinRollback,
+    OstreeStatus,
+    Unpin,
+}
+
+/// Which program a command runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Program {
+    Bootc,
+    Ostree,
 }
 
 impl CommandKind {
@@ -197,22 +233,44 @@ impl CommandKind {
             Self::UpgradeFromDownloaded => "upgrade --from-downloaded",
             Self::Rollback => "rollback",
             Self::SwitchDownloadOnly => "switch --download-only",
+            Self::PinRollback => "admin pin rollback",
+            Self::OstreeStatus => "admin status",
+            Self::Unpin => "admin pin --unpin",
+        }
+    }
+
+    pub const fn program(self) -> Program {
+        match self {
+            Self::PinRollback | Self::OstreeStatus | Self::Unpin => Program::Ostree,
+            _ => Program::Bootc,
         }
     }
 
     pub const fn timeout(self) -> Duration {
         match self {
-            Self::Status => STATUS_TIMEOUT,
+            Self::Status | Self::OstreeStatus => STATUS_TIMEOUT,
             Self::UpgradeCheck => CHECK_TIMEOUT,
             Self::UpgradeDownloadOnly | Self::SwitchDownloadOnly => DOWNLOAD_TIMEOUT,
-            Self::UpgradeFromDownloaded | Self::Rollback => OTHER_TIMEOUT,
+            Self::UpgradeFromDownloaded | Self::Rollback | Self::PinRollback | Self::Unpin => {
+                OTHER_TIMEOUT
+            }
         }
     }
 }
 
+impl fmt::Display for Program {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Bootc => "bootc",
+            Self::Ostree => "ostree",
+        })
+    }
+}
+
+/// With the program name: `bootc status`, `ostree admin pin`.
 impl fmt::Display for CommandKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        write!(f, "{} {}", self.program(), self.as_str())
     }
 }
 
@@ -225,6 +283,9 @@ impl BootcCommand {
             Self::UpgradeFromDownloaded => CommandKind::UpgradeFromDownloaded,
             Self::Rollback => CommandKind::Rollback,
             Self::SwitchDownloadOnly { .. } => CommandKind::SwitchDownloadOnly,
+            Self::PinRollback => CommandKind::PinRollback,
+            Self::OstreeStatus => CommandKind::OstreeStatus,
+            Self::Unpin { .. } => CommandKind::Unpin,
         }
     }
 
@@ -242,10 +303,15 @@ impl BootcCommand {
             Self::SwitchDownloadOnly { .. } => {
                 &["switch", "--enforce-container-sigpolicy", "--download-only"]
             }
+            Self::PinRollback => &["admin", "pin", "rollback"],
+            Self::OstreeStatus => &["admin", "status"],
+            Self::Unpin { .. } => &["admin", "pin", "--unpin"],
         };
         let mut argv: Vec<OsString> = fixed.iter().map(OsString::from).collect();
-        if let Self::SwitchDownloadOnly { target } = self {
-            argv.push(target.to_string().into());
+        match self {
+            Self::SwitchDownloadOnly { target } => argv.push(target.to_string().into()),
+            Self::Unpin { index } => argv.push(index.to_string().into()),
+            _ => {}
         }
         argv
     }
@@ -337,5 +403,22 @@ mod tests {
         if std::env::var_os(PROGRAM_OVERRIDE_ENV).is_none() {
             assert_eq!(program(), PathBuf::from("/usr/bin/bootc"));
         }
+        if std::env::var_os(OSTREE_OVERRIDE_ENV).is_none() {
+            assert_eq!(ostree_program(), PathBuf::from("/usr/bin/ostree"));
+        }
+    }
+
+    #[test]
+    fn pins_run_ostree() {
+        let pin = BootcCommand::PinRollback;
+        assert_eq!(pin.argv(), ["admin", "pin", "rollback"]);
+        assert_eq!(pin.kind().program(), Program::Ostree);
+        assert_eq!(pin.kind().to_string(), "ostree admin pin rollback");
+        assert_eq!(pin.timeout(), OTHER_TIMEOUT);
+        assert_eq!(BootcCommand::OstreeStatus.timeout(), STATUS_TIMEOUT);
+        let unpin = BootcCommand::Unpin { index: 3 };
+        assert_eq!(unpin.argv(), ["admin", "pin", "--unpin", "3"]);
+        assert_eq!(BootcCommand::Rollback.kind().to_string(), "bootc rollback");
+        assert_eq!(BootcCommand::Rollback.kind().program(), Program::Bootc);
     }
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use apex_bootc::{
     APEX_STABLE, APEX_STABLE_REPOSITORY, APEX_TESTING, BOOTC_PROGRAM, BootcCommand, CommandKind,
-    ENVIRONMENT, ImageRef, ImageRefError,
+    ENVIRONMENT, ImageRef, ImageRefError, OSTREE_PROGRAM, Program,
 };
 
 const PINNED: &str = "sha256:0b4c83fba9a0e3e2e5a7e9dbb5f4c1f1d7b5d1c6e0a3f9e8d7c6b5a4f3e2d1c0";
@@ -35,6 +35,9 @@ fn all_commands() -> Vec<BootcCommand> {
         BootcCommand::SwitchDownloadOnly {
             target: LOCAL_TEST_REF,
         },
+        BootcCommand::PinRollback,
+        BootcCommand::OstreeStatus,
+        BootcCommand::Unpin { index: 2 },
     ]
 }
 
@@ -44,7 +47,11 @@ fn command_line(c: &BootcCommand) -> String {
         .iter()
         .map(|a| a.to_str().unwrap().to_owned())
         .collect();
-    format!("{BOOTC_PROGRAM} {}", args.join(" "))
+    let program = match c.kind().program() {
+        Program::Bootc => BOOTC_PROGRAM,
+        Program::Ostree => OSTREE_PROGRAM,
+    };
+    format!("{program} {}", args.join(" "))
 }
 
 #[test]
@@ -76,7 +83,7 @@ fn timeout_snapshot() {
     for c in all_commands() {
         writeln!(
             out,
-            "{:<28} {:>5} s",
+            "{:<34} {:>5} s",
             c.kind().to_string(),
             c.timeout().as_secs()
         )
@@ -126,6 +133,9 @@ fn contract_timeouts() {
         Duration::from_mins(10)
     );
     assert_eq!(CommandKind::Rollback.timeout(), Duration::from_mins(10));
+    assert_eq!(CommandKind::PinRollback.timeout(), Duration::from_mins(10));
+    assert_eq!(CommandKind::OstreeStatus.timeout(), Duration::from_secs(30));
+    assert_eq!(CommandKind::Unpin.timeout(), Duration::from_mins(10));
 }
 
 #[test]

@@ -4,6 +4,7 @@ use crate::check::{CheckOutcome, parse_check_output};
 use crate::command::{BootcCommand, ImageRef};
 use crate::download::{DownloadOutcome, parse_download_output};
 use crate::error::{BootcError, summarize_stderr};
+use crate::ostree_status::{OstreeDeployment, parse_ostree_status};
 use crate::progress::Progress;
 use crate::runner::{CancelToken, CommandOutput, CommandRunner, Invocation};
 use crate::status::Host;
@@ -92,6 +93,27 @@ impl<R: CommandRunner> Bootc<R> {
 
     pub async fn rollback(&self, cancel: &CancelToken) -> Result<(), BootcError> {
         self.run(invoke(BootcCommand::Rollback, cancel))
+            .await
+            .map(drop)
+    }
+
+    pub async fn pin_rollback(&self, cancel: &CancelToken) -> Result<(), BootcError> {
+        self.run(invoke(BootcCommand::PinRollback, cancel))
+            .await
+            .map(drop)
+    }
+
+    pub async fn ostree_status(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Vec<OstreeDeployment>, BootcError> {
+        let output = self.run(invoke(BootcCommand::OstreeStatus, cancel)).await?;
+        Ok(parse_ostree_status(&output.stdout_lossy()))
+    }
+
+    /// Only with an index just read by [`Self::ostree_status`].
+    pub async fn unpin(&self, index: u32, cancel: &CancelToken) -> Result<(), BootcError> {
+        self.run(invoke(BootcCommand::Unpin { index }, cancel))
             .await
             .map(drop)
     }

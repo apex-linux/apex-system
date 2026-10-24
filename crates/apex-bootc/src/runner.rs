@@ -20,7 +20,7 @@ use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::command::{self, BootcCommand, CommandKind, ENVIRONMENT, PROGRESS_FD};
+use crate::command::{self, BootcCommand, CommandKind, ENVIRONMENT, PROGRESS_FD, Program};
 use crate::error::{BootcError, ExitState, classify_failure};
 use crate::lock::{SYSROOT_LOCK_PATH, sysroot_lock_held};
 use crate::progress::{Progress, ProgressDecoder};
@@ -163,6 +163,7 @@ impl<R: CommandRunner> CommandRunner for &R {
 #[derive(Debug, Clone)]
 pub struct TokioRunner {
     program: PathBuf,
+    ostree: PathBuf,
     lock_path: PathBuf,
     kill_grace: Duration,
     timeout_override: Option<Duration>,
@@ -178,6 +179,7 @@ impl TokioRunner {
     pub fn new() -> Self {
         Self {
             program: command::program(),
+            ostree: command::ostree_program(),
             lock_path: PathBuf::from(SYSROOT_LOCK_PATH),
             kill_grace: KILL_GRACE,
             timeout_override: None,
@@ -192,6 +194,7 @@ impl TokioRunner {
     fn for_test(program: &Path, lock_path: &Path, timeout: Option<Duration>) -> Self {
         Self {
             program: program.to_owned(),
+            ostree: program.to_owned(),
             lock_path: lock_path.to_owned(),
             kill_grace: Duration::from_millis(200),
             timeout_override: timeout,
@@ -207,8 +210,12 @@ impl CommandRunner for TokioRunner {
             cancel,
         } = invocation;
         let kind = command.kind();
+        let program = match kind.program() {
+            Program::Bootc => &self.program,
+            Program::Ostree => &self.ostree,
+        };
         let spec = ProcessSpec {
-            program: self.program.clone(),
+            program: program.clone(),
             args: command.argv(),
             env: ENVIRONMENT
                 .iter()
@@ -234,7 +241,7 @@ impl CommandRunner for TokioRunner {
                 if sysroot_lock_held(&self.lock_path).unwrap_or(false) {
                     Err(BootcError::Busy {
                         detail: format!(
-                            "`bootc {kind}` waited {} s for {}, which another process holds",
+                            "`{kind}` waited {} s for {}, which another process holds",
                             spec.timeout.as_secs(),
                             self.lock_path.display()
                         ),
