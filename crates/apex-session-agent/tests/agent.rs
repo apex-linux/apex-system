@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use apex_session_agent::agent::{Agent, Notification, Notifier, Posted};
 use apex_session_agent::guard::ACTION_KEY;
+use apex_session_agent::icons::ICON_THEME_KEY;
 use apex_session_agent::paths::Paths;
 use apex_session_agent::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
 use common::{read, settings_from_the_compiled_schemas, wait_for};
@@ -49,6 +50,32 @@ impl Notifier for FakeNotifier {
     fn open_settings(&self, _panel: &str, _page: Option<&str>) {}
 }
 
+/// The palette and the folder theme follow the accent; a theme the user picked stays.
+fn accent_changes(paths: &Paths, interface: &gio::Settings) {
+    interface.set_string(ACCENT_KEY, "orange").unwrap();
+    wait_for("apex.palette to follow the accent", || {
+        read(&paths.ptyxis_palette()).contains("Cursor=#ed5b00\n")
+    });
+    assert!(!read(&paths.ptyxis_palette()).contains("#3584e4"));
+    wait_for("the folders to follow the accent", || {
+        interface.string(ICON_THEME_KEY) == "Apex-orange"
+    });
+    interface.set_string(ICON_THEME_KEY, "Papirus").unwrap();
+    interface.set_string(ACCENT_KEY, "green").unwrap();
+    wait_for("apex.palette to follow green", || {
+        read(&paths.ptyxis_palette()).contains("Cursor=#3a944a\n")
+    });
+    assert_eq!(
+        interface.string(ICON_THEME_KEY),
+        "Papirus",
+        "a theme the user picked stays"
+    );
+    interface.set_string(ICON_THEME_KEY, "Apex").unwrap();
+    wait_for("back on Apex, the folders follow green", || {
+        interface.string(ICON_THEME_KEY) == "Apex-green"
+    });
+}
+
 /// One test, because the `GLib` main context and the file monitor belong to one thread.
 #[test]
 fn the_agent_on_a_temporary_session() {
@@ -83,6 +110,7 @@ fn the_agent_on_a_temporary_session() {
     );
 
     assert!(read(&paths.ptyxis_palette()).contains("Cursor=#3584e4\n"));
+    assert_eq!(interface.string(ICON_THEME_KEY), "Apex-blue");
 
     wait_for("the offer at start", || agent.offered() == Some(40));
     assert_eq!(calls.borrow().posted, [40]);
@@ -97,11 +125,7 @@ fn the_agent_on_a_temporary_session() {
         "the import is not added twice"
     );
 
-    interface.set_string(ACCENT_KEY, "orange").unwrap();
-    wait_for("apex.palette to follow the accent", || {
-        read(&paths.ptyxis_palette()).contains("Cursor=#ed5b00\n")
-    });
-    assert!(!read(&paths.ptyxis_palette()).contains("#3584e4"));
+    accent_changes(&paths, &interface);
 
     // As dconf losing the write: the value is false again by the time the agent reads it.
     let revert = settings.connect_changed(Some(LAYER_KEY), |settings, key| {
