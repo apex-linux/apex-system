@@ -8,6 +8,7 @@ use gio::prelude::*;
 use crate::failure::{self, Failure};
 use crate::files;
 use crate::guard::{self, Effect, Offer};
+use crate::icons::{self, ICON_THEME_KEY};
 use crate::paths::Paths;
 use crate::updates::{self, Digested, Downloadable, Ready, Staged};
 use crate::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
@@ -159,9 +160,10 @@ impl Agent {
             .is_some_and(|s| s.has_key(ACCENT_KEY));
         if has_accent {
             agent.start_palette();
+            agent.start_folder_theme();
         } else {
             tracing::warn!(
-                "the interface schema has no {ACCENT_KEY}: the terminal caret stays stock"
+                "the interface schema has no {ACCENT_KEY}: the terminal caret and the folders stay stock"
             );
         }
         agent
@@ -196,6 +198,45 @@ impl Agent {
         });
         self.watches.borrow_mut().push((interface.clone(), id));
         self.write_palette();
+    }
+
+    /// Follows the accent, and a switch back to `Apex` in Tweaks.
+    fn start_folder_theme(self: &Rc<Self>) {
+        let Some(interface) = &self.interface else {
+            return;
+        };
+        let has_key = interface
+            .settings_schema()
+            .is_some_and(|schema| schema.has_key(ICON_THEME_KEY));
+        if !has_key {
+            tracing::warn!("the interface schema has no {ICON_THEME_KEY}: the folders stay blue");
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        let id = interface.connect_changed(None, move |_, key| {
+            if (key == ACCENT_KEY || key == ICON_THEME_KEY)
+                && let Some(agent) = weak.upgrade()
+            {
+                agent.write_folder_theme();
+            }
+        });
+        self.watches.borrow_mut().push((interface.clone(), id));
+        self.write_folder_theme();
+    }
+
+    fn write_folder_theme(&self) {
+        let Some(interface) = &self.interface else {
+            return;
+        };
+        let current = interface.string(ICON_THEME_KEY);
+        let accent = interface.string(ACCENT_KEY);
+        let Some(theme) = icons::folder_theme(&current, &accent) else {
+            return;
+        };
+        match interface.set_string(ICON_THEME_KEY, &theme) {
+            Ok(()) => tracing::info!(%theme, "icon-theme follows the accent"),
+            Err(error) => tracing::warn!(%error, "cannot set icon-theme"),
+        }
     }
 
     fn write_palette(&self) {

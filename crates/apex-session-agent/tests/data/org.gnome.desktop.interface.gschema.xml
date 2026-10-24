@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
-<!-- The accent-color key of gsettings-desktop-schemas, which this repository does not hold. -->
+<!-- The keys of gsettings-desktop-schemas the agent reads, which this repository does not hold;
+     icon-theme defaults to apex-desktop's override. -->
 <schemalist>
   <enum id="org.gnome.desktop.GDesktopAccentColor">
     <value nick="blue" value="0"/>
@@ -18,6 +19,10 @@
       <default>'blue'</default>
       <summary>Accent color</summary>
       <description>The preferred accent color for the user interface.</description>
+    </key>
+    <key name="icon-theme" type="s">
+      <default>'Apex'</default>
+      <summary>Icon theme</summary>
     </key>
   </schema>
 </schemalist>

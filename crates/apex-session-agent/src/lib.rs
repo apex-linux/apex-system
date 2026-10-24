@@ -4,6 +4,7 @@ pub mod display;
 pub mod failure;
 pub mod files;
 pub mod guard;
+pub mod icons;
 pub mod notifications;
 pub mod palette;
 pub mod paths;
