@@ -26,6 +26,10 @@ meaning until \"schema\" changes.
   deferred_reason  why the automatic download is waiting, or null
   last_error       message of the last failed update operation, or null
   health_failure   digest of the update that failed its health checks, or null
+  last_fallback    digest of the update that did not start and was set aside, or null
+  automatic_downloads
+                   true or false: whether the daily check downloads what it finds; null
+                   when the update service does not report it
   degraded         components shipped degraded in the running image, e.g. [\"audio\"]
   held             lane families held at their last good build in the running image,
                    e.g. [\"gnome-shell\"]
@@ -80,6 +84,8 @@ pub struct StatusJson {
     pub deferred_reason: Option<String>,
     pub last_error: Option<String>,
     pub health_failure: Option<String>,
+    pub last_fallback: Option<String>,
+    pub automatic_downloads: Option<bool>,
     pub degraded: Vec<String>,
     pub held: Vec<String>,
     pub booted: Option<DeploymentJson>,
@@ -108,6 +114,8 @@ impl StatusJson {
             deferred_reason: non_empty(&status.deferred_reason),
             last_error: non_empty(&status.last_error),
             health_failure: non_empty(&status.health_failure),
+            last_fallback: non_empty(&status.last_fallback),
+            automatic_downloads: status.automatic_downloads,
             degraded: status.booted.degraded.clone().unwrap_or_default(),
             held: status.booted.held.clone().unwrap_or_default(),
             booted: DeploymentJson::from_deployment(&status.booted),
@@ -410,6 +418,11 @@ pub fn render_status(status: &ServiceStatus) -> String {
         format_utc(status.last_check)
     };
     row(&mut out, "Checked", &checked);
+    match status.automatic_downloads {
+        Some(true) => row(&mut out, "Downloads", "automatic"),
+        Some(false) => row(&mut out, "Downloads", "manual: the daily check only checks"),
+        None => {}
+    }
     let degraded = status.booted.degraded.clone().unwrap_or_default();
     if degraded.is_empty() {
         row(&mut out, "Degraded", "none");
@@ -444,6 +457,13 @@ pub fn render_status(status: &ServiceStatus) -> String {
             note.push_str(" Clear this notice with: apexctl update acknowledge");
         }
         notes.push(note);
+    }
+    if !status.last_fallback.is_empty() {
+        notes.push(format!(
+            "Update {} did not start, so the previous version was restored; it will not be \
+             offered again. Clear this notice with: apexctl update acknowledge",
+            status.last_fallback
+        ));
     }
     if !status.last_error.is_empty() {
         notes.push(format!("Last error: {}", status.last_error));
@@ -579,6 +599,8 @@ pub(crate) mod tests {
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
+            last_fallback: String::new(),
+            automatic_downloads: Some(true),
         }
     }
 
@@ -839,6 +861,38 @@ pub(crate) mod tests {
             ),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_fallback_and_manual_downloads_are_shown() {
+        let mut status = staged_status();
+        status.last_fallback = format!("sha256:{}", "e".repeat(64));
+        status.automatic_downloads = Some(false);
+        let text = render_status(&status);
+        assert!(
+            text.contains("\nDownloads  manual: the daily check only checks\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "Update sha256:{} did not start, so the previous version was restored; it will \
+                 not be offered again. Clear this notice with: apexctl update acknowledge\n",
+                "e".repeat(64)
+            )),
+            "{text}"
+        );
+        let json = StatusJson::new(&status);
+        assert_eq!(json.last_fallback, Some(status.last_fallback.clone()));
+        assert_eq!(json.automatic_downloads, Some(false));
+
+        status.automatic_downloads = None;
+        status.last_fallback.clear();
+        let text = render_status(&status);
+        assert!(
+            !text.contains("Downloads") && !text.contains("did not start"),
+            "{text}"
+        );
+        assert_eq!(StatusJson::new(&status).automatic_downloads, None);
     }
 
     #[test]

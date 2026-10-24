@@ -3,6 +3,7 @@ source: crates/apexctl/src/status.rs
 expression: json
 ---
 {
+  "automatic_downloads": true,
   "available": null,
   "booted": {
     "degraded": [
@@ -29,6 +30,7 @@ expression: json
   ],
   "last_check": 1790240400,
   "last_error": null,
+  "last_fallback": null,
   "progress": null,
   "rollback": {
     "degraded": [

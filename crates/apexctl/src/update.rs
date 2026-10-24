@@ -326,17 +326,30 @@ fn changes_error(error: ClientError) -> ClientError {
     }
 }
 
+/// `AcknowledgeHealthFailure` clears both notices: a failed health check and a fallback.
 pub async fn acknowledge<S: UpdateService>(service: &S) -> Result<String, ClientError> {
     let before = service.status().await?;
     let failed = before.health_failure.as_str();
-    if failed.is_empty() {
+    let fell_back = before.last_fallback.as_str();
+    if failed.is_empty() && fell_back.is_empty() {
         return Err(ClientError::NothingToDo(
-            "No update has failed its health checks, so there is nothing to acknowledge."
+            "No update has failed its health checks or failed to start, so there is nothing \
+             to acknowledge."
                 .to_owned(),
         ));
     }
     service.acknowledge_health_failure().await?;
     let mut out = String::new();
+    if !fell_back.is_empty() {
+        let _ = writeln!(
+            out,
+            "Acknowledged: update {} did not start and was set aside. The notice is cleared.",
+            short_digest(fell_back)
+        );
+    }
+    if failed.is_empty() {
+        return Ok(out);
+    }
     let _ = writeln!(
         out,
         "Acknowledged: update {} failed its health checks. The notice is cleared; nothing was \
@@ -480,6 +493,8 @@ mod tests {
             deferred_reason: String::new(),
             last_error: String::new(),
             health_failure: String::new(),
+            last_fallback: String::new(),
+            automatic_downloads: Some(true),
         }
     }
 
@@ -622,6 +637,33 @@ mod tests {
         let out = run(acknowledge(&Fake::new(s))).unwrap();
         assert!(out.contains("sha256:ffffffffffff"), "{out}");
         assert!(!out.contains("rollback"), "{out}");
+    }
+
+    #[test]
+    fn acknowledge_says_when_it_also_clears_a_fallback() {
+        let mut s = status(State::UpToDate);
+        s.last_fallback = digest('e');
+        let fake = Fake::new(s);
+        let out = run(acknowledge(&fake)).unwrap();
+        assert_eq!(fake.calls.borrow().as_slice(), ["acknowledge"]);
+        assert_eq!(
+            out,
+            "Acknowledged: update sha256:eeeeeeeeeeee did not start and was set aside. The \
+             notice is cleared.\n"
+        );
+
+        let mut s = status(State::HealthFailure);
+        s.health_failure = digest('a');
+        s.last_fallback = digest('e');
+        let out = run(acknowledge(&Fake::new(s))).unwrap();
+        assert!(
+            out.starts_with("Acknowledged: update sha256:eeeeeeeeeeee did not start"),
+            "{out}"
+        );
+        assert!(
+            out.contains("update sha256:aaaaaaaaaaaa failed its health checks"),
+            "{out}"
+        );
     }
 
     #[test]

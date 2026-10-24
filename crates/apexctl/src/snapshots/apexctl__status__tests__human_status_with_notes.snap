@@ -11,6 +11,7 @@ Available  45.20260925.118  built 2026-09-24
            sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 Channel    stable (running image)
 Checked    never
+Downloads  automatic
 Degraded   audio: the speaker fix is not available yet
 Held       gnome-shell
 
