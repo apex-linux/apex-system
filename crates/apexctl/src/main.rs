@@ -77,6 +77,9 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
             json,
             root,
         }) => dgpu_idle(&SysRoot::new(root.sysroot), seconds, json),
+        Command::Hw(HwCommand::DgpuD3cold { within, json, root }) => {
+            dgpu_d3cold(&SysRoot::new(root.sysroot), within, json)
+        }
         Command::Hw(HwCommand::Audio(AudioCommand::Snapshot {
             proc_file,
             json,
@@ -189,6 +192,29 @@ fn dgpu_idle(root: &SysRoot, seconds: u64, json: bool) -> anyhow::Result<Exit> {
         emit(&hw::idle::render(&report))?;
     }
     Ok(if report.pass { Exit::Ok } else { Exit::Error })
+}
+
+fn dgpu_d3cold(root: &SysRoot, within: u64, json: bool) -> anyhow::Result<Exit> {
+    let result = hw::idle::wait_for_d3cold(root, within, |_| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("apexctl: {error}");
+            return Ok(Exit::Error);
+        }
+    };
+    if json {
+        emit_json(&result)?;
+    } else {
+        emit(&hw::idle::render_d3cold(&result))?;
+    }
+    Ok(if result.d3cold_after_s.is_some() {
+        Exit::Ok
+    } else {
+        Exit::Error
+    })
 }
 
 fn audio_snapshot(root: &SysRoot, proc_file: Option<&Path>, json: bool) -> anyhow::Result<Exit> {

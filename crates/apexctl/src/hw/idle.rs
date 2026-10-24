@@ -142,6 +142,59 @@ pub fn measure(
     })
 }
 
+pub const DEFAULT_D3COLD_WITHIN_S: u64 = 60;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct D3coldWait {
+    pub within_s: u64,
+    /// `None` when the window ran out first.
+    pub d3cold_after_s: Option<u64>,
+    pub power_state: Option<String>,
+}
+
+/// ACCEPTANCE §4's `d3cold_within`: polls `power_state` once a second, which never wakes
+/// the dGPU.
+pub fn wait_for_d3cold(
+    root: &SysRoot,
+    within_s: u64,
+    mut wait: impl FnMut(u64),
+) -> Result<D3coldWait, String> {
+    let paths = Paths::new();
+    if root.read(&paths.device("vendor")).ok().flatten().is_none() {
+        return Err(format!("no PCI device at {DGPU_PCI}"));
+    }
+    let mut power_state = None;
+    for s in 0..=within_s {
+        power_state = text(root, &paths.device("power_state"));
+        if power_state.as_deref() == Some("D3cold") {
+            return Ok(D3coldWait {
+                within_s,
+                d3cold_after_s: Some(s),
+                power_state,
+            });
+        }
+        if s < within_s {
+            wait(s + 1);
+        }
+    }
+    Ok(D3coldWait {
+        within_s,
+        d3cold_after_s: None,
+        power_state,
+    })
+}
+
+pub fn render_d3cold(result: &D3coldWait) -> String {
+    match result.d3cold_after_s {
+        Some(s) => format!("D3cold after {s} s\n"),
+        None => format!(
+            "FAIL: {} after {} s\n",
+            result.power_state.as_deref().unwrap_or("unknown"),
+            result.within_s
+        ),
+    }
+}
+
 pub fn render(report: &IdleReport) -> String {
     let unknown = |value: &Option<String>| value.clone().unwrap_or_else(|| "unknown".to_owned());
     let mut out = String::new();
@@ -308,6 +361,32 @@ mod tests {
         let fake = FakeDgpu::new();
         let error = measure(&fake.root(), 5, |_| {}).unwrap_err();
         assert!(error.starts_with("no runtime PM accounting"), "{error}");
+    }
+
+    #[test]
+    fn d3cold_is_awaited_by_polling_power_state() {
+        let fake = FakeDgpu::new();
+        fake.device("power_state", "D0");
+        let result = wait_for_d3cold(&fake.root(), 30, |s| {
+            if s == 4 {
+                fake.device("power_state", "D3cold");
+            }
+        })
+        .unwrap();
+        assert_eq!(result.d3cold_after_s, Some(4));
+        assert_eq!(render_d3cold(&result), "D3cold after 4 s\n");
+
+        let at_once = wait_for_d3cold(&fake.root(), 30, |_| panic!("no wait needed")).unwrap();
+        assert_eq!(at_once.d3cold_after_s, Some(0));
+
+        fake.device("power_state", "D0");
+        let mut waits = 0;
+        let timed_out = wait_for_d3cold(&fake.root(), 3, |_| waits += 1).unwrap();
+        assert_eq!(waits, 3);
+        assert_eq!(timed_out.d3cold_after_s, None);
+        assert_eq!(render_d3cold(&timed_out), "FAIL: D0 after 3 s\n");
+        let empty = tempfile::tempdir().unwrap();
+        assert!(wait_for_d3cold(&SysRoot::new(empty.path()), 3, |_| {}).is_err());
     }
 
     #[test]
