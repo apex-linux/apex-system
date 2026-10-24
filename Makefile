@@ -164,6 +164,15 @@ check-data:
 		echo "skip: appstreamcli not found (Fedora: appstream)"; \
 	fi
 	@set -e; \
+	rules=$$(find hardware -path '*/generated/*' -name '*.rules' | sort); \
+	if [ -z "$$rules" ]; then \
+		echo "skip: no generated udev rules"; \
+	elif udevadm verify --help >/dev/null 2>&1; then \
+		echo "udevadm verify $$rules"; udevadm verify $$rules; \
+	else \
+		echo "skip: udevadm verify not found (Fedora: systemd-udev)"; \
+	fi
+	@set -e; \
 	if ! command -v systemd-analyze >/dev/null 2>&1; then \
 		echo "skip: systemd-analyze not found (Fedora: systemd)"; \
 		exit 0; \
