@@ -166,7 +166,11 @@ apexctl build manifest --root DIR --version V --revision R --base B [--degraded 
 
 `profile render` writes into `hardware/<machine>/generated/`:
 `monitors.xml` always; `alc294-<machine>.fw` and `apex-audio.conf` only when audio
-measurements exist. `--check` exits 1 and prints a diff when committed files differ.
+measurements exist; `61-apex-mutter-ignore-dgpu.rules` (for `/usr/lib/udev/rules.d/`)
+only when `[gpu.discrete] drives_displays = false`. That rule tags the DRM card whose PCI
+parent has the profile's dGPU vendor and device ids `mutter-device-ignore`, and matches
+nothing without that device. `--check` exits 1 and prints a diff when committed files
+differ.
 
 ## 8. Polkit table
 
