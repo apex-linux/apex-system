@@ -5,16 +5,27 @@ use std::rc::Rc;
 use gio::prelude::*;
 
 use crate::files;
-use crate::guard::{Effect, Offer};
+use crate::guard::{self, Effect, Offer};
 use crate::paths::Paths;
+use crate::updates::{self, Ready, Staged};
 use crate::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
 
 /// The reply of a `Notify` call: the notification id, or `None` when it failed.
 pub type Posted = Box<dyn FnOnce(Option<u32>)>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    pub icon: &'static str,
+    pub summary: String,
+    pub body: String,
+    /// Pairs of action key and label.
+    pub actions: Vec<(&'static str, &'static str)>,
+}
+
 pub trait Notifier {
-    fn post(&self, posted: Posted);
+    fn post(&self, notification: &Notification, posted: Posted);
     fn withdraw(&self, id: u32);
+    fn open_settings(&self, panel: &str);
 }
 
 /// The Apex schema drives every feature but the palette, which follows the stock accent.
@@ -23,6 +34,7 @@ pub struct Agent {
     interface: Option<gio::Settings>,
     paths: Paths,
     offer: RefCell<Offer>,
+    ready: RefCell<Ready>,
     notifier: Box<dyn Notifier>,
     watches: RefCell<Vec<(gio::Settings, glib::SignalHandlerId)>>,
     monitor: RefCell<Option<gio::FileMonitor>>,
@@ -36,11 +48,13 @@ impl Agent {
         paths: Paths,
         notifier: Box<dyn Notifier>,
     ) -> Rc<Self> {
+        let recorded = files::read_notified(&paths);
         let agent = Rc::new(Self {
             settings,
             interface,
             paths,
             offer: RefCell::new(Offer::new()),
+            ready: RefCell::new(Ready::new(recorded)),
             notifier,
             watches: RefCell::new(Vec::new()),
             monitor: RefCell::new(None),
@@ -178,19 +192,75 @@ impl Agent {
     pub fn notification_server(self: &Rc<Self>, present: bool) {
         let effect = self.offer.borrow_mut().server(present);
         self.run(effect);
+        let effect = self.ready.borrow_mut().server(present);
+        self.run_ready(effect);
     }
 
     pub fn action_invoked(self: &Rc<Self>, id: u32, key: &str) {
         let effect = self.offer.borrow_mut().action(id, key);
         self.run(effect);
+        let effect = self.ready.borrow_mut().action(id, key);
+        self.run_ready(effect);
     }
 
     pub fn notification_closed(&self, id: u32) {
         self.offer.borrow_mut().closed(id);
+        self.ready.borrow_mut().closed(id);
     }
 
     pub fn offered(&self) -> Option<u32> {
         self.offer.borrow().shown()
+    }
+
+    /// What Update1 reports as staged and not applied yet.
+    pub fn staged(self: &Rc<Self>, staged: Option<Staged>) {
+        let effects = self.ready.borrow_mut().staged(staged);
+        self.run_ready(effects);
+    }
+
+    pub fn updates_ready(&self) -> Option<u32> {
+        self.ready.borrow().shown()
+    }
+
+    fn run_ready(self: &Rc<Self>, effects: impl IntoIterator<Item = updates::Effect>) {
+        for effect in effects {
+            match effect {
+                updates::Effect::Post(staged) => {
+                    let weak = Rc::downgrade(self);
+                    let notification = Notification {
+                        icon: updates::ICON,
+                        summary: updates::SUMMARY.to_owned(),
+                        body: staged.body(),
+                        actions: vec![
+                            (updates::DEFAULT_ACTION_KEY, updates::ACTION_LABEL),
+                            (updates::ACTION_KEY, updates::ACTION_LABEL),
+                        ],
+                    };
+                    self.notifier.post(
+                        &notification,
+                        Box::new(move |id| {
+                            let Some(agent) = weak.upgrade() else { return };
+                            match id {
+                                Some(id) => {
+                                    let effects = agent.ready.borrow_mut().posted(id);
+                                    agent.run_ready(effects);
+                                }
+                                None => agent.ready.borrow_mut().post_failed(),
+                            }
+                        }),
+                    );
+                }
+                updates::Effect::Withdraw(id) => self.notifier.withdraw(id),
+                updates::Effect::Record(digest) => {
+                    if let Err(error) = files::write_notified(&self.paths, &digest) {
+                        self.warn_once("cannot record the notified update", &error);
+                    }
+                }
+                updates::Effect::OpenSettings => {
+                    self.notifier.open_settings(updates::SETTINGS_PANEL);
+                }
+            }
+        }
     }
 
     fn run(self: &Rc<Self>, effect: Option<Effect>) {
@@ -198,16 +268,19 @@ impl Agent {
             None => {}
             Some(Effect::Post) => {
                 let weak = Rc::downgrade(self);
-                self.notifier.post(Box::new(move |id| {
-                    let Some(agent) = weak.upgrade() else { return };
-                    match id {
-                        Some(id) => {
-                            let effect = agent.offer.borrow_mut().posted(id);
-                            agent.run(effect);
+                self.notifier.post(
+                    &guard::notification(),
+                    Box::new(move |id| {
+                        let Some(agent) = weak.upgrade() else { return };
+                        match id {
+                            Some(id) => {
+                                let effect = agent.offer.borrow_mut().posted(id);
+                                agent.run(effect);
+                            }
+                            None => agent.offer.borrow_mut().post_failed(),
                         }
-                        None => agent.offer.borrow_mut().post_failed(),
-                    }
-                }));
+                    }),
+                );
             }
             Some(Effect::Withdraw(id)) => self.notifier.withdraw(id),
             Some(Effect::TurnOn) => self.turn_on(),

@@ -1,3 +1,5 @@
+use crate::agent;
+
 pub const ACTION_KEY: &str = "turn-on";
 
 pub const SUMMARY: &str = "The Apex desktop is off";
@@ -6,6 +8,15 @@ pub const BODY: &str = "GNOME Shell failed to start with the Apex desktop, so th
 the stock desktop. Turning it back on takes effect at the next login.";
 
 pub const ACTION_LABEL: &str = "Turn the Apex desktop back on";
+
+pub fn notification() -> agent::Notification {
+    agent::Notification {
+        icon: "",
+        summary: SUMMARY.to_owned(),
+        body: BODY.to_owned(),
+        actions: vec![(ACTION_KEY, ACTION_LABEL)],
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {

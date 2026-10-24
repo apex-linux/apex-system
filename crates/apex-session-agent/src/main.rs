@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use apex_session_agent::agent::Agent;
 use apex_session_agent::notifications::DbusNotifier;
 use apex_session_agent::paths::Paths;
+use apex_session_agent::update1;
 use apex_session_agent::{INTERFACE_SCHEMA_ID, SCHEMA_ID};
 use tracing_subscriber::EnvFilter;
 
@@ -46,6 +47,13 @@ fn main() -> ExitCode {
         Box::new(DbusNotifier::new(connection)),
     );
     let _subscriptions = notifier.subscribe(&agent);
+    let _update1 = match gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE) {
+        Ok(system) => Some(update1::subscribe(&system, &agent)),
+        Err(error) => {
+            tracing::warn!(%error, "cannot connect to the system bus: no \"Updates Ready\"");
+            None
+        }
+    };
     glib::MainLoop::new(None, false).run();
     ExitCode::SUCCESS
 }

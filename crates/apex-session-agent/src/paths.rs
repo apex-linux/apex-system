@@ -67,6 +67,11 @@ impl Paths {
         self.guard_marker.clone()
     }
 
+    /// The digest of the last staged update the agent posted "Updates Ready" for.
+    pub fn updates_notified(&self) -> PathBuf {
+        self.state_home.join("apex/updates-notified")
+    }
+
     pub fn marker_dir(&self) -> PathBuf {
         self.guard_marker
             .parent()
@@ -109,6 +114,7 @@ mod tests {
         );
         assert_eq!(p.gtk_css(), Path::new("/cfg/gtk-4.0/gtk.css"));
         assert_eq!(p.guard_marker(), Path::new("/st/apex/shell-guard-tripped"));
+        assert_eq!(p.updates_notified(), Path::new("/st/apex/updates-notified"));
     }
 
     #[test]
@@ -164,6 +170,7 @@ mod tests {
         assert!(p.is_ours(&p.apex_css()));
         assert!(p.is_ours(&p.guard_marker()));
         assert!(p.is_ours(&p.ptyxis_palette()));
+        assert!(p.is_ours(&p.updates_notified()));
         assert!(!p.is_ours(Path::new("/home/u/Documents/gtk.css")));
         assert!(!p.is_ours(Path::new("/etc/gtk-4.0/gtk.css")));
         assert!(!p.is_ours(Path::new("/home/u/.local/bin/x")));

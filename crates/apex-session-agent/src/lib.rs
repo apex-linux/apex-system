@@ -5,6 +5,8 @@ pub mod guard;
 pub mod notifications;
 pub mod palette;
 pub mod paths;
+pub mod update1;
+pub mod updates;
 
 pub const BINARY_PATH: &str = "/usr/libexec/apex/apex-session-agent";
 

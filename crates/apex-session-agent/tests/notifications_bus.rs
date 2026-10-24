@@ -8,8 +8,6 @@ mod common;
 
 use std::cell::RefCell;
 use std::fs;
-use std::io::{BufRead as _, BufReader};
-use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 
 use apex_session_agent::LAYER_KEY;
@@ -17,7 +15,7 @@ use apex_session_agent::agent::Agent;
 use apex_session_agent::guard::{ACTION_KEY, ACTION_LABEL};
 use apex_session_agent::notifications::DbusNotifier;
 use apex_session_agent::paths::Paths;
-use common::{settings_from_the_compiled_schemas, wait_for};
+use common::{Bus, settings_from_the_compiled_schemas, wait_for};
 use gio::prelude::*;
 
 const NAME: &str = "org.freedesktop.Notifications";
@@ -36,63 +34,6 @@ const SERVER_XML: &str = r#"<node>
     <signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
   </interface>
 </node>"#;
-
-struct Bus {
-    child: Child,
-    address: String,
-    _dir: tempfile::TempDir,
-}
-
-impl Bus {
-    fn start() -> Self {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("bus.conf");
-        fs::write(
-            &config,
-            format!(
-                "<busconfig><listen>unix:dir={}</listen><auth>EXTERNAL</auth>\
-                 <policy context=\"default\"><allow send_destination=\"*\" eavesdrop=\"true\"/>\
-                 <allow eavesdrop=\"true\"/><allow own=\"*\"/></policy></busconfig>",
-                dir.path().display()
-            ),
-        )
-        .unwrap();
-        let mut child = Command::new("dbus-daemon")
-            .arg(format!("--config-file={}", config.display()))
-            .args(["--nofork", "--print-address"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("dbus-daemon (Fedora: dbus-daemon) must be installed");
-        let mut address = String::new();
-        BufReader::new(child.stdout.take().unwrap())
-            .read_line(&mut address)
-            .unwrap();
-        Self {
-            child,
-            address: address.trim().to_owned(),
-            _dir: dir,
-        }
-    }
-
-    fn connect(&self) -> gio::DBusConnection {
-        gio::DBusConnection::for_address_sync(
-            &self.address,
-            gio::DBusConnectionFlags::AUTHENTICATION_CLIENT
-                | gio::DBusConnectionFlags::MESSAGE_BUS_CONNECTION,
-            None,
-            gio::Cancellable::NONE,
-        )
-        .unwrap()
-    }
-}
-
-impl Drop for Bus {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
 
 #[derive(Debug, Default)]
 struct Seen {
