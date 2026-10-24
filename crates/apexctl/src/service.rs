@@ -22,6 +22,10 @@ pub struct ServiceStatus {
     pub deferred_reason: String,
     pub last_error: String,
     pub health_failure: String,
+    /// `""` when none, or when the service predates the property.
+    pub last_fallback: String,
+    /// `None` when the service predates the property.
+    pub automatic_downloads: Option<bool>,
 }
 
 // `impl Future` rather than `async fn`: public async trait methods trip the
@@ -276,6 +280,8 @@ impl UpdateService for DbusService {
             deferred_reason: p.deferred_reason().await?,
             last_error: p.last_error().await?,
             health_failure: p.health_failure().await?,
+            last_fallback: p.last_fallback().await.unwrap_or_default(),
+            automatic_downloads: p.automatic_downloads().await.ok(),
         })
     }
 
