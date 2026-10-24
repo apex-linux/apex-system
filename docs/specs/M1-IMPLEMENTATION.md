@@ -175,7 +175,7 @@ apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"
 apexctl update rollback [--mark-bad]
-apexctl update changes                    package diff booted → staged
+apexctl update changes [--for D]          package diff booted → staged, or booted → the staged or rollback deployment of digest D (GetChangesFor)
 apexctl update acknowledge                clear HealthFailure after reading it
 apexctl update automatic                  (root, used by the timer)
 apexctl update auto on|off|status         SetAutomaticDownloads (polkit update.configure); the timer stays enabled, checks continue

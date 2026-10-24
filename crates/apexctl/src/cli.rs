@@ -102,11 +102,21 @@ pub enum UpdateCommand {
         about = "List the package changes from the running image to the downloaded one",
         long_about = concat!(
             "List the package changes from the running image to the downloaded one.\n\n",
+            "With --for, to the downloaded or the previous version of that digest instead, such ",
+            "as the update that did not start (LastFallback in status --json).\n\n",
             "Fails (exit 1) while the update service does not know the system's state yet, for ",
             "example right after it started; try again in a moment."
         )
     )]
-    Changes,
+    Changes {
+        #[arg(
+            long = "for",
+            value_name = "DIGEST",
+            value_parser = digest_arg,
+            help = "The downloaded or previous version to compare with the running one (sha256:…)"
+        )]
+        for_digest: Option<String>,
+    },
     #[command(
         about = "Clear the notice that an update failed its health checks, after reading it",
         long_about = concat!(
@@ -345,6 +355,7 @@ mod tests {
             &["update", "apply", "--digest", &VALID_DIGEST],
             &["update", "rollback", "--mark-bad"],
             &["update", "changes"],
+            &["update", "changes", "--for", &VALID_DIGEST],
             &["update", "acknowledge"],
             &["update", "automatic"],
             &["update", "auto", "on"],
