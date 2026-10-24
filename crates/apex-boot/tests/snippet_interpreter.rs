@@ -1,5 +1,5 @@
-//! Runs the real `data/08_apex-bootcount.cfg` through an interpreter of just the GRUB script it
-//! uses; anything else panics, so the snippet cannot silently outgrow what is tested here.
+//! Runs the real `data/07_apex-menu.cfg` and `data/08_apex-bootcount.cfg` through an interpreter
+//! of just the GRUB script they use; anything else panics, so neither outgrows these tests.
 
 #![allow(
     clippy::unwrap_used,
@@ -12,7 +12,9 @@ use std::path::Path;
 use std::process::Command;
 
 use apex_boot::grubenv::GrubEnv;
-use apex_boot::snippet::{BootChoice, BootEntry, SNIPPET, grub_boot};
+use apex_boot::snippet::{
+    BootChoice, BootEntry, MENU_SNIPPET, Menu, SNIPPET, grub_boot, grub_menu,
+};
 
 #[derive(Debug)]
 enum Operand {
@@ -194,7 +196,8 @@ fn menu_entry(value: Option<&String>, variable: &str) -> Option<BootEntry> {
     }
 }
 
-fn boot_real_snippet(env: &mut GrubEnv) -> BootChoice {
+/// GRUB's variables after `script`, which starts from what `load_env` read.
+fn run_script(script: &str, env: &mut GrubEnv) -> HashMap<String, String> {
     let mut vars = HashMap::new();
     for (name, value) in env.vars() {
         vars.insert(
@@ -202,12 +205,30 @@ fn boot_real_snippet(env: &mut GrubEnv) -> BootChoice {
             String::from_utf8(value.to_vec()).unwrap(),
         );
     }
-    let script = parse(SNIPPET);
+    let script = parse(script);
     let mut grub = Grub { vars, env };
     grub.run(&script);
+    grub.vars
+}
+
+fn boot_real_snippet(env: &mut GrubEnv) -> BootChoice {
+    let vars = run_script(SNIPPET, env);
     BootChoice {
-        entry: menu_entry(grub.vars.get("default"), "default").unwrap_or(BootEntry::Default),
-        fallback: menu_entry(grub.vars.get("fallback"), "fallback"),
+        entry: menu_entry(vars.get("default"), "default").unwrap_or(BootEntry::Default),
+        fallback: menu_entry(vars.get("fallback"), "fallback"),
+    }
+}
+
+fn real_menu(env: &mut GrubEnv) -> Menu {
+    let vars = run_script(MENU_SNIPPET, env);
+    let style = vars.get("timeout_style").map(String::as_str);
+    Menu {
+        hidden: match style {
+            Some("hidden") => true,
+            Some("menu") => false,
+            other => panic!("timeout_style {other:?}"),
+        },
+        timeout: vars["timeout"].parse().unwrap(),
     }
 }
 
@@ -297,6 +318,46 @@ fn a_foreign_boot_success_does_not_confirm_an_armed_boot() {
 }
 
 #[test]
+fn menu_snippet_matches_the_model_and_writes_nothing() {
+    for ok in [None, Some(""), Some("0"), Some("1"), Some("2"), Some("01")] {
+        let mut env = GrubEnv::new();
+        env.set("menu_show_once_timeout", "30").unwrap();
+        if let Some(ok) = ok {
+            env.set("apex_ok", ok).unwrap();
+        }
+        let before = env.to_bytes();
+        let menu = real_menu(&mut env);
+        assert_eq!(menu, grub_menu(&env), "{ok:?}");
+        assert_eq!(env.to_bytes(), before, "no save_env: {ok:?}");
+        let confirmed = ok == Some("1");
+        assert_eq!(
+            menu,
+            Menu {
+                hidden: confirmed,
+                timeout: if confirmed { 1 } else { 5 }
+            }
+        );
+    }
+}
+
+#[test]
+fn a_green_boot_hides_the_next_menu_and_any_other_boot_shows_it() {
+    let mut env = GrubEnv::new();
+    assert!(!real_menu(&mut env).hidden, "a new install shows the menu");
+    boot_real_snippet(&mut env);
+    env.set("apex_ok", "1").unwrap();
+    assert!(
+        real_menu(&mut env).hidden,
+        "after apex-boot-assess confirmed"
+    );
+    boot_real_snippet(&mut env);
+    assert!(
+        !real_menu(&mut env).hidden,
+        "a boot nobody confirmed, a crash or a red one, shows it again"
+    );
+}
+
+#[test]
 fn grub_accepts_the_syntax() {
     let Some(checker) = ["/usr/bin/grub2-script-check", "/usr/bin/grub-script-check"]
         .into_iter()
@@ -305,11 +366,13 @@ fn grub_accepts_the_syntax() {
         eprintln!("skipped: no grub-script-check installed");
         return;
     };
-    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/08_apex-bootcount.cfg");
-    let output = Command::new(checker).arg(&file).output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    for name in ["data/07_apex-menu.cfg", "data/08_apex-bootcount.cfg"] {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join(name);
+        let output = Command::new(checker).arg(&file).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

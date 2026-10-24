@@ -126,6 +126,7 @@ cargo fetch --locked
 %dir %{_unitdir}/rescue.service.d
 %{_unitdir}/rescue.service.d/50-apex-bootcount.conf
 %{_tmpfilesdir}/apex.conf
+%{_prefix}/lib/bootupd/grub2-static/configs.d/07_apex-menu.cfg
 %{_prefix}/lib/bootupd/grub2-static/configs.d/08_apex-bootcount.cfg
 %{_userunitdir}/apex-session-agent.service
 %{_userpresetdir}/80-apex.preset
