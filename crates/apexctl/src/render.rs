@@ -267,9 +267,8 @@ fn xml_escape(text: &str) -> String {
     out
 }
 
-/// Tags the dGPU's DRM card so mutter and the greeter never open it (mutter's
-/// `src/backends/meta-udev.c`, ADR 0015 §6). It matches the PCI ids, not a card number,
-/// and matches nothing on a machine without that device.
+/// mutter's `meta-udev.c` skips a tagged card (ADR 0015 §6). PCI ids, not a card number,
+/// keep the rule inert on a machine without that device.
 pub fn mutter_ignore_rules(profile: &Profile) -> Option<String> {
     let gpu = &profile.gpu.discrete;
     if gpu.drives_displays {
