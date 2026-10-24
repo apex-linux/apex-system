@@ -74,13 +74,30 @@
       </description>
     </key>
     <key name="disabled-features" type="as">
+      <choices>
+        <choice value="glass"/>
+        <choice value="dock"/>
+        <choice value="spotlight"/>
+        <choice value="lock"/>
+        <choice value="motion"/>
+        <choice value="notifications"/>
+        <choice value="overview"/>
+        <choice value="panel"/>
+        <choice value="quick-settings"/>
+        <choice value="shadows"/>
+        <choice value="indicators"/>
+        <choice value="polkit"/>
+        <choice value="end-session"/>
+      </choices>
       <default>[]</default>
       <summary>Apex features to turn off</summary>
       <description>
         Features of the Apex layer to leave off without a rebuild, by name: glass,
         dock, spotlight, lock, motion, notifications, overview, panel, quick-settings,
-        shadows. A disabled feature's hooks give their stock values. It takes effect
-        at the next login.
+        shadows, indicators, polkit and end-session; any other name is refused, and a
+        list with one is refused whole, so the key keeps its previous value. A
+        disabled feature's hooks give their stock values. It takes effect at the next
+        login.
       </description>
     </key>
     <key name="files-details-pane" type="b">
