@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- The accent-color key of gsettings-desktop-schemas, which this repository does not hold. -->
+<schemalist>
+  <enum id="org.gnome.desktop.GDesktopAccentColor">
+    <value nick="blue" value="0"/>
+    <value nick="teal" value="1"/>
+    <value nick="green" value="2"/>
+    <value nick="yellow" value="3"/>
+    <value nick="orange" value="4"/>
+    <value nick="red" value="5"/>
+    <value nick="pink" value="6"/>
+    <value nick="purple" value="7"/>
+    <value nick="slate" value="8"/>
+  </enum>
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">
+    <key name="accent-color" enum="org.gnome.desktop.GDesktopAccentColor">
+      <default>'blue'</default>
+      <summary>Accent color</summary>
+      <description>The preferred accent color for the user interface.</description>
+    </key>
+  </schema>
+</schemalist>

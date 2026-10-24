@@ -13,8 +13,8 @@ use std::rc::Rc;
 use apex_session_agent::agent::{Agent, Notifier, Posted};
 use apex_session_agent::guard::ACTION_KEY;
 use apex_session_agent::paths::Paths;
-use apex_session_agent::{LAYER_KEY, RADIUS_KEY};
-use common::{read, settings_from_the_compiled_schema, wait_for};
+use apex_session_agent::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
+use common::{read, settings_from_the_compiled_schemas, wait_for};
 use gio::prelude::*;
 
 #[derive(Debug, Default)]
@@ -51,8 +51,12 @@ impl Notifier for FakeNotifier {
 #[test]
 fn the_agent_on_a_temporary_session() {
     let dir = tempfile::tempdir().unwrap();
-    let paths = Paths::new(dir.path().join("config"), dir.path().join("state"));
-    let settings = settings_from_the_compiled_schema(dir.path());
+    let paths = Paths::new(
+        dir.path().join("config"),
+        dir.path().join("data"),
+        dir.path().join("state"),
+    );
+    let (settings, interface) = settings_from_the_compiled_schemas(dir.path());
     settings.set_boolean(LAYER_KEY, false).unwrap();
     fs::create_dir_all(paths.gtk_dir()).unwrap();
     fs::write(paths.gtk_css(), "headerbar { min-height: 30px; }\n").unwrap();
@@ -63,13 +67,20 @@ fn the_agent_on_a_temporary_session() {
     let notifier = FakeNotifier {
         calls: Rc::clone(&calls),
     };
-    let agent = Agent::start(settings.clone(), paths.clone(), Box::new(notifier));
+    let agent = Agent::start(
+        settings.clone(),
+        Some(interface.clone()),
+        paths.clone(),
+        Box::new(notifier),
+    );
 
     assert!(read(&paths.apex_css()).contains(":root { --window-radius: 14px; }"));
     assert_eq!(
         read(&paths.gtk_css()),
         "@import url(\"apex.css\");\nheaderbar { min-height: 30px; }\n"
     );
+
+    assert!(read(&paths.ptyxis_palette()).contains("Cursor=#3584e4\n"));
 
     wait_for("the offer at start", || agent.offered() == Some(40));
     assert_eq!(calls.borrow().posted, [40]);
@@ -83,6 +94,12 @@ fn the_agent_on_a_temporary_session() {
         1,
         "the import is not added twice"
     );
+
+    interface.set_string(ACCENT_KEY, "orange").unwrap();
+    wait_for("apex.palette to follow the accent", || {
+        read(&paths.ptyxis_palette()).contains("Cursor=#ed5b00\n")
+    });
+    assert!(!read(&paths.ptyxis_palette()).contains("#3584e4"));
 
     // As dconf losing the write: the value is false again by the time the agent reads it.
     let revert = settings.connect_changed(Some(LAYER_KEY), |settings, key| {
