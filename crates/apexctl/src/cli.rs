@@ -244,8 +244,8 @@ pub enum BuildCommand {
             long = "degraded",
             value_name = "X",
             help = concat!(
-                "A component shipped degraded (audio, files, fingerprint, nvidia, settings, shell, ",
-                "terminal); ",
+                "A component shipped degraded (adwaita, audio, files, fingerprint, nvidia, settings, ",
+                "shell, terminal); ",
                 "repeat for several"
             )
         )]

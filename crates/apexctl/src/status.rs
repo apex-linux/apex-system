@@ -306,6 +306,7 @@ fn degraded_meaning(component: &str) -> &'static str {
         "nvidia" => "no NVIDIA driver",
         "shell" => "stock GNOME Shell, without the Apex layer and theme",
         "terminal" => "stock Ptyxis, without the Apex terminal",
+        "adwaita" => "stock libadwaita, so apps take a new window radius only at their next start",
         "files" => "stock Files, without the Apex footer, details pane, recent strip and chips",
         "settings" => "stock Settings, without the Apex Desktop panel and Software Updates page",
         _ => "degraded",
@@ -820,13 +821,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn files_and_settings_degraded_images_name_the_stock_apps() {
+    fn stock_app_degraded_images_name_what_they_lack() {
         let mut status = staged_status();
-        status.booted.degraded = Some(vec!["files".to_owned(), "settings".to_owned()]);
+        status.booted.degraded = Some(vec![
+            "adwaita".to_owned(),
+            "files".to_owned(),
+            "settings".to_owned(),
+        ]);
         let text = render_status(&status);
         assert!(
             text.contains(
-                "\nDegraded   files: stock Files, without the Apex footer, details pane, recent \
+                "\nDegraded   adwaita: stock libadwaita, so apps take a new window radius only at \
+                 their next start\n           files: stock Files, without the Apex footer, details pane, recent \
                  strip and chips\n           settings: stock Settings, without the Apex Desktop \
                  panel and Software Updates page\n"
             ),
