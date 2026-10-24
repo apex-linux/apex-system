@@ -1,0 +1,7 @@
+---
+source: crates/apexctl/src/status.rs
+expression: render_hardware_notes(&notes)
+---
+
+Hardware notes
+  nvidia   no NVIDIA driver (degraded)

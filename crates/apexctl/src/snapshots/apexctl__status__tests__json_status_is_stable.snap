@@ -27,6 +27,7 @@ expression: json
   "degraded": [
     "audio"
   ],
+  "hardware": [],
   "health_failure": null,
   "held": [
     "gnome-shell"

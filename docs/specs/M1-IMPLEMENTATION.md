@@ -166,7 +166,7 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
 ## 7. `apexctl` command surface (M1)
 
 ```
-apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, the deployments the daemon kept (pinned) and why; JSON schema 2
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, the deployments the daemon kept (pinned) and why, hardware notes read locally (S1c: the NVIDIA driver against the manifest); JSON schema 2
 apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"
