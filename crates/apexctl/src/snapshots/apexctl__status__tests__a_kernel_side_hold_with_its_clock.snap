@@ -1,0 +1,13 @@
+---
+source: crates/apexctl/src/status.rs
+expression: render_status(&status)
+---
+Apex is up to date.
+
+Booted     45.20261201.140  built 2026-09-24
+           sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+Channel    stable (running image)
+Checked    2026-09-24 09:00 UTC
+Downloads  automatic
+Degraded   none
+Held       kernel-cachyos (kernel side), held since 2026-12-01 00:00 UTC, limit 2026-12-04 00:00 UTC

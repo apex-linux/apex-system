@@ -88,7 +88,9 @@ pub(crate) fn booted() -> Deployment {
             since: 1_790_000_000,
             security: false,
             limit: 0,
+            side: "kmod".to_owned(),
         }]),
+        stock: Some(Vec::new()),
         download_size: None,
     }
 }
@@ -104,6 +106,7 @@ pub(crate) fn staged() -> Deployment {
         degraded: Some(Vec::new()),
         held: Some(Vec::new()),
         holds: Some(Vec::new()),
+        stock: None,
         download_size: Some(1_200_000_000),
     }
 }

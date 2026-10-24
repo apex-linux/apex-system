@@ -7,7 +7,7 @@
 mod common;
 
 use apex_bootc::{BootcCommand, Scripted};
-use apex_dbus::{Hold, State};
+use apex_dbus::{Hold, State, Stock};
 use apex_updated::queue::Op;
 use apex_updated::store::Store as _;
 use common::*;
@@ -69,7 +69,8 @@ async fn holds_and_download_size_are_in_the_dicts() {
     let mut state = fake_state();
     state.running_lane_lock = Some(
         "family gnome-shell held k1 since=2026-10-12T04:10:00Z newer=gnome-shell-51.1-1.fc45 \
-         security=1 reason=r\nfamily nautilus built k2\n"
+         security=1 side=kernel reason=r\nfamily nautilus built k2\n\
+         family kernel-cachyos stock - reason=break-glass: Fedora's kernel\n"
             .to_owned(),
     );
     state.lane_locks.insert(
@@ -91,12 +92,21 @@ async fn holds_and_download_size_are_in_the_dicts() {
             since: 1_791_778_200,
             security: true,
             limit: 0,
+            side: "kernel".to_owned(),
+        }])
+    );
+    assert_eq!(
+        properties.booted.stock,
+        Some(vec![Stock {
+            family: "kernel-cachyos".to_owned(),
+            reason: "break-glass: Fedora's kernel".to_owned(),
         }])
     );
     assert_eq!(
         properties.rollback.holds, None,
         "no lane lock in that image"
     );
+    assert_eq!(properties.rollback.stock, None);
     assert_eq!(properties.booted.download_size, None, "booted has no size");
     assert_eq!(properties.available.download_size, Some(1_200_000_000));
 
@@ -108,6 +118,7 @@ async fn holds_and_download_size_are_in_the_dicts() {
         Some(Vec::new()),
         "a lock, nothing held"
     );
+    assert_eq!(properties.staged.stock, Some(Vec::new()));
     assert_eq!(
         properties.staged.download_size,
         Some(1_200_000_000),

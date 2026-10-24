@@ -7,7 +7,7 @@ mod polkit;
 mod proxy;
 mod values;
 
-pub use deployment::{Deployment, Hold};
+pub use deployment::{Deployment, Hold, Stock};
 pub use error::{ApexError, ErrorKind};
 pub use polkit::{
     POLKIT_APPLY, POLKIT_CHECK, POLKIT_CONFIGURE, POLKIT_DISCARD, POLKIT_DOWNLOAD, POLKIT_ROLLBACK,

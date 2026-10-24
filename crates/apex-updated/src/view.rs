@@ -69,6 +69,7 @@ pub fn deployment_dict(
             held
         }),
         holds: None,
+        stock: None,
         download_size: None,
     }
 }

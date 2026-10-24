@@ -34,6 +34,7 @@ Properties {
             ],
         ),
         holds: None,
+        stock: None,
         download_size: None,
     },
     staged: Deployment {
@@ -46,6 +47,7 @@ Properties {
         degraded: None,
         held: None,
         holds: None,
+        stock: None,
         download_size: None,
     },
     rollback: Deployment {
@@ -77,6 +79,7 @@ Properties {
             ],
         ),
         holds: None,
+        stock: None,
         download_size: None,
     },
     available: Deployment {
@@ -95,6 +98,7 @@ Properties {
         degraded: None,
         held: None,
         holds: None,
+        stock: None,
         download_size: Some(
             0,
         ),

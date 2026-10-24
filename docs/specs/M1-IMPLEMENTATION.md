@@ -152,7 +152,7 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
 ## 7. `apexctl` command surface (M1)
 
 ```
-apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, held; JSON schema 2
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock; JSON schema 2
 apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"

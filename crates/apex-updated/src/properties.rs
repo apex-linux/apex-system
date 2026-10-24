@@ -83,6 +83,11 @@ impl Properties {
             for hold in deployment.holds.iter_mut().flatten() {
                 hold.family = display_text(&hold.family);
                 hold.newer = display_text(&hold.newer);
+                hold.side = display_text(&hold.side);
+            }
+            for stock in deployment.stock.iter_mut().flatten() {
+                stock.family = display_text(&stock.family);
+                stock.reason = display_text(&stock.reason);
             }
         }
         for text in [

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::fmt::Write as _;
 
 use apex_bootc::{APEX_STABLE_REPOSITORY, APEX_TESTING_REPOSITORY};
-use apex_dbus::{Change, ChangeKind, Channel, Deployment, State};
+use apex_dbus::{Change, ChangeKind, Channel, Deployment, Hold, State, Stock};
 use apex_update::{Evr, Version};
 use serde::Serialize;
 
@@ -33,6 +33,7 @@ meaning until \"schema\" changes.
   degraded         components shipped degraded in the running image, e.g. [\"audio\"]
   held             lane families held at their last good build in the running image,
                    e.g. [\"gnome-shell\"]
+  holds, stock     the running image's, as in a deployment below; [] when it reports none
   booted, staged, rollback, available
                    a deployment, or null when there is none
 
@@ -44,7 +45,12 @@ A deployment has these keys, each null when unknown:
   pinned           true or false
   download_only    staged only: true while the update is locked (not used at the next boot)
   degraded         components shipped degraded in that image, e.g. [\"audio\"]
-  held             lane families held at their last good build in that image";
+  held             lane families held at their last good build in that image
+  holds            one object per hold: family; newer (the builds held back), since and
+                   limit (Unix seconds), side (\"kernel\" or \"kmod\" for the kernel pair),
+                   each null when unknown; security, true or false
+  stock            one object per family shipped as Fedora's build: family; reason, null
+                   when the image gives none (the break-glass image says why)";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeploymentJson {
@@ -56,6 +62,54 @@ pub struct DeploymentJson {
     pub download_only: Option<bool>,
     pub degraded: Option<Vec<String>>,
     pub held: Option<Vec<String>>,
+    pub holds: Option<Vec<HoldJson>>,
+    pub stock: Option<Vec<StockJson>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HoldJson {
+    pub family: String,
+    pub newer: Option<String>,
+    pub since: Option<u64>,
+    pub security: bool,
+    pub limit: Option<u64>,
+    pub side: Option<String>,
+}
+
+impl From<&Hold> for HoldJson {
+    fn from(hold: &Hold) -> Self {
+        Self {
+            family: hold.family.clone(),
+            newer: non_empty(&hold.newer),
+            since: (hold.since != 0).then_some(hold.since),
+            security: hold.security,
+            limit: (hold.limit != 0).then_some(hold.limit),
+            side: non_empty(&hold.side),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StockJson {
+    pub family: String,
+    pub reason: Option<String>,
+}
+
+impl From<&Stock> for StockJson {
+    fn from(stock: &Stock) -> Self {
+        Self {
+            family: stock.family.clone(),
+            reason: non_empty(&stock.reason),
+        }
+    }
+}
+
+fn holds_json(holds: Option<&Vec<Hold>>) -> Option<Vec<HoldJson>> {
+    holds.map(|holds| holds.iter().map(HoldJson::from).collect())
+}
+
+fn stock_json(stock: Option<&Vec<Stock>>) -> Option<Vec<StockJson>> {
+    stock.map(|stock| stock.iter().map(StockJson::from).collect())
 }
 
 impl DeploymentJson {
@@ -70,6 +124,8 @@ impl DeploymentJson {
             download_only: d.download_only,
             degraded: d.degraded,
             held: d.held,
+            holds: holds_json(d.holds.as_ref()),
+            stock: stock_json(d.stock.as_ref()),
         })
     }
 }
@@ -88,6 +144,8 @@ pub struct StatusJson {
     pub automatic_downloads: Option<bool>,
     pub degraded: Vec<String>,
     pub held: Vec<String>,
+    pub holds: Vec<HoldJson>,
+    pub stock: Vec<StockJson>,
     pub booted: Option<DeploymentJson>,
     pub staged: Option<DeploymentJson>,
     pub rollback: Option<DeploymentJson>,
@@ -118,6 +176,8 @@ impl StatusJson {
             automatic_downloads: status.automatic_downloads,
             degraded: status.booted.degraded.clone().unwrap_or_default(),
             held: status.booted.held.clone().unwrap_or_default(),
+            holds: holds_json(status.booted.holds.as_ref()).unwrap_or_default(),
+            stock: stock_json(status.booted.stock.as_ref()).unwrap_or_default(),
             booted: DeploymentJson::from_deployment(&status.booted),
             staged: DeploymentJson::from_deployment(&status.staged),
             rollback: DeploymentJson::from_deployment(&status.rollback),
@@ -345,6 +405,54 @@ fn held_list(held: &[String]) -> String {
     }
 }
 
+/// `kernel-cachyos (kmod side), held since 2026-12-01 00:00 UTC, limit 2026-12-04 00:00 UTC`.
+fn hold_text(hold: &Hold) -> String {
+    let mut text = hold.family.clone();
+    if !hold.side.is_empty() {
+        let _ = write!(text, " ({} side)", hold.side);
+    }
+    if hold.since != 0 {
+        let _ = write!(text, ", held since {}", format_utc(hold.since));
+    }
+    if hold.limit != 0 {
+        let _ = write!(text, ", limit {}", format_utc(hold.limit));
+    }
+    text
+}
+
+/// One row per hold the lane lock describes, then any held family it does not; the plain
+/// family list when the service reports no lane lock.
+fn held_rows(deployment: &Deployment) -> Option<Vec<String>> {
+    let holds = deployment.holds.as_deref().unwrap_or_default();
+    if holds.is_empty() {
+        return deployment.held.as_deref().map(|held| vec![held_list(held)]);
+    }
+    let mut rows: Vec<String> = holds.iter().map(hold_text).collect();
+    for family in deployment.held.iter().flatten() {
+        if !holds.iter().any(|hold| &hold.family == family) {
+            rows.push(family.clone());
+        }
+    }
+    Some(rows)
+}
+
+fn stock_rows(deployment: &Deployment) -> Vec<String> {
+    let text = |stock: &Stock| {
+        if stock.reason.is_empty() {
+            stock.family.clone()
+        } else {
+            format!("{}: {}", stock.family, stock.reason)
+        }
+    };
+    deployment.stock.iter().flatten().map(text).collect()
+}
+
+fn labelled_rows(out: &mut String, label: &str, rows: &[String]) {
+    for (i, text) in rows.iter().enumerate() {
+        row(out, if i == 0 { label } else { "" }, text);
+    }
+}
+
 fn row(out: &mut String, label: &str, value: &str) {
     let _ = writeln!(out, "{label:<10} {value}");
 }
@@ -436,9 +544,10 @@ pub fn render_status(status: &ServiceStatus) -> String {
             );
         }
     }
-    if let Some(held) = &status.booted.held {
-        row(&mut out, "Held", &held_list(held));
+    if let Some(rows) = held_rows(&status.booted) {
+        labelled_rows(&mut out, "Held", &rows);
     }
+    labelled_rows(&mut out, "Stock", &stock_rows(&status.booted));
 
     let mut notes = Vec::new();
     if !status.deferred_reason.is_empty() {
@@ -816,6 +925,110 @@ pub(crate) mod tests {
         let text = render_status(&status);
         assert!(text.contains("\nHeld       none\n"), "{text}");
         assert!(text.contains("\n           held: gnome-shell\n"), "{text}");
+    }
+
+    fn kernel_hold(side: &str) -> Hold {
+        Hold {
+            family: "kernel-cachyos".to_owned(),
+            newer: "kernel-cachyos-0:7.3.1-1.cachyos1.fc45.src".to_owned(),
+            since: 1_796_083_200,
+            security: true,
+            limit: 1_796_342_400,
+            side: side.to_owned(),
+        }
+    }
+
+    fn up_to_date_with(booted: Deployment) -> ServiceStatus {
+        ServiceStatus {
+            state: State::UpToDate,
+            booted,
+            staged: Deployment::default(),
+            rollback: Deployment::default(),
+            ..staged_status()
+        }
+    }
+
+    #[test]
+    fn a_kernel_side_hold_with_its_clock() {
+        let status = up_to_date_with(Deployment {
+            degraded: Some(Vec::new()),
+            held: Some(vec!["kernel-cachyos".to_owned()]),
+            holds: Some(vec![kernel_hold("kernel")]),
+            stock: Some(Vec::new()),
+            ..deployment("45.20261201.140", 'a')
+        });
+        insta::assert_snapshot!(render_status(&status));
+    }
+
+    #[test]
+    fn a_kmod_side_hold_next_to_a_lane_family() {
+        let gnome_shell = Hold {
+            family: "gnome-shell".to_owned(),
+            newer: "gnome-shell-51.1-1.fc45".to_owned(),
+            since: 1_796_083_200,
+            security: false,
+            limit: 0,
+            side: String::new(),
+        };
+        let status = up_to_date_with(Deployment {
+            degraded: Some(Vec::new()),
+            held: Some(vec!["gnome-shell".to_owned(), "kernel-cachyos".to_owned()]),
+            holds: Some(vec![gnome_shell, kernel_hold("kmod")]),
+            stock: Some(Vec::new()),
+            ..deployment("45.20261201.140", 'a')
+        });
+        let text = render_status(&status);
+        assert!(
+            text.contains(
+                "kernel-cachyos (kmod side), held since 2026-12-01 00:00 UTC, \
+                               limit 2026-12-04 00:00 UTC"
+            ),
+            "{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn degraded_nvidia_reads_no_nvidia_driver() {
+        let status = up_to_date_with(Deployment {
+            degraded: Some(vec!["nvidia".to_owned()]),
+            held: Some(Vec::new()),
+            holds: Some(Vec::new()),
+            stock: Some(Vec::new()),
+            ..deployment("45.20261205.144", 'a')
+        });
+        let text = render_status(&status);
+        assert!(
+            text.contains("\nDegraded   nvidia: no NVIDIA driver\n"),
+            "{text}"
+        );
+        insta::assert_snapshot!(text);
+    }
+
+    #[test]
+    fn the_break_glass_image_says_why() {
+        let reason =
+            "break-glass: just image KERNEL=fedora, Fedora's kernel without the NVIDIA set";
+        let status = up_to_date_with(Deployment {
+            degraded: Some(vec!["nvidia".to_owned()]),
+            held: Some(Vec::new()),
+            holds: Some(Vec::new()),
+            stock: Some(vec![Stock {
+                family: "kernel-cachyos".to_owned(),
+                reason: reason.to_owned(),
+            }]),
+            ..deployment("45.20261206.145", 'a')
+        });
+        let text = render_status(&status);
+        assert!(
+            text.contains(&format!("\nStock      kernel-cachyos: {reason}\n")),
+            "{text}"
+        );
+        insta::assert_snapshot!(text);
+        insta::assert_json_snapshot!(
+            "the_break_glass_image_json",
+            serde_json::to_value(StatusJson::new(&status)).unwrap()
+        );
     }
 
     #[test]

@@ -1,0 +1,49 @@
+---
+source: crates/apexctl/src/status.rs
+expression: "serde_json::to_value(StatusJson::new(&status)).unwrap()"
+---
+{
+  "automatic_downloads": true,
+  "available": null,
+  "booted": {
+    "degraded": [
+      "nvidia"
+    ],
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "download_only": null,
+    "held": [],
+    "holds": [],
+    "image": "ghcr.io/apex-linux/apex:45",
+    "pinned": false,
+    "stock": [
+      {
+        "family": "kernel-cachyos",
+        "reason": "break-glass: just image KERNEL=fedora, Fedora's kernel without the NVIDIA set"
+      }
+    ],
+    "timestamp": 1790208000,
+    "version": "45.20261206.145"
+  },
+  "channel": "stable",
+  "deferred_reason": null,
+  "degraded": [
+    "nvidia"
+  ],
+  "health_failure": null,
+  "held": [],
+  "holds": [],
+  "last_check": 1790240400,
+  "last_error": null,
+  "last_fallback": null,
+  "progress": null,
+  "rollback": null,
+  "schema": 2,
+  "staged": null,
+  "state": "up-to-date",
+  "stock": [
+    {
+      "family": "kernel-cachyos",
+      "reason": "break-glass: just image KERNEL=fedora, Fedora's kernel without the NVIDIA set"
+    }
+  ]
+}
