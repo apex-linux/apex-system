@@ -183,7 +183,12 @@ apexctl hw report [--json]                read-only: audio init_verbs, charge th
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
 apexctl hw dgpu-idle [--seconds N] [--json]  dGPU runtime-suspended share, wakes per hour and battery mW over an idle window, from cached sysfs only (ACCEPTANCE 4.2, 4.9; N10); exits 1 below 95.0 %
 apexctl hw dgpu-d3cold [--within S] [--json]  wait until the dGPU's power_state reads D3cold, polling it once a second; exits 1 if it does not within S s (default 60)
-apexctl boot repair-grub [--check] [--sysroot DIR]  root only, no daemon: rebuild /boot/grub2/grub.cfg byte for byte as bootupd's grubconfigs::install does, from /usr/lib/bootupd/grub2-static (with --sysroot, of the default BLS entry's deployment); keeps grub.cfg.apex-bak, never touches grubenv, bootuuid.cfg or the ESP; refuses a result without the 08 marker; --check exits 1 on drift, a no-op exits 3
+apexctl boot repair-grub [--check] [--sysroot DIR]  root only, no daemon: rebuild /boot/grub2/grub.cfg
+                                          byte for byte as bootupd's grubconfigs::install does, from
+                                          /usr/lib/bootupd/grub2-static (--sysroot: the default BLS entry's
+                                          deployment); keeps grub.cfg.apex-bak, never touches grubenv,
+                                          bootuuid.cfg or the ESP; refuses a result without the 08 marker;
+                                          --check exits 1 on drift, a no-op exits 3
 apexctl profile render [--profile P] [--out DIR] [--check]
 apexctl build manifest --root DIR --version V --revision R --base B [--degraded X]... [--held FAMILY]...
 ```
