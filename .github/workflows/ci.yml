@@ -64,6 +64,9 @@ jobs:
 
       - name: cargo test
         # The bus tests must run: apexctl's skip under APEXCTL_TEST_SKIP_BUS, apex-boot's without dbus-daemon.
+        # The container runs as root: repair-grub's root tests fail rather than return without it.
+        env:
+          APEXCTL_TEST_REQUIRE_ROOT: "1"
         run: |
           unset APEXCTL_TEST_SKIP_BUS
           test -x /usr/bin/dbus-daemon || { echo "::error::/usr/bin/dbus-daemon is missing: the D-Bus tests would not run"; exit 1; }

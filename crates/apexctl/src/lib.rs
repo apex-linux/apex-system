@@ -1,3 +1,4 @@
+pub mod boot;
 pub mod cli;
 pub mod codec;
 pub mod exit;

@@ -42,6 +42,8 @@ pub enum Command {
     Update(UpdateCommand),
     #[command(subcommand, about = "Read-only hardware diagnostics for this laptop")]
     Hw(HwCommand),
+    #[command(subcommand, about = "Repair the boot loader's files (root only)")]
+    Boot(BootCommand),
     #[command(
         subcommand,
         about = "Render the files derived from the hardware profile"
@@ -161,6 +163,43 @@ pub enum AutoSetting {
 /// which can take 30 s before a typo would be reported.
 fn digest_arg(text: &str) -> Result<String, apex_bootc::DigestError> {
     apex_bootc::Digest::parse(text).map(|digest| digest.as_str().to_owned())
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BootCommand {
+    #[command(
+        about = "Rebuild /boot/grub2/grub.cfg from the image's static GRUB configs (root only)",
+        long_about = concat!(
+            "Rebuild /boot/grub2/grub.cfg from the image's static GRUB configs (root only).\n\n",
+            "The file is rebuilt byte for byte as bootupd writes it at install: its header, ",
+            "grub-static-pre.cfg, then every configs.d/*.cfg in name order, from ",
+            "/usr/lib/bootupd/grub2-static of the running image. The old file is kept as ",
+            "grub.cfg.apex-bak; grubenv, bootuuid.cfg and the EFI partition are never touched. ",
+            "Refuses, changing nothing, when the rebuilt file would lack the Apex boot counting ",
+            "snippet. Exits 3 when grub.cfg already matches."
+        )
+    )]
+    RepairGrub {
+        #[arg(
+            long,
+            help = concat!(
+                "Change nothing; exit 1 and print a diff when grub.cfg differs from the ",
+                "rebuilt file"
+            )
+        )]
+        check: bool,
+        #[arg(
+            long,
+            value_name = "DIR",
+            help = concat!(
+                "Repair the system mounted at DIR, its boot partition on DIR/boot (from a live ",
+                "USB); the static configs come from the deployment its default boot entry starts"
+            )
+        )]
+        sysroot: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        boot_remounted: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -362,6 +401,14 @@ mod tests {
             &["update", "auto", "off"],
             &["update", "auto", "status"],
             &["hw", "report", "--json"],
+            &["boot", "repair-grub"],
+            &[
+                "boot",
+                "repair-grub",
+                "--check",
+                "--sysroot",
+                "/mnt/sysroot",
+            ],
             &["hw", "dgpu-idle"],
             &["hw", "dgpu-idle", "--seconds", "3600", "--json"],
             &["hw", "dgpu-d3cold", "--within", "30"],
