@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
+use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -228,23 +229,13 @@ fn is_root() -> bool {
 /// CI sets it, so the root half fails instead of passing unseen when the job loses root.
 const REQUIRE_ROOT: &str = "APEXCTL_TEST_REQUIRE_ROOT";
 
-const NOBODY: &str = "65534";
+const NOBODY: u32 = 65534;
 
 fn repair_command(root: &Path, extra: &[&str], as_nobody: bool) -> Command {
-    let exe = env!("CARGO_BIN_EXE_apexctl");
-    let mut command = if as_nobody {
-        let mut setpriv = Command::new("/usr/bin/setpriv");
-        setpriv.args([
-            &format!("--reuid={NOBODY}"),
-            &format!("--regid={NOBODY}"),
-            "--clear-groups",
-            "--",
-            exe,
-        ]);
-        setpriv
-    } else {
-        Command::new(exe)
-    };
+    let mut command = Command::new(env!("CARGO_BIN_EXE_apexctl"));
+    if as_nobody {
+        command.uid(NOBODY).gid(NOBODY);
+    }
     command
         .args(["boot", "repair-grub", "--sysroot"])
         .arg(root)
@@ -273,7 +264,8 @@ fn scratch_system() -> (tempfile::TempDir, PathBuf) {
     (dir, grub_cfg)
 }
 
-/// Run as root, it drops to nobody, so the refusal is tested in CI's root container too.
+/// Run as root, it drops to nobody (std clears the supplementary groups too), so the
+/// refusal is tested in CI's root container as well.
 #[test]
 fn the_command_refuses_without_root() {
     let (dir, grub_cfg) = scratch_system();
