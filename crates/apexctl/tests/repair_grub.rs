@@ -225,13 +225,35 @@ fn is_root() -> bool {
     boot::effective_uid(&status) == Some(0)
 }
 
-fn repair(root: &Path, extra: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_apexctl"))
+/// CI sets it, so the root half fails instead of passing unseen when the job loses root.
+const REQUIRE_ROOT: &str = "APEXCTL_TEST_REQUIRE_ROOT";
+
+const NOBODY: &str = "65534";
+
+fn repair_command(root: &Path, extra: &[&str], as_nobody: bool) -> Command {
+    let exe = env!("CARGO_BIN_EXE_apexctl");
+    let mut command = if as_nobody {
+        let mut setpriv = Command::new("/usr/bin/setpriv");
+        setpriv.args([
+            &format!("--reuid={NOBODY}"),
+            &format!("--regid={NOBODY}"),
+            "--clear-groups",
+            "--",
+            exe,
+        ]);
+        setpriv
+    } else {
+        Command::new(exe)
+    };
+    command
         .args(["boot", "repair-grub", "--sysroot"])
         .arg(root)
-        .args(extra)
-        .output()
-        .unwrap();
+        .args(extra);
+    command
+}
+
+fn run(mut command: Command) -> (i32, String, String) {
+    let output = command.output().unwrap();
     (
         output.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -239,20 +261,38 @@ fn repair(root: &Path, extra: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// The command needs root, so which half runs depends on the user running the tests.
-#[test]
-fn the_command_checks_then_repairs_as_root_and_refuses_otherwise() {
+fn repair(root: &Path, extra: &[&str]) -> (i32, String, String) {
+    run(repair_command(root, extra, false))
+}
+
+fn scratch_system() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     sysroot(dir.path());
     let grub_cfg = dir.path().join("boot/grub2/grub.cfg");
     fs::write(&grub_cfg, "set default=0\n").unwrap();
+    (dir, grub_cfg)
+}
+
+/// Run as root, it drops to nobody, so the refusal is tested in CI's root container too.
+#[test]
+fn the_command_refuses_without_root() {
+    let (dir, grub_cfg) = scratch_system();
+    let (code, _, stderr) = run(repair_command(dir.path(), &[], is_root()));
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("sudo apexctl boot repair-grub"), "{stderr}");
+    assert_eq!(fs::read_to_string(&grub_cfg).unwrap(), "set default=0\n");
+}
+
+#[test]
+fn the_command_checks_then_repairs_as_root() {
     if !is_root() {
-        let (code, _, stderr) = repair(dir.path(), &[]);
-        assert_eq!(code, 1, "{stderr}");
-        assert!(stderr.contains("sudo apexctl boot repair-grub"), "{stderr}");
-        assert_eq!(fs::read_to_string(&grub_cfg).unwrap(), "set default=0\n");
+        assert!(
+            std::env::var_os(REQUIRE_ROOT).is_none(),
+            "{REQUIRE_ROOT} is set, but the tests do not run as root"
+        );
         return;
     }
+    let (dir, grub_cfg) = scratch_system();
     let (code, _, stderr) = repair(dir.path(), &["--check"]);
     assert_eq!(code, 1, "drift: {stderr}");
     assert!(stderr.contains("+# apex-bootcount v1"), "{stderr}");
