@@ -19,7 +19,9 @@ use tokio::sync::OnceCell;
 use zbus::OwnedObjectPath;
 use zbus::proxy::CacheProperties;
 
-use crate::ports::{BootedImage, Clock, HostStatus, Rebooter, SessionInfo, Sessions, Updater};
+use crate::ports::{
+    BootedImage, Clock, HostStatus, Rebooter, SessionInfo, Sessions, StatusError, Updater,
+};
 
 /// A failed connection is not cached: the session wait polls for two minutes, and the bus
 /// may come back.
@@ -227,16 +229,23 @@ impl BootcStatus {
 }
 
 impl HostStatus for BootcStatus {
-    fn booted(&self) -> Result<BootedImage, String> {
-        self.handle
+    fn status(&self) -> Result<BootedImage, StatusError> {
+        let status = self
+            .handle
             .block_on(bounded("bootc status", BOOTC_STATUS_BOUND, async {
                 let bootc = Bootc::new(TokioRunner::new());
-                let host = bootc
-                    .status(&CancelToken::new())
-                    .await
-                    .map_err(|err| err.to_string())?;
-                Ok(booted_image(&host))
+                Ok(bootc.status(&CancelToken::new()).await)
             }))
+            .map_err(|message| StatusError {
+                message,
+                transient: true,
+            })?;
+        status
+            .map(|host| booted_image(&host))
+            .map_err(|err| StatusError {
+                transient: err.is_transient(),
+                message: err.to_string(),
+            })
     }
 }
 
