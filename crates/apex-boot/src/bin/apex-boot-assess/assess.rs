@@ -1,16 +1,24 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 use apex_boot::checks::force_red::{self, HookFile};
+use apex_boot::checks::names;
 use apex_boot::grubenv::{self, ReadError};
 use apex_boot::{
-    AssessInput, BootVars, BootVarsError, Check, CheckResult, DefaultDeployment, Digest,
-    GrubEnvWriter, HealthFailure, SESSION_WAIT, Step, apply_ops, reconcile_fallback, run_checks,
+    AssessInput, BOOTC_STATUS_BOUND, BootVars, BootVarsError, CHECKS_DEADLINE, Check, CheckResult,
+    DefaultDeployment, Digest, GrubEnvWriter, HealthFailure, SESSION_WAIT, Step, apply_ops,
+    reconcile_fallback, run_checks,
 };
 
-use crate::ports::{BootedImage, Clock, FailureStore, HostStatus, Rebooter, Sessions, Updater};
+use crate::ports::{
+    BootedImage, Clock, FailureStore, HostStatus, Rebooter, Sessions, StatusError, Updater,
+};
 use crate::{ping, reported, session};
+
+/// A lock held by another bootc fails at once; this keeps the retries from spinning on it.
+pub(crate) const BOOTC_RETRY_PAUSE: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 pub(crate) struct Ports {
@@ -117,13 +125,20 @@ pub(crate) fn gather(
     batch.extend(reported_checks);
     let host = &ports.host;
     let (mut results, booted) = thread::scope(|scope| {
-        let status = scope.spawn(|| host.booted());
+        let status = scope.spawn(|| host.status());
         let results = run_checks(batch);
-        let booted = status
-            .join()
-            .unwrap_or_else(|_| Err("bootc status panicked".to_owned()));
+        let booted = status.join().unwrap_or_else(|_| {
+            Err(StatusError {
+                message: "bootc status panicked".to_owned(),
+                transient: false,
+            })
+        });
         (results, booted)
     });
+    // The session wait's and the checks' share of the budget: retries never lengthen it.
+    let deadline = start + CHECKS_DEADLINE;
+    let booted = retry_bootc(&**host, &*ports.clock, booted, deadline);
+    retry_ping(&mut results, &*ports.updater, &*ports.clock, deadline);
     let mut reported = results.split_off(required_count);
     reported.push(reported::image_source(&booted, &fedora_major));
     let mut required = results;
@@ -158,6 +173,69 @@ pub(crate) fn gather(
         reported,
         booted_source,
     })
+}
+
+/// On a starved boot one `bootc status` can miss its bound, leaving the digest and entry 0
+/// unknown, and an armed failing boot then never falls back by itself. Each try keeps its bound.
+pub(crate) fn retry_bootc(
+    host: &dyn HostStatus,
+    clock: &dyn Clock,
+    first: Result<BootedImage, StatusError>,
+    deadline: Instant,
+) -> Result<BootedImage, String> {
+    let mut status = first;
+    let mut attempts = 1u32;
+    while let Err(err) = &status {
+        if !err.transient {
+            break;
+        }
+        if clock.now() + BOOTC_RETRY_PAUSE + BOOTC_STATUS_BOUND > deadline {
+            if attempts > 1 {
+                tracing::warn!(
+                    attempts,
+                    "bootc status failed; no time is left for another try"
+                );
+            }
+            break;
+        }
+        tracing::warn!(
+            attempts,
+            "bootc status failed ({}); trying again in {} s",
+            err.message,
+            BOOTC_RETRY_PAUSE.as_secs()
+        );
+        clock.sleep(BOOTC_RETRY_PAUSE);
+        attempts += 1;
+        status = host.status();
+    }
+    if status.is_ok() && attempts > 1 {
+        tracing::info!(attempts, "bootc status answered");
+    }
+    status.map_err(|err| err.message)
+}
+
+/// apex-updated still starting on a starved boot misses the first Ping's budget; a second one
+/// fits when the session came up early.
+fn retry_ping(
+    results: &mut [CheckResult],
+    updater: &dyn Updater,
+    clock: &dyn Clock,
+    deadline: Instant,
+) {
+    let Some(result) = results
+        .iter_mut()
+        .find(|r| r.name == names::UPDATER_PING && !r.outcome.is_pass())
+    else {
+        return;
+    };
+    if clock.now() + ping::PING_BUDGET > deadline {
+        return;
+    }
+    tracing::warn!("check {}: {}; pinging again", result.name, result.outcome);
+    *result = match ping::ping_until_answered(updater, clock) {
+        Ok(()) => CheckResult::pass(names::UPDATER_PING),
+        Err(err) => CheckResult::fail(names::UPDATER_PING, err),
+    };
 }
 
 /// Fails safe: a reboot must never end a user's session. If logind is really broken nobody

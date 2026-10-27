@@ -89,12 +89,14 @@ const SLOWEST_DECISION_STEPS_SECS: u64 = {
     max
 };
 
+pub const CHECKS_DEADLINE: Duration = Duration::from_secs(
+    SESSION_WAIT.as_secs() + LOGIND_TIMEOUT.as_secs() + max_secs(CHECK_TIMEOUT, BOOTC_STATUS_BOUND),
+);
+
 /// Counts every bounded wait of the binary. The unit's `TimeoutStartSec=` must cover it, or
 /// systemd could kill the assessment between its grubenv write and its report.
 pub const ASSESS_TIME_BUDGET: Duration = Duration::from_secs(
-    SESSION_WAIT.as_secs()
-        + LOGIND_TIMEOUT.as_secs()
-        + max_secs(CHECK_TIMEOUT, BOOTC_STATUS_BOUND)
+    CHECKS_DEADLINE.as_secs()
         + DAEMON_QUERY_TIMEOUT.as_secs()
         + LOGIND_TIMEOUT.as_secs()
         + SLOWEST_DECISION_STEPS_SECS,
@@ -108,6 +110,7 @@ mod tests {
     fn the_budget_is_305_seconds() {
         assert_eq!(EDITENV_BOUND_SECS, 35);
         assert_eq!(SLOWEST_DECISION_STEPS_SECS, 135);
+        assert_eq!(CHECKS_DEADLINE, Duration::from_secs(160));
         assert_eq!(ASSESS_TIME_BUDGET, Duration::from_secs(305));
         assert!(BOOTC_STATUS_BOUND > CHECK_TIMEOUT);
     }

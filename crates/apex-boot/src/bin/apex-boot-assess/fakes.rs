@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 use apex_boot::{Digest, HealthFailure, Verdict};
 
 use crate::ports::{
-    BootedImage, Clock, FailureStore, HostStatus, Rebooter, SessionInfo, Sessions, Updater,
+    BootedImage, Clock, FailureStore, HostStatus, Rebooter, SessionInfo, Sessions, StatusError,
+    Updater,
 };
 
 pub(crate) const UNIX_START: u64 = 1_790_000_000;
@@ -248,6 +249,9 @@ impl Updater for FakeUpdater {
 #[derive(Debug)]
 pub(crate) struct FakeHost {
     answer: Mutex<Result<BootedImage, String>>,
+    /// Calls that fail before `answer` is given, each taking its time on the clock.
+    failures_left: Mutex<u32>,
+    failure: Option<(String, Duration, Arc<FakeClock>)>,
     calls: AtomicUsize,
 }
 
@@ -255,8 +259,22 @@ impl FakeHost {
     pub(crate) fn new(answer: Result<BootedImage, String>) -> Self {
         Self {
             answer: Mutex::new(answer),
+            failures_left: Mutex::new(0),
+            failure: None,
             calls: AtomicUsize::new(0),
         }
+    }
+
+    pub(crate) fn failing_first(
+        mut self,
+        times: u32,
+        error: &str,
+        takes: Duration,
+        clock: &Arc<FakeClock>,
+    ) -> Self {
+        self.failures_left = Mutex::new(times);
+        self.failure = Some((error.to_owned(), takes, Arc::clone(clock)));
+        self
     }
 
     pub(crate) fn booted(digest: &Digest) -> Self {
@@ -289,13 +307,32 @@ pub(crate) fn booted_image(booted: &Digest, first: Option<&Digest>) -> BootedIma
     }
 }
 
+/// The answer's own error is final; `failing_first`'s are transient.
 impl HostStatus for FakeHost {
-    fn booted(&self) -> Result<BootedImage, String> {
+    fn status(&self) -> Result<BootedImage, StatusError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some((error, takes, clock)) = &self.failure {
+            let mut left = self
+                .failures_left
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if *left > 0 {
+                *left -= 1;
+                clock.advance(*takes);
+                return Err(StatusError {
+                    message: error.clone(),
+                    transient: true,
+                });
+            }
+        }
         self.answer
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+            .map_err(|message| StatusError {
+                message,
+                transient: false,
+            })
     }
 }
 

@@ -42,6 +42,7 @@ fn logged_in(_: Duration) -> Result<Vec<SessionInfo>, String> {
 }
 
 struct Scenario {
+    clock: Arc<FakeClock>,
     grubenv: Vec<(&'static str, String)>,
     host: Arc<FakeHost>,
     sessions: Script,
@@ -82,6 +83,7 @@ impl Scenario {
 
     fn with_grubenv(grubenv: Vec<(&'static str, String)>) -> Self {
         Self {
+            clock: Arc::new(FakeClock::new()),
             grubenv,
             host: Arc::new(FakeHost::booted(&target())),
             sessions: nobody,
@@ -138,7 +140,7 @@ impl Scenario {
             write_private(&force_red, content);
         }
 
-        let clock = Arc::new(FakeClock::new());
+        let clock = self.clock;
         let sessions = Arc::new(FakeSessions::new(Arc::clone(&clock), self.sessions));
         let updater = Arc::new(self.updater);
         let ports = Ports {
@@ -633,6 +635,137 @@ fn the_hook_changes_nothing_when_the_booted_digest_is_unknown() {
         run.decision.failed_checks(),
         [names::BOOTED_DIGEST.to_owned()]
     );
+}
+
+/// G4 run 7: the starved boot's one `bootc status` timed out with minutes of the budget left.
+#[test]
+fn a_bootc_status_that_answers_on_its_second_try_lets_the_armed_red_boot_fall_back() {
+    let mut scenario = Scenario::armed(1).force_red(target().as_str());
+    let timeout = BOOTC_STATUS_BOUND;
+    scenario.host = Arc::new(FakeHost::booted(&target()).failing_first(
+        1,
+        "`bootc status` timed out after 30 s",
+        timeout,
+        &scenario.clock,
+    ));
+    let run = scenario.run();
+    assert_eq!(run.host.calls(), 2);
+    assert_eq!(run.gathered.booted_source, BootedSource::Bootc);
+    assert_eq!(run.gathered.input.booted_digest, Some(target()));
+    assert_eq!(
+        run.gathered.input.default_deployment,
+        DefaultDeployment::Booted
+    );
+    assert!(run.gathered.reported.iter().all(|c| c.outcome.is_pass()));
+    assert!(matches!(
+        run.decision,
+        Decision::RedArmedNoSession { reboot: true, .. }
+    ));
+    assert_eq!(run.decision.failed_checks(), [names::FORCED_RED.to_owned()]);
+    assert_eq!(run.rebooter.reboots(), 1);
+    assert_eq!(run.clock.elapsed(), timeout + BOOTC_RETRY_PAUSE);
+}
+
+#[test]
+fn a_bootc_status_that_never_answers_is_given_up_inside_the_budget_without_a_reboot() {
+    let mut scenario = Scenario::armed(1).force_red(target().as_str());
+    scenario.host = Arc::new(FakeHost::booted(&target()).failing_first(
+        u32::MAX,
+        "`bootc status` timed out after 30 s",
+        BOOTC_STATUS_BOUND,
+        &scenario.clock,
+    ));
+    let run = scenario.run();
+    assert_eq!(run.host.calls(), 4, "at 0, 40, 80 and 120 s");
+    assert!(
+        run.clock.elapsed() <= CHECKS_DEADLINE,
+        "{:?}",
+        run.clock.elapsed()
+    );
+    assert_eq!(run.gathered.input.booted_digest, None);
+    assert_eq!(
+        run.gathered.input.default_deployment,
+        DefaultDeployment::Unknown
+    );
+    assert!(matches!(
+        run.decision,
+        Decision::RedArmedNoSession { reboot: false, .. }
+    ));
+    assert_eq!(
+        run.decision.failed_checks(),
+        [names::BOOTED_DIGEST.to_owned()]
+    );
+    assert_eq!(run.rebooter.reboots(), 0);
+}
+
+#[test]
+fn a_bootc_failure_no_retry_can_fix_is_not_retried() {
+    let mut scenario = Scenario::armed(1);
+    scenario.host = Arc::new(FakeHost::new(Err(
+        "could not run /usr/bin/bootc: No such file or directory".to_owned(),
+    )));
+    let run = scenario.run();
+    assert_eq!(run.host.calls(), 1);
+    assert_eq!(run.clock.elapsed(), Duration::ZERO);
+    assert_eq!(run.gathered.booted_source, BootedSource::Unknown);
+}
+
+#[test]
+fn a_daemon_still_starting_at_the_first_ping_is_pinged_again() {
+    let mut scenario = Scenario::armed(1);
+    scenario.updater =
+        FakeUpdater::healthy().ping_failing_times(1, Duration::from_secs(24), &scenario.clock);
+    let run = scenario.run();
+    assert_eq!(run.updater.pings(), 2);
+    assert!(
+        run.gathered
+            .input
+            .required_checks
+            .iter()
+            .all(|c| c.outcome.is_pass())
+    );
+    assert!(matches!(run.decision, Decision::Green { .. }));
+}
+
+#[test]
+fn a_dead_daemon_still_fails_the_ping_check_after_its_second_budget() {
+    let mut scenario = Scenario::armed(1);
+    scenario.updater = FakeUpdater::healthy().ping_failing_times(
+        u32::MAX,
+        Duration::from_secs(24),
+        &scenario.clock,
+    );
+    let run = scenario.run();
+    assert_eq!(run.updater.pings(), 2);
+    let ping_check = &run.gathered.input.required_checks[2];
+    assert_eq!(ping_check.name, names::UPDATER_PING);
+    assert!(!ping_check.outcome.is_pass());
+    assert!(run.clock.elapsed() <= CHECKS_DEADLINE);
+    assert!(matches!(
+        run.decision,
+        Decision::RedArmedNoSession { reboot: true, .. }
+    ));
+}
+
+#[test]
+fn no_retry_starts_after_the_session_wait_used_its_share() {
+    let mut scenario = Scenario::armed(1).sessions(|_| Ok(vec![]));
+    scenario.host = Arc::new(FakeHost::booted(&target()).failing_first(
+        1,
+        "`bootc status` timed out after 30 s",
+        Duration::ZERO,
+        &scenario.clock,
+    ));
+    scenario.updater =
+        FakeUpdater::healthy().ping_failing_times(1, Duration::ZERO, &scenario.clock);
+    let run = scenario.run();
+    assert_eq!(run.host.calls(), 1);
+    assert!(
+        run.clock.elapsed() <= CHECKS_DEADLINE,
+        "{:?}",
+        run.clock.elapsed()
+    );
+    assert_eq!(run.gathered.input.booted_digest, None);
 }
 
 #[test]

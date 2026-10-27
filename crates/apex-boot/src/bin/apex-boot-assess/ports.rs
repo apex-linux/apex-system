@@ -35,9 +35,20 @@ pub(crate) struct BootedImage {
     pub(crate) rollback_queued: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatusError {
+    pub(crate) message: String,
+    /// A timeout or a busy lock, which a later try can get past.
+    pub(crate) transient: bool,
+}
+
 pub(crate) trait HostStatus: Send + Sync {
     /// `Ok` with empty fields on a host bootc does not manage.
-    fn booted(&self) -> Result<BootedImage, String>;
+    fn status(&self) -> Result<BootedImage, StatusError>;
+
+    fn booted(&self) -> Result<BootedImage, String> {
+        self.status().map_err(|err| err.message)
+    }
 }
 
 pub(crate) trait Clock: Send + Sync {
