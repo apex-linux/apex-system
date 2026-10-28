@@ -42,6 +42,10 @@ fn seconds(key: &str) -> u64 {
 #[test]
 fn the_greeter_and_system_users_are_skipped() {
     assert_eq!(values("ConditionUser").collect::<Vec<_>>(), ["!@system"]);
+    assert_eq!(
+        values("ConditionEnvironment").collect::<Vec<_>>(),
+        ["XDG_SESSION_CLASS=user"]
+    );
 }
 
 /// Restart=on-failure alone would retry a start that cannot succeed every few seconds.

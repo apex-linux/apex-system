@@ -6,8 +6,10 @@ Description=Apex session agent: window radius, terminal caret, the crash-guard o
 Documentation=https://github.com/apex-linux/apex-system/blob/main/docs/ARCHITECTURE.md
 PartOf=graphical-session.target
 After=graphical-session.target
-# The greeter's gdm user has a graphical session too, and nothing to set.
+# Neither system users nor the greeter have anything to set. GDM 51's greeter is a dynamic user,
+# not a system one: only its session class, which gnome-session uploads, tells it apart.
 ConditionUser=!@system
+ConditionEnvironment=XDG_SESSION_CLASS=user
 # Without HOME or a session bus every start fails the same way: give up after three.
 StartLimitIntervalSec=60s
 StartLimitBurst=3
