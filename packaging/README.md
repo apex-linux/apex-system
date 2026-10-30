@@ -1,6 +1,7 @@
 # Packaging
 
-The `apex` RPM: `apexctl`, `apex-updated`, `apex-boot-assess` and their data files.
+The `apex` RPM: `apexctl`, `apex-updated`, `apex-boot-assess`, `apex-session-agent` and
+their data files.
 apex-image's builder VM pipeline pins this repository by commit, builds the RPM with
 `rpms.sh build`, signs it and feeds it to the image compose
 ([apex-image packaging](https://github.com/apex-linux/apex-image/blob/main/packaging/README.md)).
@@ -19,9 +20,9 @@ calls the Makefile:
 
 | Spec section | Runs |
 |---|---|
-| `%build` | `cargo fetch --locked`, then `make build AUDITABLE=yes`: `cargo auditable build --release --locked --bin apexctl --bin apex-updated --bin apex-boot-assess` with Fedora's `RUSTFLAGS` |
+| `%build` | `cargo fetch --locked`, then `make build AUDITABLE=yes`: `cargo auditable build --release --locked --bin apexctl --bin apex-updated --bin apex-boot-assess --bin apex-session-agent` with Fedora's `RUSTFLAGS` |
 | `%install` | `make install DESTDIR=%{buildroot} PREFIX=/usr` (never builds) |
-| `%check` | `make check-data`: `xmllint` on the D-Bus and polkit XML, `systemd-analyze verify` on the units and the emergency/rescue drop-ins in a staged root; desktop and metainfo validation once the M2 app exists. The Rust tests run in `ci.yml`: here they would recompile the whole tree |
+| `%check` | `make check-data`: `xmllint` on the D-Bus and polkit XML, `systemd-analyze verify` on the units and the emergency/rescue drop-ins in a staged root. The Rust tests run in `ci.yml`: here they would recompile the whole tree |
 
 Decisions recorded in the spec:
 
@@ -39,11 +40,12 @@ Decisions recorded in the spec:
   `--with debuginfo` rebuilds the same commit with DWARF when a core dump needs it.
 - **Release from git:** `0.<commit date>.git<12-hex commit>.fc45`, set by `make rpm`
   through the `commitdate` and `shortcommit` macros (`0.0.gitunknown` without them).
-- **Scriptlets:** `%systemd_post`/`%systemd_preun` for all four units. On upgrade only the
-  timer restarts: `apex-updated` is D-Bus activated (a restart could kill a running bootc
-  operation), and the two oneshots would run again. No `%tmpfiles_create`: in an image
+- **Scriptlets:** `%systemd_post`/`%systemd_preun` for all four system units, and
+  `%systemd_user_post`/`%systemd_user_preun` for the user unit `apex-session-agent.service`.
+  On upgrade only the timer restarts: `apex-updated` is D-Bus activated (a restart could
+  kill a running bootc operation), and the two oneshots would run again. No `%tmpfiles_create`: in an image
   compose `/var` is not the target's, so `/var/lib/apex` comes from `apex.conf` at boot.
-- **License:** `GPL-3.0-or-later AND` the licenses of every crate linked into the three
+- **License:** `GPL-3.0-or-later AND` the licenses of every crate linked into the four
   binaries. `python3 packaging/licenses.py` computes it (normal dependencies only, no
   build, dev or proc-macro crates, x86_64 Linux); `--check packaging/apex.spec` fails
   when a dependency change makes the tag stale. `ci.yml` runs the check on every pull
