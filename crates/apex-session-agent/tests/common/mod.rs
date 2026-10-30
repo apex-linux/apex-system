@@ -5,12 +5,15 @@
     reason = "test helpers: each test binary uses its own part, and a failure is the test failure"
 )]
 
+use std::cell::RefCell;
 use std::fs;
 use std::io::{BufRead as _, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use apex_session_agent::agent::{Notification, Notifier, Posted};
 use apex_session_agent::{INTERFACE_SCHEMA_ID, SCHEMA_ID};
 
 /// A copy of apex-desktop's `desktop/schemas/` file, and the one stock key the agent reads.
@@ -40,6 +43,38 @@ pub(crate) fn settings_from_the_compiled_schemas(dir: &Path) -> (gio::Settings, 
         gio::Settings::new_full(&schema, Some(&backend), None)
     };
     (settings(SCHEMA_ID), settings(INTERFACE_SCHEMA_ID))
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct Calls {
+    pub(crate) posted: Vec<u32>,
+    pub(crate) withdrawn: Vec<u32>,
+}
+
+/// Answers on the main loop, like the D-Bus reply would.
+pub(crate) struct FakeNotifier {
+    pub(crate) calls: Rc<RefCell<Calls>>,
+}
+
+impl Notifier for FakeNotifier {
+    fn post(&self, _notification: &Notification, posted: Posted) {
+        let calls = Rc::clone(&self.calls);
+        glib::idle_add_local_once(move || {
+            let id = {
+                let mut calls = calls.borrow_mut();
+                let id = 40 + u32::try_from(calls.posted.len()).unwrap();
+                calls.posted.push(id);
+                id
+            };
+            posted(Some(id));
+        });
+    }
+
+    fn withdraw(&self, id: u32) {
+        self.calls.borrow_mut().withdrawn.push(id);
+    }
+
+    fn open_settings(&self, _panel: &str, _page: Option<&str>) {}
 }
 
 pub(crate) fn wait_for(what: &str, done: impl Fn() -> bool) {
