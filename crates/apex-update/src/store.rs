@@ -19,6 +19,7 @@ pub const HEALTH_FAILURE_FILE: &str = "health-failure.json";
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const FALLBACK_FILE: &str = "last-fallback.json";
 pub const PINNED_FILE: &str = "pinned.json";
+pub const MAJOR_UPGRADE_FILE: &str = "major-upgrade.json";
 /// The largest file, the denylist, holds about 150 bytes per failed build.
 pub const MAX_FILE_SIZE: u64 = 1024 * 1024;
 

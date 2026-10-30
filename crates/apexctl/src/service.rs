@@ -3,7 +3,7 @@ use std::io::IsTerminal as _;
 use std::time::Duration;
 
 use apex_dbus::zbus;
-use apex_dbus::{ApexError, Change, Channel, Deployment, ErrorKind, State, Update1Proxy};
+use apex_dbus::{ApexError, Change, Channel, Deployment, ErrorKind, Snapshot, State, Update1Proxy};
 
 use crate::exit::Exit;
 
@@ -30,6 +30,8 @@ pub struct ServiceStatus {
     pub automatic_downloads: Option<bool>,
     /// Pinned by the service and in the boot menu only; empty when the service predates it.
     pub kept: Vec<Deployment>,
+    /// The `/var` snapshots major upgrades made; empty when the service predates them.
+    pub snapshots: Vec<Snapshot>,
 }
 
 // `impl Future` rather than `async fn`: public async trait methods trip the
@@ -47,6 +49,11 @@ pub trait UpdateService {
     fn set_automatic_downloads(
         &self,
         enabled: bool,
+    ) -> impl Future<Output = Result<(), ClientError>>;
+    fn major_upgrade(
+        &self,
+        target_major: u32,
+        override_soft_gates: bool,
     ) -> impl Future<Output = Result<(), ClientError>>;
 }
 
@@ -293,6 +300,7 @@ impl UpdateService for DbusService {
             last_fallback: p.last_fallback().await.unwrap_or_default(),
             automatic_downloads: p.automatic_downloads().await.ok(),
             kept: p.kept().await.unwrap_or_default(),
+            snapshots: p.snapshots().await.unwrap_or_default(),
         })
     }
 
@@ -331,6 +339,15 @@ impl UpdateService for DbusService {
 
     async fn set_automatic_downloads(&self, enabled: bool) -> Result<(), ClientError> {
         Ok(self.proxy.set_automatic_downloads(enabled).await?)
+    }
+
+    async fn major_upgrade(
+        &self,
+        target_major: u32,
+        override_soft_gates: bool,
+    ) -> Result<(), ClientError> {
+        self.with_progress(self.proxy.major_upgrade(target_major, override_soft_gates))
+            .await
     }
 }
 

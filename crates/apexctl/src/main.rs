@@ -72,6 +72,7 @@ fn run(cli: Cli) -> anyhow::Result<Exit> {
     match cli.command {
         Command::Status { json } => runtime()?.block_on(status(json)),
         Command::Update(command) => runtime()?.block_on(update_command(command)),
+        Command::MajorUpgrade { force } => runtime()?.block_on(major_upgrade(force)),
         Command::Hw(HwCommand::Report { json, root }) => {
             hw_report(&SysRoot::new(root.sysroot), json)
         }
@@ -166,6 +167,27 @@ async fn update_command(command: UpdateCommand) -> anyhow::Result<Exit> {
     match result {
         Ok(text) => emit(&text).map(|()| Exit::Ok),
         Err(error) => Ok(report_client_error(&error, update::hint(&command, &error))),
+    }
+}
+
+async fn major_upgrade(force: bool) -> anyhow::Result<Exit> {
+    use apexctl::major_upgrade::{booted_major, hint, major_upgrade, plan};
+    let service = match DbusService::connect().await {
+        Ok(service) => service,
+        Err(error) => return Ok(report_client_error(&error, error.hint())),
+    };
+    let from = match service
+        .status()
+        .await
+        .and_then(|status| booted_major(&status))
+    {
+        Ok(from) => from,
+        Err(error) => return Ok(report_client_error(&error, hint(&error))),
+    };
+    emit(&plan(from))?;
+    match major_upgrade(&service, from, force).await {
+        Ok(text) => emit(&text).map(|()| Exit::Ok),
+        Err(error) => Ok(report_client_error(&error, hint(&error))),
     }
 }
 

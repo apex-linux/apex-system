@@ -103,6 +103,7 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 | `settings.json` | `{ "automatic_downloads": true or false }`, written by `SetAutomaticDownloads`; a missing file or key means true |
 | `last-fallback.json` | `{ "digest": "sha256:…", "at": <unix> }`, written when a `fallback` report denylists a digest (`LastFallback`); removed by `AcknowledgeHealthFailure` |
 | `pinned.json` | `{ "pins": [ { "checksum": "…", "serial": <deploy serial>, "digest": "sha256:…", "at": <unix> } ] }`: the deployments `apex-updated` pinned itself before arming (§5), which carry `pin-reason` and, once neither Booted, Staged nor Rollback, make up `Kept`; an entry leaves when the daily run unpins it, or finds it unpinned by hand or deleted |
+| `major-upgrade.json` | `{ "pins": [ { "checksum": "…", "serial": <deploy serial>, "digest": "sha256:…", "from_major": 45, "to_major": 46, "at": <unix> } ], "snapshots": [ { "path": "/var/lib/apex/snapshots/var-fedora45-<unix>", "major": 45, "at": <unix> } ] }`: what `MajorUpgrade` left. Its pins carry `pin-reason` "Kept by the move to Apex 46." and are never unpinned (the daily run reads only `pinned.json`); its snapshots are published as `Snapshots` and never deleted by `apex-updated` |
 | `force-red` | qualification hook only: a root-owned regular file (mode 0600, at most 4 KiB) holding one digest; when it names the booted digest, `apex-boot-assess` adds the failing required check `forced-red` |
 
 Everything else is derived from `bootc status --format=json --format-version=1`.
@@ -153,8 +154,9 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
 
 ## 6. bootc and ostree invocation rules (`apex-bootc`)
 
-- Executables `/usr/bin/bootc` and, for pins only, `/usr/bin/ostree`, overridable only in
-  debug builds via `APEX_BOOTC` and `APEX_OSTREE`.
+- Executables `/usr/bin/bootc`, for pins only `/usr/bin/ostree`, and for the major
+  upgrade's `/var` snapshot only `/usr/sbin/btrfs`, overridable only in debug builds via
+  `APEX_BOOTC`, `APEX_OSTREE` and `APEX_BTRFS`.
 - `env_clear()`, then `PATH=/usr/bin:/usr/sbin`, `LANG=C.UTF-8`,
   `CONTAINERS_POLICY_JSON=/usr/share/apex/containers/policy.json`.
 - argv is built only from enum variants, compile-time constants and validated numbers:
@@ -163,14 +165,19 @@ block directly (`# GRUB Environment Block` header, `key=value` lines, `#` paddin
   `rollback`, `switch --enforce-container-sigpolicy --download-only <ref>`, where `<ref>`
   is a compile-time repository with a validated digest or a Fedora major
   (`apex_stable(major)`, `apex_testing(major)`: `ghcr.io/apex-linux/apex:45`); and
-  `ostree admin pin rollback`, `ostree admin status`, `ostree admin pin --unpin <index>`.
+  `ostree admin pin rollback`, `ostree admin pin booted`, `ostree admin status`,
+  `ostree admin pin --unpin <index>`; and `btrfs subvolume snapshot -r /var <path>`, where
+  `<path>` is `/var/lib/apex/snapshots/var-fedora<major>-<unix>`, built from that
+  compile-time directory, the validated Fedora major and the Unix time.
+- A failure that names a tag the registry does not have (containers-image's
+  `manifest unknown`, or `reading manifest … not found`) is `ImageNotFound`, not transient.
 - Timeouts: status and `ostree admin status` 30 s, check 5 min, download 2 h, others
-  10 min. Cancellation kills the process group.
+  (the pins and the snapshot among them) 10 min. Cancellation kills the process group.
 
 ## 7. `apexctl` command surface (M1)
 
 ```
-apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, the deployments the daemon kept (pinned) and why, the failed check names of a health failure, hardware notes read locally (S1c: the NVIDIA driver against the manifest); JSON schema 2
+apexctl status [--json]                    daemon state, booted/staged/rollback, degraded, holds (side, since, limit), stock, the deployments the daemon kept (pinned) and why, the /var snapshots of major upgrades, the failed check names of a health failure, hardware notes read locally (S1c: the NVIDIA driver against the manifest); JSON schema 2
 apexctl update check
 apexctl update download [--force]         --force overrides power/metered gates only
 apexctl update apply [--digest D]         default: the staged digest shown by status; prints "reboot to finish"
@@ -179,6 +186,11 @@ apexctl update changes [--for D]          package diff booted → staged, or boo
 apexctl update acknowledge                clear HealthFailure after reading it
 apexctl update automatic                  (root, used by the timer)
 apexctl update auto on|off|status         SetAutomaticDownloads (polkit update.configure); the timer stays enabled, checks continue
+apexctl major-upgrade [--force]           MajorUpgrade(booted Fedora major + 1), polkit update.major-upgrade:
+                                          download locked, pin the running version, read-only /var
+                                          snapshot, apply armed; --force as for download; exits 3 when
+                                          no image is published or already on it, 2 when a stage is
+                                          pending, /var is no btrfs subvolume or a gate refuses
 apexctl hw report [--json]                read-only: audio init_verbs, charge threshold, dGPU runtime PM, fingerprint device
 apexctl hw audio snapshot [--proc FILE]   parse /proc/asound/card*/codec#* (pins, COEFs if dumped, init_verbs)
 apexctl hw dgpu-idle [--seconds N] [--json]  dGPU runtime-suspended share, wakes per hour and battery mW over an idle window, from cached sysfs only (ACCEPTANCE 4.2, 4.9; N10); exits 1 below 95.0 %
@@ -208,6 +220,7 @@ differ.
 | check, download, apply, discard (AcknowledgeHealthFailure) | no | no | yes |
 | rollback | no | no | auth_admin |
 | configure (SetAutomaticDownloads) | no | no | auth_admin |
+| major-upgrade (MajorUpgrade) | no | no | auth_admin |
 
 `Automatic` and `ReportBoot` are accepted only from uid 0 (checked with the bus
 credentials, not polkit). uid 0 is allowed every action without polkit. No action

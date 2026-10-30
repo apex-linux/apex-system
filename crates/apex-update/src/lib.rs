@@ -21,8 +21,8 @@ pub use plan::{
     plan_automatic, validate_apply, validate_download,
 };
 pub use records::{
-    DenyEntry, Denylist, FallbackRecord, HealthFailureRecord, Intent, LastCheck, PinRecord, Pins,
-    UpdateSettings,
+    DenyEntry, Denylist, FallbackRecord, HealthFailureRecord, Intent, LastCheck, MajorPinRecord,
+    MajorUpgrades, PinRecord, Pins, SnapshotRecord, UpdateSettings,
 };
 pub use rpmvercmp::{Evr, EvrRef, rpmvercmp};
 pub use snapshot::{DeploymentView, HostView, Power, RemoteView, SystemSnapshot};

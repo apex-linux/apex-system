@@ -10,12 +10,13 @@ mod values;
 pub use deployment::{Deployment, Hold, Stock};
 pub use error::{ApexError, ErrorKind};
 pub use polkit::{
-    POLKIT_APPLY, POLKIT_CHECK, POLKIT_CONFIGURE, POLKIT_DISCARD, POLKIT_DOWNLOAD, POLKIT_ROLLBACK,
-    PolkitAction, PolkitDefault,
+    POLKIT_APPLY, POLKIT_CHECK, POLKIT_CONFIGURE, POLKIT_DISCARD, POLKIT_DOWNLOAD,
+    POLKIT_MAJOR_UPGRADE, POLKIT_ROLLBACK, PolkitAction, PolkitDefault,
 };
 pub use proxy::Update1Proxy;
 pub use values::{
-    BootVerdict, CHANGE_FIELDS, Change, ChangeKind, Channel, State, UnknownValueError, ValueError,
+    BootVerdict, CHANGE_FIELDS, Change, ChangeKind, Channel, SNAPSHOT_FIELDS, Snapshot, State,
+    UnknownValueError, ValueError,
 };
 
 /// Clients name zbus types through this re-export, never through a second, possibly

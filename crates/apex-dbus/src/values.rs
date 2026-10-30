@@ -9,6 +9,12 @@ pub type Change = (String, String, String, String, String);
 
 pub const CHANGE_FIELDS: [&str; 5] = ["name", "arch", "kind", "from_evr", "to_evr"];
 
+/// A read-only `/var` snapshot `MajorUpgrade` made: path, the Fedora major it was taken on,
+/// Unix seconds.
+pub type Snapshot = (String, u32, u64);
+
+pub const SNAPSHOT_FIELDS: [&str; 3] = ["path", "major", "taken_at"];
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{value:?} is not a valid {what}")]
 pub struct UnknownValueError {
@@ -329,6 +335,8 @@ mod tests {
         assert_eq!(<Change as Type>::SIGNATURE.to_string(), "(sssss)");
         assert_eq!(<Vec<Change> as Type>::SIGNATURE.to_string(), "a(sssss)");
         assert_eq!(CHANGE_FIELDS.len(), 5, "one name per tuple field");
+        assert_eq!(<Vec<Snapshot> as Type>::SIGNATURE.to_string(), "a(sut)");
+        assert_eq!(SNAPSHOT_FIELDS.len(), 3, "one name per tuple field");
     }
 
     #[test]
