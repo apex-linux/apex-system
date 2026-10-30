@@ -10,45 +10,13 @@ use std::cell::RefCell;
 use std::fs;
 use std::rc::Rc;
 
-use apex_session_agent::agent::{Agent, Notification, Notifier, Posted};
+use apex_session_agent::agent::Agent;
 use apex_session_agent::guard::ACTION_KEY;
 use apex_session_agent::icons::ICON_THEME_KEY;
 use apex_session_agent::paths::Paths;
 use apex_session_agent::{ACCENT_KEY, LAYER_KEY, RADIUS_KEY};
-use common::{read, settings_from_the_compiled_schemas, wait_for};
+use common::{Calls, FakeNotifier, read, settings_from_the_compiled_schemas, wait_for};
 use gio::prelude::*;
-
-#[derive(Debug, Default)]
-struct Calls {
-    posted: Vec<u32>,
-    withdrawn: Vec<u32>,
-}
-
-/// Answers on the main loop, like the D-Bus reply would.
-struct FakeNotifier {
-    calls: Rc<RefCell<Calls>>,
-}
-
-impl Notifier for FakeNotifier {
-    fn post(&self, _notification: &Notification, posted: Posted) {
-        let calls = Rc::clone(&self.calls);
-        glib::idle_add_local_once(move || {
-            let id = {
-                let mut calls = calls.borrow_mut();
-                let id = 40 + u32::try_from(calls.posted.len()).unwrap();
-                calls.posted.push(id);
-                id
-            };
-            posted(Some(id));
-        });
-    }
-
-    fn withdraw(&self, id: u32) {
-        self.calls.borrow_mut().withdrawn.push(id);
-    }
-
-    fn open_settings(&self, _panel: &str, _page: Option<&str>) {}
-}
 
 /// The palette and the folder theme follow the accent; a theme the user picked stays.
 fn accent_changes(paths: &Paths, interface: &gio::Settings) {
