@@ -96,8 +96,8 @@
         dock, spotlight, lock, motion, notifications, overview, panel, quick-settings,
         shadows, indicators, polkit and end-session; any other name is refused, and a
         list with one is refused whole, so the key keeps its previous value. A
-        disabled feature's hooks give their stock values. It takes effect at the next
-        login.
+        disabled feature's hooks give their stock values. A change applies at once, in
+        the running session.
       </description>
     </key>
     <key name="files-details-pane" type="b">
