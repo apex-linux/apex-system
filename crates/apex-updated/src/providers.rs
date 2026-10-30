@@ -56,6 +56,14 @@ pub trait DiskSpace: Send + Sync {
     fn free_bytes(&self, path: &Path) -> Option<u64>;
 }
 
+/// `/var` before a major upgrade, which saves it as a read-only btrfs snapshot.
+pub trait VarVolume: Send + Sync {
+    fn is_btrfs_subvolume(&self) -> Result<bool, String>;
+
+    /// [`apex_bootc::SNAPSHOT_DIR`], 0700: btrfs does not create the parent.
+    fn create_snapshot_dir(&self) -> Result<(), String>;
+}
+
 /// Size of what finalization copies to `/boot`.
 pub trait BootPayload: Send + Sync {
     fn boot_payload(&self, root: &Path) -> Option<u64>;
@@ -149,6 +157,7 @@ pub struct Providers {
     pub payload: Arc<dyn BootPayload>,
     pub units: Arc<dyn UnitStates>,
     pub files: Arc<dyn DeploymentFiles>,
+    pub var: Arc<dyn VarVolume>,
 }
 
 impl fmt::Debug for Providers {
@@ -167,6 +176,7 @@ impl Providers {
             payload: Arc::new(KernelFiles),
             units: Arc::new(Systemd::new(connection.clone())),
             files: Arc::new(HostFiles::system()),
+            var: Arc::new(HostVar),
         }
     }
 }
@@ -391,6 +401,37 @@ impl DiskSpace for Statvfs {
         let blocks: u64 = stat.blocks_available();
         let size: u64 = stat.fragment_size();
         Some(blocks.saturating_mul(size))
+    }
+}
+
+/// The root of a btrfs subvolume is always inode 256 (`BTRFS_FIRST_FREE_OBJECTID`).
+const BTRFS_SUBVOLUME_ROOT_INODE: u64 = 256;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HostVar;
+
+impl VarVolume for HostVar {
+    fn is_btrfs_subvolume(&self) -> Result<bool, String> {
+        use std::os::unix::fs::MetadataExt as _;
+        let var = Path::new(apex_bootc::VAR_SUBVOLUME);
+        let fs =
+            nix::sys::statfs::statfs(var).map_err(|e| format!("statfs {}: {e}", var.display()))?;
+        if fs.filesystem_type() != nix::sys::statfs::BTRFS_SUPER_MAGIC {
+            return Ok(false);
+        }
+        let inode = std::fs::metadata(var)
+            .map_err(|e| format!("stat {}: {e}", var.display()))?
+            .ino();
+        Ok(inode == BTRFS_SUBVOLUME_ROOT_INODE)
+    }
+
+    fn create_snapshot_dir(&self) -> Result<(), String> {
+        use std::os::unix::fs::DirBuilderExt as _;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(apex_bootc::SNAPSHOT_DIR)
+            .map_err(|e| format!("cannot create {}: {e}", apex_bootc::SNAPSHOT_DIR))
     }
 }
 

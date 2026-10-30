@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::digest::{Digest, DigestError};
@@ -15,6 +15,16 @@ pub const OSTREE_PROGRAM: &str = "/usr/bin/ostree";
 
 /// Replaces [`OSTREE_PROGRAM`] in debug builds only.
 pub const OSTREE_OVERRIDE_ENV: &str = "APEX_OSTREE";
+
+/// Only for the read-only snapshot of `/var` before a major upgrade.
+pub const BTRFS_PROGRAM: &str = "/usr/sbin/btrfs";
+
+/// Replaces [`BTRFS_PROGRAM`] in debug builds only.
+pub const BTRFS_OVERRIDE_ENV: &str = "APEX_BTRFS";
+
+pub const VAR_SUBVOLUME: &str = "/var";
+
+pub const SNAPSHOT_DIR: &str = "/var/lib/apex/snapshots";
 
 pub const POLICY_JSON: &str = "/usr/share/apex/containers/policy.json";
 
@@ -56,6 +66,15 @@ pub fn program() -> PathBuf {
 
 pub fn ostree_program() -> PathBuf {
     program_or_override(OSTREE_PROGRAM, OSTREE_OVERRIDE_ENV)
+}
+
+pub fn btrfs_program() -> PathBuf {
+    program_or_override(BTRFS_PROGRAM, BTRFS_OVERRIDE_ENV)
+}
+
+/// `var-fedora45-1793000000`: the major it was taken on and when.
+pub fn var_snapshot_path(major: u32, unix: u64) -> PathBuf {
+    Path::new(SNAPSHOT_DIR).join(format!("var-fedora{major}-{unix}"))
 }
 
 #[cfg_attr(not(debug_assertions), allow(unused_variables))]
@@ -215,10 +234,15 @@ pub enum BootcCommand {
     },
     /// ostree resolves `rollback` as bootc does: the first deployment after the booted one.
     PinRollback,
+    PinBooted,
     OstreeStatus,
     /// The index counts `ostree admin status` lines, the staged deployment first.
     Unpin {
         index: u32,
+    },
+    SnapshotVar {
+        major: u32,
+        unix: u64,
     },
 }
 
@@ -231,8 +255,10 @@ pub enum CommandKind {
     Rollback,
     SwitchDownloadOnly,
     PinRollback,
+    PinBooted,
     OstreeStatus,
     Unpin,
+    SnapshotVar,
 }
 
 /// Which program a command runs.
@@ -240,6 +266,7 @@ pub enum CommandKind {
 pub enum Program {
     Bootc,
     Ostree,
+    Btrfs,
 }
 
 impl CommandKind {
@@ -252,14 +279,19 @@ impl CommandKind {
             Self::Rollback => "rollback",
             Self::SwitchDownloadOnly => "switch --download-only",
             Self::PinRollback => "admin pin rollback",
+            Self::PinBooted => "admin pin booted",
             Self::OstreeStatus => "admin status",
             Self::Unpin => "admin pin --unpin",
+            Self::SnapshotVar => "subvolume snapshot -r",
         }
     }
 
     pub const fn program(self) -> Program {
         match self {
-            Self::PinRollback | Self::OstreeStatus | Self::Unpin => Program::Ostree,
+            Self::PinRollback | Self::PinBooted | Self::OstreeStatus | Self::Unpin => {
+                Program::Ostree
+            }
+            Self::SnapshotVar => Program::Btrfs,
             _ => Program::Bootc,
         }
     }
@@ -269,9 +301,12 @@ impl CommandKind {
             Self::Status | Self::OstreeStatus => STATUS_TIMEOUT,
             Self::UpgradeCheck => CHECK_TIMEOUT,
             Self::UpgradeDownloadOnly | Self::SwitchDownloadOnly => DOWNLOAD_TIMEOUT,
-            Self::UpgradeFromDownloaded | Self::Rollback | Self::PinRollback | Self::Unpin => {
-                OTHER_TIMEOUT
-            }
+            Self::UpgradeFromDownloaded
+            | Self::Rollback
+            | Self::PinRollback
+            | Self::PinBooted
+            | Self::Unpin
+            | Self::SnapshotVar => OTHER_TIMEOUT,
         }
     }
 }
@@ -281,6 +316,7 @@ impl fmt::Display for Program {
         f.write_str(match self {
             Self::Bootc => "bootc",
             Self::Ostree => "ostree",
+            Self::Btrfs => "btrfs",
         })
     }
 }
@@ -302,8 +338,10 @@ impl BootcCommand {
             Self::Rollback => CommandKind::Rollback,
             Self::SwitchDownloadOnly { .. } => CommandKind::SwitchDownloadOnly,
             Self::PinRollback => CommandKind::PinRollback,
+            Self::PinBooted => CommandKind::PinBooted,
             Self::OstreeStatus => CommandKind::OstreeStatus,
             Self::Unpin { .. } => CommandKind::Unpin,
+            Self::SnapshotVar { .. } => CommandKind::SnapshotVar,
         }
     }
 
@@ -322,13 +360,18 @@ impl BootcCommand {
                 &["switch", "--enforce-container-sigpolicy", "--download-only"]
             }
             Self::PinRollback => &["admin", "pin", "rollback"],
+            Self::PinBooted => &["admin", "pin", "booted"],
             Self::OstreeStatus => &["admin", "status"],
             Self::Unpin { .. } => &["admin", "pin", "--unpin"],
+            Self::SnapshotVar { .. } => &["subvolume", "snapshot", "-r", VAR_SUBVOLUME],
         };
         let mut argv: Vec<OsString> = fixed.iter().map(OsString::from).collect();
         match self {
             Self::SwitchDownloadOnly { target } => argv.push(target.to_string().into()),
             Self::Unpin { index } => argv.push(index.to_string().into()),
+            Self::SnapshotVar { major, unix } => {
+                argv.push(var_snapshot_path(*major, *unix).into_os_string());
+            }
             _ => {}
         }
         argv
@@ -433,6 +476,9 @@ mod tests {
         }
         if std::env::var_os(OSTREE_OVERRIDE_ENV).is_none() {
             assert_eq!(ostree_program(), PathBuf::from("/usr/bin/ostree"));
+        }
+        if std::env::var_os(BTRFS_OVERRIDE_ENV).is_none() {
+            assert_eq!(btrfs_program(), PathBuf::from("/usr/sbin/btrfs"));
         }
     }
 

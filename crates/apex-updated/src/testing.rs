@@ -13,7 +13,7 @@ use crate::BoxFuture;
 use crate::auth::{Authorizer, refusal};
 use crate::providers::{
     BOOT, BootPayload, Clock, DeploymentFiles, DiskSpace, FileError, GrubEnvSource, ManifestSource,
-    MeteredSource, PowerSource, Providers, SYSROOT, UnitStates,
+    MeteredSource, PowerSource, Providers, SYSROOT, UnitStates, VarVolume,
 };
 
 #[derive(Debug, Clone)]
@@ -95,6 +95,8 @@ pub struct FakeState {
     /// By ostree commit checksum.
     pub lane_locks: HashMap<String, String>,
     pub finalize_stamp: bool,
+    pub var_is_subvolume: Result<bool, String>,
+    pub snapshot_dir_error: Option<String>,
 }
 
 impl Default for FakeState {
@@ -115,6 +117,8 @@ impl Default for FakeState {
             running_lane_lock: None,
             lane_locks: HashMap::new(),
             finalize_stamp: false,
+            var_is_subvolume: Ok(true),
+            snapshot_dir_error: None,
         }
     }
 }
@@ -152,7 +156,18 @@ impl FakeSystem {
             payload: self.clone(),
             units: self.clone(),
             files: self.clone(),
+            var: self.clone(),
         }
+    }
+}
+
+impl VarVolume for FakeSystem {
+    fn is_btrfs_subvolume(&self) -> Result<bool, String> {
+        self.lock().var_is_subvolume.clone()
+    }
+
+    fn create_snapshot_dir(&self) -> Result<(), String> {
+        self.lock().snapshot_dir_error.clone().map_or(Ok(()), Err)
     }
 }
 

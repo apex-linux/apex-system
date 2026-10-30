@@ -385,6 +385,9 @@ impl<R: CommandRunner> Engine<R> {
             Op::Rollback { mark_bad } => self.rollback(*mark_bad, cancel).await,
             Op::Automatic => self.automatic(cancel).await,
             Op::Fallback { digest } => self.fallback(digest, cancel).await,
+            Op::MajorUpgrade { .. } => Err(ApexError::Internal(
+                "The major upgrade is not implemented yet.".to_owned(),
+            )),
         };
         match &result {
             Ok(()) => self.lock().last_error.clear(),
