@@ -12,6 +12,7 @@ is Rust and ships in the `apex` RPM.
 | `apex-update` | The pure update engine: gates, state derivation, version ordering and the persisted state |
 | `apex-bootc` | bootc as a library: the lenient status model, progress events, and argv built from enums |
 | `apex-dbus` | The `Update1` D-Bus contract and its proxy |
+| `apex-session-agent` | The user service in each desktop session: window radius, terminal palette, accent-coloured folders, the crash-guard offer, the update notifications and the battery refresh rate |
 
 `hardware/m7400qc/profile.toml` is the single source of the machine's facts. `apexctl`
 compiles them in, and `just render` writes `hardware/m7400qc/generated/`, which the
