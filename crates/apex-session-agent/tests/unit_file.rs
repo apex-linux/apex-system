@@ -68,6 +68,25 @@ fn the_marker_is_where_the_crash_guard_writes_it() {
     );
 }
 
+/// `systemctl --user status` shows it: every feature of M1 §10 is named.
+#[test]
+fn the_description_names_every_feature() {
+    let description: Vec<&str> = values("Description").collect();
+    let [description] = description[..] else {
+        panic!("Description is set {} times", description.len())
+    };
+    for feature in [
+        "window radius",
+        "terminal caret",
+        "accent folder icons",
+        "crash-guard offer",
+        "update notices",
+        "battery refresh rate",
+    ] {
+        assert!(description.contains(feature), "{feature}: {description}");
+    }
+}
+
 #[test]
 fn the_preset_enables_exactly_the_agent() {
     let rules: Vec<&str> = PRESET
