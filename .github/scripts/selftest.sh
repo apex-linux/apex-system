@@ -128,7 +128,7 @@ check_false "a commit under crates/ changes rpms.sh key" test "$key_1" = "$(fake
 # --- every command rpms.sh's main dispatches to is defined ------------------------------
 mapfile -t arms < <(sed -n '/^main() {/,/^}/s/^[[:space:]]*[a-z|-]*) \([a-z_][a-z0-9_]*\) "\$@" ;;$/\1/p' \
     "$APEX_ROOT/.github/scripts/rpms.sh")
-check "rpms.sh's main dispatches key, build and toolchain" "cmd_key cmd_build cmd_toolchain" "${arms[*]}"
+check "rpms.sh's main dispatches key and build" "cmd_key cmd_build" "${arms[*]}"
 for fn in "${arms[@]}"; do
     check_true "rpms.sh defines $fn" rpms_fn declare -F "$fn"
 done

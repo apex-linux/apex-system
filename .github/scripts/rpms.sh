@@ -14,7 +14,6 @@ root, from Fedora's fedora and updates repositories.
   rpms.sh build OUTDIR [KEY]   install build deps, `make rpm`, copy the binary RPMs to
                                OUTDIR with their key (KEY); with KEY, fail if the key
                                changed meanwhile
-  rpms.sh toolchain            install Fedora's rust, cargo, clippy, rustfmt and gcc
 EOF
     exit 2
 }
@@ -115,15 +114,6 @@ make_in_checkout() {
         make -C "$APEX_ROOT" "$@"
 }
 
-cmd_toolchain() {
-    (($# == 0)) || die "usage: rpms.sh toolchain"
-    ((EUID == 0)) || die "rpms.sh toolchain installs packages; run it as root in a fedora:45 container"
-    require dnf5
-    log "installing Fedora's rust toolchain from: ${COMPOSE_REPOS[*]}"
-    retry 3 10 dnf5 -y --setopt=install_weak_deps=False "${COMPOSE_REPOS[@]}" install \
-        rust cargo clippy rustfmt gcc
-}
-
 cmd_key() {
     (($# == 0)) || die "usage: rpms.sh key"
     require git dnf5 sha256sum
@@ -182,7 +172,6 @@ main() {
     case $cmd in
         key) cmd_key "$@" ;;
         build) cmd_build "$@" ;;
-        toolchain) cmd_toolchain "$@" ;;
         *) usage ;;
     esac
 }
