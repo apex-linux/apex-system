@@ -62,6 +62,9 @@ pub trait VarVolume: Send + Sync {
 
     /// [`apex_bootc::SNAPSHOT_DIR`], 0700: btrfs does not create the parent.
     fn create_snapshot_dir(&self) -> Result<(), String>;
+
+    /// Only a path that is not there; an unreadable one is kept.
+    fn snapshot_is_gone(&self, path: &Path) -> bool;
 }
 
 /// Size of what finalization copies to `/boot`.
@@ -432,6 +435,10 @@ impl VarVolume for HostVar {
             .mode(0o700)
             .create(apex_bootc::SNAPSHOT_DIR)
             .map_err(|e| format!("cannot create {}: {e}", apex_bootc::SNAPSHOT_DIR))
+    }
+
+    fn snapshot_is_gone(&self, path: &Path) -> bool {
+        matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
     }
 }
 
@@ -852,6 +859,13 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn only_a_missing_snapshot_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!HostVar.snapshot_is_gone(dir.path()));
+        assert!(HostVar.snapshot_is_gone(&dir.path().join("var-fedora45-1")));
     }
 
     #[test]

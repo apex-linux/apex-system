@@ -617,7 +617,35 @@ impl<R: CommandRunner> Engine<R> {
             tracing::warn!(error = %errors::with_sources(&error), "ignoring major-upgrade.json");
             MajorUpgrades::default()
         });
+        self.forget_deleted_snapshots(&mut state.major_upgrades);
         attach_pin_reasons(host, summary, &pins, &state.major_upgrades);
+    }
+
+    /// `btrfs subvolume delete` is how the owner removes one, so `Snapshots` follows it.
+    fn forget_deleted_snapshots(&self, record: &mut MajorUpgrades) {
+        let before = record.snapshots.len();
+        record.snapshots.retain(|snapshot| {
+            let gone = self
+                .providers
+                .var
+                .snapshot_is_gone(Path::new(&snapshot.path));
+            if gone {
+                tracing::info!(
+                    path = snapshot.path,
+                    "the /var snapshot was deleted by hand"
+                );
+            }
+            !gone
+        });
+        if record.snapshots.len() == before {
+            return;
+        }
+        if let Err(error) = unflushed_is_done(
+            self.store.write_major_upgrades(record),
+            "saving major-upgrade.json",
+        ) {
+            tracing::warn!(error = %errors::with_sources(&error), "cannot forget the deleted snapshot");
+        }
     }
 
     async fn running_manifest(&self) -> Result<Option<Arc<Manifest>>, FileError> {

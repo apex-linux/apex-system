@@ -97,6 +97,7 @@ pub struct FakeState {
     pub finalize_stamp: bool,
     pub var_is_subvolume: Result<bool, String>,
     pub snapshot_dir_error: Option<String>,
+    pub deleted_snapshots: Vec<String>,
 }
 
 impl Default for FakeState {
@@ -119,6 +120,7 @@ impl Default for FakeState {
             finalize_stamp: false,
             var_is_subvolume: Ok(true),
             snapshot_dir_error: None,
+            deleted_snapshots: Vec::new(),
         }
     }
 }
@@ -168,6 +170,13 @@ impl VarVolume for FakeSystem {
 
     fn create_snapshot_dir(&self) -> Result<(), String> {
         self.lock().snapshot_dir_error.clone().map_or(Ok(()), Err)
+    }
+
+    fn snapshot_is_gone(&self, path: &Path) -> bool {
+        self.lock()
+            .deleted_snapshots
+            .iter()
+            .any(|deleted| Path::new(deleted) == path)
     }
 }
 

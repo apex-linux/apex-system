@@ -333,3 +333,35 @@ async fn the_override_skips_only_the_soft_gates() {
     );
     h.fake.assert_finished();
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_snapshot_deleted_by_hand_leaves_snapshots_and_the_record() {
+    let h = harness();
+    let locked = host(booted(), Some(next(true)), Some(rollback()));
+    let kept = host(pinned(booted()), Some(next(true)), Some(rollback()));
+    let applied = host(pinned(booted()), Some(next(false)), Some(rollback()));
+    h.push(status(&before()))
+        .push(switch())
+        .push(status(&locked))
+        .push(Scripted::new(BootcCommand::PinBooted))
+        .push(snapshot_var())
+        .push(status(&kept))
+        .push(Scripted::new(BootcCommand::UpgradeFromDownloaded))
+        .push(status(&applied));
+    h.run(MOVE).await.expect("major upgrade");
+    assert_eq!(h.properties().snapshots.len(), 1);
+
+    h.system
+        .update(|state| state.deleted_snapshots.push(SNAPSHOT.to_owned()));
+    h.refresh(&applied).await;
+    h.fake.assert_finished();
+    assert_eq!(h.properties().snapshots, []);
+    let record = h.store.read_major_upgrades().unwrap();
+    assert!(record.snapshots.is_empty());
+    assert_eq!(
+        record.pins.len(),
+        1,
+        "the pin is the deployment's, not the snapshot's"
+    );
+    assert_eq!(h.properties().booted.pin_reason, Some(major_pin_reason(46)));
+}
