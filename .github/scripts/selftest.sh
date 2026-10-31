@@ -85,6 +85,54 @@ atree=$(bash -c '. "$1"; git_() { [[ $1 != ls-tree ]] || printf "100644 blob 111
 check "the apex key covers every crate of the workspace" "100644 blob 1111	crates/apexctl/src/main.rs
 100644 blob 2222	crates/apex-boot/src/lib.rs" "$atree"
 
+# --- rpms.sh key: a scratch repository and a fake dnf5 ----------------------------------
+K="$TMP/key"
+mkdir -p "$K/repo/.github/scripts" "$K/repo/crates/x" "$K/repo/packaging" "$K/bin"
+cp "$APEX_ROOT"/.github/scripts/{lib.sh,rpms.sh,install-tool.sh} "$K/repo/.github/scripts/"
+printf '%%bcond auditable 1\n' >"$K/repo/packaging/apex.spec"
+for f in crates/x/lib.rs Makefile Cargo.lock Cargo.toml LICENSE README.md; do
+    printf '%s\n' "$f" >"$K/repo/$f"
+done
+scratch_git() {
+    git -C "$K/repo" -c init.defaultBranch=main -c user.name=selftest -c user.email=selftest@invalid \
+        -c commit.gpgsign=false "$@"
+}
+scratch_git init -q
+scratch_git add -A
+scratch_git commit -qm base
+cat >"$K/bin/dnf5" <<'EOF'
+#!/usr/bin/env bash
+[[ $1 == repoquery ]] || exit 1
+printf '%s\n' "${FAKE_NEVRA:?}"
+EOF
+chmod +x "$K/bin/dnf5"
+RUST_A=rust-1.90.0-1.fc45.x86_64
+fake_key() { FAKE_NEVRA=$1 PATH="$K/bin:$PATH" "$K/repo/.github/scripts/rpms.sh" key "${@:2}" 2>/dev/null; }
+
+key_1=$(fake_key "$RUST_A" || true)
+check "rpms.sh key prints one 64-hex line" yes "$([[ $key_1 =~ ^[0-9a-f]{64}$ ]] && echo yes)"
+check "rpms.sh key is stable" "$key_1" "$(fake_key "$RUST_A")"
+check "rpms.sh key is the key rpms.sh build computes for that rust" "$key_1" \
+    "$(bash -c '. "$1"; compute_key "$2"' _ "$K/repo/.github/scripts/rpms.sh" "$RUST_A" 2>/dev/null)"
+check_false "a rust update changes rpms.sh key" test "$key_1" = "$(fake_key rust-1.90.1-1.fc45.x86_64)"
+check "rpms.sh key with an argument is a usage error" 1 \
+    "$(FAKE_NEVRA=$RUST_A PATH="$K/bin:$PATH" rc_of "$K/repo/.github/scripts/rpms.sh" key extra)"
+check "rpms.sh key with an argument prints no key" "" "$(fake_key "$RUST_A" extra || true)"
+check "rpms.sh key fails when rust does not resolve" 1 \
+    "$(FAKE_NEVRA=not-rust PATH="$K/bin:$PATH" rc_of "$K/repo/.github/scripts/rpms.sh" key)"
+check "an unresolved rust prints no key" "" "$(fake_key not-rust || true)"
+printf 'changed\n' >>"$K/repo/crates/x/lib.rs"
+scratch_git commit -qam 'change a crate'
+check_false "a commit under crates/ changes rpms.sh key" test "$key_1" = "$(fake_key "$RUST_A")"
+
+# --- every command rpms.sh's main dispatches to is defined ------------------------------
+mapfile -t arms < <(sed -n '/^main() {/,/^}/s/^[[:space:]]*[a-z|-]*) \([a-z_][a-z0-9_]*\) "\$@" ;;$/\1/p' \
+    "$APEX_ROOT/.github/scripts/rpms.sh")
+check "rpms.sh's main dispatches key, build and toolchain" "cmd_key cmd_build cmd_toolchain" "${arms[*]}"
+for fn in "${arms[@]}"; do
+    check_true "rpms.sh defines $fn" rpms_fn declare -F "$fn"
+done
+
 # --- the installed layout: M1-IMPLEMENTATION.md, make install and apex.spec agree ---------
 if command -v make >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
     L="$TMP/layout"

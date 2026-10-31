@@ -115,6 +115,26 @@ make_in_checkout() {
         make -C "$APEX_ROOT" "$@"
 }
 
+cmd_toolchain() {
+    (($# == 0)) || die "usage: rpms.sh toolchain"
+    ((EUID == 0)) || die "rpms.sh toolchain installs packages; run it as root in a fedora:45 container"
+    require dnf5
+    log "installing Fedora's rust toolchain from: ${COMPOSE_REPOS[*]}"
+    retry 3 10 dnf5 -y --setopt=install_weak_deps=False "${COMPOSE_REPOS[@]}" install \
+        rust cargo clippy rustfmt gcc
+}
+
+cmd_key() {
+    (($# == 0)) || die "usage: rpms.sh key"
+    require git dnf5 sha256sum
+    local rust key
+    rust=$(repo_rust_nevra)
+    key=$(compute_key "$rust")
+    log "rust: $rust"
+    log "key:  $key"
+    printf '%s\n' "$key"
+}
+
 cmd_build() {
     (($# >= 1 && $# <= 2)) || die "usage: rpms.sh build OUTDIR [KEY]"
     local outdir=$1 expected=${2:-}
