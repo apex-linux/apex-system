@@ -13,5 +13,7 @@ bootc switch --download-only        7200 s
 bootc switch --download-only        7200 s
 bootc switch --download-only        7200 s
 ostree admin pin rollback            600 s
+ostree admin pin booted              600 s
 ostree admin status                   30 s
 ostree admin pin --unpin             600 s
+btrfs subvolume snapshot -r          600 s

@@ -29,7 +29,7 @@ use zbus::{Connection, Guid, connection};
 /// Returns once the emitter's first signal has arrived, so later streams see only changes.
 async fn connect(h: &Harness, auth: FakeAuthorizer) -> (Connection, Connection) {
     let (server, client, first) = connect_announced(h, auth).await;
-    assert_eq!(first.len(), 15, "{first:?}");
+    assert_eq!(first.len(), 16, "{first:?}");
     (server, client)
 }
 
@@ -349,6 +349,7 @@ async fn each_method_asks_polkit_for_its_contract_action() {
             "SetAutomaticDownloads",
             p.set_automatic_downloads(false).await,
         ),
+        ("MajorUpgrade", p.major_upgrade(46, false).await),
     ];
     for (member, result) in &refused {
         assert!(
@@ -539,6 +540,31 @@ async fn kept_signal(h: &Harness, stream: &mut PropertiesChangedStream, seen: &m
     assert!(kept[0].pin_reason.is_some());
 }
 
+async fn snapshots_signal(h: &Harness, stream: &mut PropertiesChangedStream, seen: &mut Seen) {
+    const PATH: &str = "/var/lib/apex/snapshots/var-fedora45-1790300000";
+    h.store
+        .write_major_upgrades(&apex_update::MajorUpgrades {
+            pins: Vec::new(),
+            snapshots: vec![apex_update::SnapshotRecord {
+                path: PATH.into(),
+                major: 45,
+                at: NOW,
+            }],
+        })
+        .unwrap();
+    h.refresh(&host(testing_booted(), None, Some(rollback())))
+        .await;
+    watch_until(stream, seen, |s| s.contains_key("Snapshots")).await;
+    let snapshots: Vec<apex_dbus::Snapshot> = seen["Snapshots"]
+        .last()
+        .expect("a value")
+        .try_clone()
+        .unwrap()
+        .try_into()
+        .expect("a(sut)");
+    assert_eq!(snapshots, [(PATH.to_owned(), 45, NOW)]);
+}
+
 #[tokio::test]
 async fn every_property_signals_its_changes() {
     const REMOTE_VERSION: &str = "45.20260924.9";
@@ -613,13 +639,14 @@ async fn every_property_signals_its_changes() {
 
     warning_and_setting_signals(&h, &p, &mut stream, &mut seen, staged_remote).await;
     kept_signal(&h, &mut stream, &mut seen).await;
+    snapshots_signal(&h, &mut stream, &mut seen).await;
 
     let signalled: BTreeSet<String> = seen.keys().cloned().collect();
     let contract: BTreeSet<String> = members(INTROSPECTION_XML)
         .into_keys()
         .filter_map(|key| key.strip_prefix("property ").map(str::to_owned))
         .collect();
-    assert_eq!(contract.len(), 15);
+    assert_eq!(contract.len(), 16);
     assert_eq!(signalled, contract);
     h.fake.assert_finished();
 }

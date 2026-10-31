@@ -57,6 +57,7 @@ expression: json
     "version": "45.20260920.110"
   },
   "schema": 2,
+  "snapshots": [],
   "staged": {
     "degraded": [],
     "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",

@@ -177,6 +177,38 @@ impl Pins {
     }
 }
 
+/// What `MajorUpgrade` left behind. Kept apart from [`Pins`], so the daily unpin never
+/// touches these pins; apex-updated never deletes the snapshots either.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MajorUpgrades {
+    #[serde(default)]
+    pub pins: Vec<MajorPinRecord>,
+    #[serde(default)]
+    pub snapshots: Vec<SnapshotRecord>,
+}
+
+/// The deployment that was running when the move to `to_major` began.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MajorPinRecord {
+    pub checksum: String,
+    #[serde(default)]
+    pub serial: u32,
+    pub digest: String,
+    pub from_major: u32,
+    pub to_major: u32,
+    #[serde(default)]
+    pub at: u64,
+}
+
+/// A read-only snapshot of `/var`, taken on Fedora `major`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SnapshotRecord {
+    pub path: String,
+    pub major: u32,
+    #[serde(default)]
+    pub at: u64,
+}
+
 /// Written by `apex-boot-assess` when an applied deployment failed its required checks
 /// during a user session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

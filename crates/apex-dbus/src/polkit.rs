@@ -37,16 +37,18 @@ pub enum PolkitAction {
     Rollback,
     /// Guards `SetAutomaticDownloads`.
     Configure,
+    MajorUpgrade,
 }
 
 impl PolkitAction {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Check,
         Self::Download,
         Self::Apply,
         Self::Discard,
         Self::Rollback,
         Self::Configure,
+        Self::MajorUpgrade,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -57,6 +59,7 @@ impl PolkitAction {
             Self::Discard => POLKIT_DISCARD,
             Self::Rollback => POLKIT_ROLLBACK,
             Self::Configure => POLKIT_CONFIGURE,
+            Self::MajorUpgrade => POLKIT_MAJOR_UPGRADE,
         }
     }
 
@@ -73,6 +76,7 @@ impl PolkitAction {
             "AcknowledgeHealthFailure" => Some(Self::Discard),
             "Rollback" => Some(Self::Rollback),
             "SetAutomaticDownloads" => Some(Self::Configure),
+            "MajorUpgrade" => Some(Self::MajorUpgrade),
             _ => None,
         }
     }
@@ -84,7 +88,7 @@ impl PolkitAction {
     pub const fn allow_active(self) -> PolkitDefault {
         match self {
             Self::Check | Self::Download | Self::Apply | Self::Discard => PolkitDefault::Yes,
-            Self::Rollback | Self::Configure => PolkitDefault::AuthAdmin,
+            Self::Rollback | Self::Configure | Self::MajorUpgrade => PolkitDefault::AuthAdmin,
         }
     }
 }
@@ -101,6 +105,7 @@ pub const POLKIT_APPLY: &str = "io.github.apex-linux.apex.update.apply";
 pub const POLKIT_DISCARD: &str = "io.github.apex-linux.apex.update.discard";
 pub const POLKIT_ROLLBACK: &str = "io.github.apex-linux.apex.update.rollback";
 pub const POLKIT_CONFIGURE: &str = "io.github.apex-linux.apex.update.configure";
+pub const POLKIT_MAJOR_UPGRADE: &str = "io.github.apex-linux.apex.update.major-upgrade";
 
 #[cfg(test)]
 mod tests {
@@ -140,6 +145,7 @@ mod tests {
             (PolkitAction::Discard, Yes),
             (PolkitAction::Rollback, AuthAdmin),
             (PolkitAction::Configure, AuthAdmin),
+            (PolkitAction::MajorUpgrade, AuthAdmin),
         ];
         assert_eq!(PolkitAction::ALLOW_ANY, No);
         assert_eq!(PolkitAction::ALLOW_INACTIVE, No);
@@ -163,6 +169,7 @@ mod tests {
             ("Automatic", None),
             ("ReportBoot", None),
             ("SetAutomaticDownloads", Some(PolkitAction::Configure)),
+            ("MajorUpgrade", Some(PolkitAction::MajorUpgrade)),
         ];
         for (member, action) in table {
             assert_eq!(PolkitAction::guarding(member), action, "{member}");

@@ -16,9 +16,9 @@ use apex_dbus::{ApexError, BootVerdict, Change, Channel, ErrorKind};
 use apex_update::state::is_available;
 use apex_update::{
     AfterCheck, ApplyError, AutomaticPlan, DenyEntry, FallbackRecord, HealthFailureRecord,
-    HostView, Intent, LastCheck, Manifest, PinRecord, Pins, RemoteView, SystemSnapshot, Trigger,
-    UpdateSettings, Version, diff, intent_is_orphaned, plan_after_check, plan_automatic,
-    validate_apply, validate_download,
+    HostView, Intent, LastCheck, MajorUpgrades, Manifest, PinRecord, Pins, RemoteView,
+    SystemSnapshot, Trigger, UpdateSettings, Version, diff, intent_is_orphaned, plan_after_check,
+    plan_automatic, validate_apply, validate_download,
 };
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
@@ -35,6 +35,10 @@ use crate::providers::{
 use crate::queue::Op;
 use crate::store::{Store, unflushed_is_done};
 use crate::view::{self, Manifests, RemoteImage, deployment_dict, image_timestamp};
+
+mod major_upgrade;
+
+pub use major_upgrade::major_upgrade_precondition;
 
 // apex-boot-assess's DAEMON_PING_WAIT must equal this; its test reads this line.
 pub const PING_WAIT: Duration = Duration::from_secs(20);
@@ -200,6 +204,7 @@ struct EngineState {
     last_fallback: Option<String>,
     /// health-failure.json's, kept with its digest in the snapshot.
     health_failure_checks: Vec<String>,
+    major_upgrades: MajorUpgrades,
 }
 
 pub struct Engine<R> {
@@ -385,6 +390,13 @@ impl<R: CommandRunner> Engine<R> {
             Op::Rollback { mark_bad } => self.rollback(*mark_bad, cancel).await,
             Op::Automatic => self.automatic(cancel).await,
             Op::Fallback { digest } => self.fallback(digest, cancel).await,
+            Op::MajorUpgrade {
+                target_major,
+                override_soft_gates,
+            } => {
+                self.major_upgrade(*target_major, *override_soft_gates, cancel)
+                    .await
+            }
         };
         match &result {
             Ok(()) => self.lock().last_error.clear(),
@@ -597,11 +609,42 @@ impl<R: CommandRunner> Engine<R> {
                 tracing::warn!(error = %errors::with_sources(&error), "ignoring settings.json");
             }
         }
-        match self.store.read_pins() {
-            Ok(pins) => attach_pin_reasons(host, summary, &pins),
-            Err(error) => {
-                tracing::warn!(error = %errors::with_sources(&error), "ignoring pinned.json");
+        let pins = self.store.read_pins().unwrap_or_else(|error| {
+            tracing::warn!(error = %errors::with_sources(&error), "ignoring pinned.json");
+            Pins::default()
+        });
+        state.major_upgrades = self.store.read_major_upgrades().unwrap_or_else(|error| {
+            tracing::warn!(error = %errors::with_sources(&error), "ignoring major-upgrade.json");
+            MajorUpgrades::default()
+        });
+        self.forget_deleted_snapshots(&mut state.major_upgrades);
+        attach_pin_reasons(host, summary, &pins, &state.major_upgrades);
+    }
+
+    /// `btrfs subvolume delete` is how the owner removes one, so `Snapshots` follows it.
+    fn forget_deleted_snapshots(&self, record: &mut MajorUpgrades) {
+        let before = record.snapshots.len();
+        record.snapshots.retain(|snapshot| {
+            let gone = self
+                .providers
+                .var
+                .snapshot_is_gone(Path::new(&snapshot.path));
+            if gone {
+                tracing::info!(
+                    path = snapshot.path,
+                    "the /var snapshot was deleted by hand"
+                );
             }
+            !gone
+        });
+        if record.snapshots.len() == before {
+            return;
+        }
+        if let Err(error) = unflushed_is_done(
+            self.store.write_major_upgrades(record),
+            "saving major-upgrade.json",
+        ) {
+            tracing::warn!(error = %errors::with_sources(&error), "cannot forget the deleted snapshot");
         }
     }
 
@@ -1711,14 +1754,27 @@ fn summarize(host: &Host, manifests: &Manifests<'_>) -> HostSummary {
     }
 }
 
+pub fn major_pin_reason(to_major: u32) -> String {
+    format!("Kept by the move to Apex {to_major}.")
+}
+
 /// Only on deployments still pinned: the owner may have unpinned one by hand.
-fn attach_pin_reasons(host: &Host, summary: &mut HostSummary, pins: &Pins) {
-    let kept_by_us = |entry: &BootEntry| {
-        entry.pinned
-            && entry
-                .ostree
-                .as_ref()
-                .is_some_and(|o| pins.contains(&o.checksum, o.deploy_serial))
+fn attach_pin_reasons(
+    host: &Host,
+    summary: &mut HostSummary,
+    pins: &Pins,
+    major_upgrades: &MajorUpgrades,
+) {
+    let reason = |entry: &BootEntry| {
+        let ostree = entry.ostree.as_ref().filter(|_| entry.pinned)?;
+        if pins.contains(&ostree.checksum, ostree.deploy_serial) {
+            return Some(PIN_REASON.to_owned());
+        }
+        major_upgrades
+            .pins
+            .iter()
+            .find(|pin| pin.checksum == ostree.checksum && pin.serial == ostree.deploy_serial)
+            .map(|pin| major_pin_reason(pin.to_major))
     };
     let entries = [host.booted(), host.staged(), host.rollback()];
     let dicts = [
@@ -1727,16 +1783,17 @@ fn attach_pin_reasons(host: &Host, summary: &mut HostSummary, pins: &Pins) {
         &mut summary.rollback,
     ];
     for (entry, dict) in entries.into_iter().zip(dicts) {
-        dict.pin_reason = entry.is_some_and(kept_by_us).then(|| PIN_REASON.to_owned());
+        dict.pin_reason = entry.and_then(reason);
     }
     summary.kept = host
         .status
         .other_deployments
         .iter()
-        .filter(|entry| kept_by_us(entry))
-        .map(|entry| apex_dbus::Deployment {
-            pin_reason: Some(PIN_REASON.to_owned()),
-            ..deployment_dict(Some(entry), None, false)
+        .filter_map(|entry| {
+            Some(apex_dbus::Deployment {
+                pin_reason: Some(reason(entry)?),
+                ..deployment_dict(Some(entry), None, false)
+            })
         })
         .collect();
 }
@@ -1792,6 +1849,12 @@ fn build_properties(state: &EngineState) -> Properties {
         last_fallback: state.last_fallback.clone().unwrap_or_default(),
         automatic_downloads: state.settings.automatic_downloads,
         kept: summary.kept.clone(),
+        snapshots: state
+            .major_upgrades
+            .snapshots
+            .iter()
+            .map(|s| (s.path.clone(), s.major, s.at))
+            .collect(),
     }
 }
 

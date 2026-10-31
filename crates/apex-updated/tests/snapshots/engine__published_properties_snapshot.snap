@@ -116,4 +116,5 @@ Properties {
     last_fallback: "",
     automatic_downloads: true,
     kept: [],
+    snapshots: [],
 }

@@ -1,4 +1,4 @@
-use crate::{ApexError, BootVerdict, Change, Channel, Deployment, State};
+use crate::{ApexError, BootVerdict, Change, Channel, Deployment, Snapshot, State};
 
 /// Replies can take hours: set no short call timeout. Contracts: [`crate::INTROSPECTION_XML`].
 /// Polkit-guarded methods allow interactive authorization, which `auth_admin` actions need.
@@ -23,6 +23,9 @@ pub trait Update1 {
 
     #[zbus(name = "Rollback", allow_interactive_auth)]
     fn rollback(&self, mark_bad: bool) -> Result<(), ApexError>;
+
+    #[zbus(name = "MajorUpgrade", allow_interactive_auth)]
+    fn major_upgrade(&self, target_major: u32, override_soft_gates: bool) -> Result<(), ApexError>;
 
     #[zbus(name = "GetChanges")]
     fn get_changes(&self) -> Result<Vec<Change>, ApexError>;
@@ -86,6 +89,9 @@ pub trait Update1 {
 
     #[zbus(property, name = "Kept")]
     fn kept(&self) -> zbus::Result<Vec<Deployment>>;
+
+    #[zbus(property, name = "Snapshots")]
+    fn snapshots(&self) -> zbus::Result<Vec<Snapshot>>;
 }
 
 #[cfg(test)]

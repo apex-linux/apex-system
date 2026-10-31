@@ -27,6 +27,11 @@ pub enum Op {
         /// The target GRUB fell back from.
         digest: String,
     },
+    MajorUpgrade {
+        target_major: u32,
+        /// As for [`Op::Download`].
+        override_soft_gates: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -38,6 +43,7 @@ pub enum OpKind {
     Rollback,
     Automatic,
     Fallback,
+    MajorUpgrade,
 }
 
 impl Op {
@@ -50,6 +56,7 @@ impl Op {
             Self::Rollback { .. } => OpKind::Rollback,
             Self::Automatic => OpKind::Automatic,
             Self::Fallback { .. } => OpKind::Fallback,
+            Self::MajorUpgrade { .. } => OpKind::MajorUpgrade,
         }
     }
 }
@@ -57,11 +64,11 @@ impl Op {
 impl OpKind {
     /// Up to bootc's two-hour download timeout each.
     pub const fn is_download_class(self) -> bool {
-        matches!(self, Self::Download | Self::Automatic)
+        matches!(self, Self::Download | Self::Automatic | Self::MajorUpgrade)
     }
 
     pub const fn changes_next_boot(self) -> bool {
-        matches!(self, Self::Apply | Self::Rollback)
+        matches!(self, Self::Apply | Self::Rollback | Self::MajorUpgrade)
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -73,6 +80,7 @@ impl OpKind {
             Self::Rollback => "rollback",
             Self::Automatic => "automatic",
             Self::Fallback => "fallback",
+            Self::MajorUpgrade => "major-upgrade",
         }
     }
 }
@@ -357,10 +365,14 @@ mod tests {
             OpKind::Fallback => Op::Fallback {
                 digest: "sha256:f".into(),
             },
+            OpKind::MajorUpgrade => Op::MajorUpgrade {
+                target_major: 46,
+                override_soft_gates: false,
+            },
         }
     }
 
-    const ALL: [OpKind; 7] = [
+    const ALL: [OpKind; 8] = [
         OpKind::Refresh,
         OpKind::Check,
         OpKind::Download,
@@ -368,6 +380,7 @@ mod tests {
         OpKind::Rollback,
         OpKind::Automatic,
         OpKind::Fallback,
+        OpKind::MajorUpgrade,
     ];
 
     #[test]
@@ -472,7 +485,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn admission_invariants(ops in proptest::collection::vec((0usize..7, 0u8..3), 0..40)) {
+        fn admission_invariants(ops in proptest::collection::vec((0usize..8, 0u8..3), 0..40)) {
             let mut running: Option<Op> = None;
             let mut pending: Vec<Op> = Vec::new();
             for (index, variant) in ops {
@@ -483,6 +496,7 @@ mod tests {
                     }
                     Op::Rollback { mark_bad } => *mark_bad = variant == 0,
                     Op::Fallback { digest } => *digest = format!("sha256:{variant}"),
+                    Op::MajorUpgrade { target_major, .. } => *target_major = 46 + u32::from(variant),
                     _ => {}
                 }
                 let decision = {

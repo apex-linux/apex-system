@@ -42,6 +42,7 @@ expression: "serde_json::to_value(StatusJson::new(&status)).unwrap()"
   "progress": null,
   "rollback": null,
   "schema": 2,
+  "snapshots": [],
   "staged": null,
   "state": "up-to-date",
   "stock": [

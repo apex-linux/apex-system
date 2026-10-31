@@ -1,14 +1,15 @@
 use apex_update::store::{
-    DENYLIST_FILE, FALLBACK_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE, PINNED_FILE,
-    SETTINGS_FILE, read_json, remove_durable, write_json_atomic,
+    DENYLIST_FILE, FALLBACK_FILE, HEALTH_FAILURE_FILE, INTENT_FILE, LAST_CHECK_FILE,
+    MAJOR_UPGRADE_FILE, PINNED_FILE, SETTINGS_FILE, read_json, remove_durable, write_json_atomic,
 };
 use apex_update::{
-    FallbackRecord, HealthFailureRecord, Pins, StateDir, StateStore, StoreError, UpdateSettings,
+    FallbackRecord, HealthFailureRecord, MajorUpgrades, Pins, StateDir, StateStore, StoreError,
+    UpdateSettings,
 };
 
 use crate::errors::with_sources;
 
-pub const STATE_FILES: [&str; 7] = [
+pub const STATE_FILES: [&str; 8] = [
     INTENT_FILE,
     DENYLIST_FILE,
     LAST_CHECK_FILE,
@@ -16,6 +17,7 @@ pub const STATE_FILES: [&str; 7] = [
     SETTINGS_FILE,
     FALLBACK_FILE,
     PINNED_FILE,
+    MAJOR_UPGRADE_FILE,
 ];
 
 pub trait Store: StateStore + Send + Sync {
@@ -27,6 +29,8 @@ pub trait Store: StateStore + Send + Sync {
     fn clear_fallback(&self) -> Result<(), StoreError>;
     fn read_pins(&self) -> Result<Pins, StoreError>;
     fn write_pins(&self, pins: &Pins) -> Result<(), StoreError>;
+    fn read_major_upgrades(&self) -> Result<MajorUpgrades, StoreError>;
+    fn write_major_upgrades(&self, record: &MajorUpgrades) -> Result<(), StoreError>;
 
     /// Every write cleans up after earlier writes of its own file; this, at startup, covers
     /// files rarely written, such as the denylist.
@@ -66,6 +70,14 @@ impl Store for StateDir {
 
     fn write_pins(&self, pins: &Pins) -> Result<(), StoreError> {
         write_json_atomic(&self.file(PINNED_FILE), pins)
+    }
+
+    fn read_major_upgrades(&self) -> Result<MajorUpgrades, StoreError> {
+        Ok(read_json(&self.file(MAJOR_UPGRADE_FILE))?.unwrap_or_default())
+    }
+
+    fn write_major_upgrades(&self, record: &MajorUpgrades) -> Result<(), StoreError> {
+        write_json_atomic(&self.file(MAJOR_UPGRADE_FILE), record)
     }
 
     fn remove_stale_temp_files(&self) -> usize {
