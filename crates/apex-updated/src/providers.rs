@@ -789,6 +789,16 @@ mod tests {
         let mut perms = std::fs::metadata(&script).unwrap().permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
         std::fs::set_permissions(&script, perms).unwrap();
+        // A test forking concurrently can hold our write descriptor until its child execs,
+        // making exec fail with ETXTBSY.
+        for _ in 0..200 {
+            match std::process::Command::new(&script).output() {
+                Err(e) if e.raw_os_error() == Some(nix::errno::Errno::ETXTBSY as i32) => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                _ => break,
+            }
+        }
 
         let files = HostFiles::under(
             &dir.path().join("root"),

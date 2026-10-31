@@ -328,6 +328,16 @@ fn build_manifest_with_a_fake_rpm() {
     let rpm = bin.join("rpm");
     fs::write(&rpm, script).expect("write");
     fs::set_permissions(&rpm, fs::Permissions::from_mode(0o755)).expect("chmod");
+    // A test forking concurrently can hold our write descriptor until its child execs,
+    // making apexctl's exec of rpm fail with ETXTBSY.
+    for _ in 0..200 {
+        match Command::new(&rpm).output() {
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => break,
+        }
+    }
     let path = format!(
         "{}:{}",
         bin.display(),
