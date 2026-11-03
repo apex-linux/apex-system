@@ -116,6 +116,11 @@ async fn every_method_matches_the_contract_on_the_wire() {
         .set_automatic_downloads(true)
         .await
         .expect("SetAutomaticDownloads");
+    proxy.major_upgrade(46, false).await.expect("MajorUpgrade");
+    assert!(matches!(
+        proxy.major_upgrade(47, true).await,
+        Err(ApexError::NothingToDo(_))
+    ));
     assert!(matches!(
         proxy.set_automatic_downloads(false).await,
         Err(ApexError::NotAuthorized(_))
@@ -141,6 +146,7 @@ async fn every_method_matches_the_contract_on_the_wire() {
         "Rollback",
         "AcknowledgeHealthFailure",
         "SetAutomaticDownloads",
+        "MajorUpgrade",
     ]
     .into();
     assert_eq!(interactive, expected);
@@ -184,6 +190,10 @@ async fn every_property_matches_the_contract_on_the_wire() {
         ["session"]
     );
     assert_eq!(proxy.kept().await.expect("Kept"), [common::kept()]);
+    assert_eq!(
+        proxy.snapshots().await.expect("Snapshots"),
+        [common::snapshot()]
+    );
     assert_eq!(
         proxy.last_fallback().await.expect("LastFallback"),
         STAGED_DIGEST

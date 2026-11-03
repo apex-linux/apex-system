@@ -9,6 +9,7 @@ apply          while idle           -> queue
 rollback       while idle           -> queue
 automatic      while idle           -> queue
 fallback       while idle           -> queue
+major-upgrade  while idle           -> queue
 refresh        while refresh        -> covered
 check          while refresh        -> queue
 download       while refresh        -> queue
@@ -16,6 +17,7 @@ apply          while refresh        -> queue
 rollback       while refresh        -> queue
 automatic      while refresh        -> queue
 fallback       while refresh        -> queue
+major-upgrade  while refresh        -> queue
 refresh        while check          -> covered
 check          while check          -> join
 download       while check          -> queue
@@ -23,6 +25,7 @@ apply          while check          -> queue
 rollback       while check          -> queue
 automatic      while check          -> queue
 fallback       while check          -> queue
+major-upgrade  while check          -> queue
 refresh        while download       -> covered
 check          while download       -> busy
 download       while download       -> busy
@@ -30,6 +33,7 @@ apply          while download       -> busy
 rollback       while download       -> busy
 automatic      while download       -> busy
 fallback       while download       -> queue
+major-upgrade  while download       -> busy
 refresh        while apply          -> covered
 check          while apply          -> queue
 download       while apply          -> queue
@@ -37,6 +41,7 @@ apply          while apply          -> join
 rollback       while apply          -> busy
 automatic      while apply          -> queue
 fallback       while apply          -> queue
+major-upgrade  while apply          -> busy
 refresh        while rollback       -> covered
 check          while rollback       -> queue
 download       while rollback       -> queue
@@ -44,6 +49,7 @@ apply          while rollback       -> busy
 rollback       while rollback       -> join
 automatic      while rollback       -> queue
 fallback       while rollback       -> queue
+major-upgrade  while rollback       -> busy
 refresh        while automatic      -> covered
 check          while automatic      -> busy
 download       while automatic      -> busy
@@ -51,6 +57,7 @@ apply          while automatic      -> busy
 rollback       while automatic      -> busy
 automatic      while automatic      -> busy
 fallback       while automatic      -> queue
+major-upgrade  while automatic      -> busy
 refresh        while fallback       -> covered
 check          while fallback       -> queue
 download       while fallback       -> queue
@@ -58,3 +65,12 @@ apply          while fallback       -> queue
 rollback       while fallback       -> queue
 automatic      while fallback       -> queue
 fallback       while fallback       -> join
+major-upgrade  while fallback       -> queue
+refresh        while major-upgrade  -> covered
+check          while major-upgrade  -> busy
+download       while major-upgrade  -> busy
+apply          while major-upgrade  -> busy
+rollback       while major-upgrade  -> busy
+automatic      while major-upgrade  -> busy
+fallback       while major-upgrade  -> queue
+major-upgrade  while major-upgrade  -> busy

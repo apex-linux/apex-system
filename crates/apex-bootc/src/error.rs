@@ -48,6 +48,8 @@ pub enum BootcError {
     Busy { detail: String },
     #[error("network error: {detail}")]
     Network { detail: String },
+    #[error("the registry has no such image: {detail}")]
+    ImageNotFound { detail: String },
     #[error("image rejected by the signature policy: {detail}")]
     SignatureRejected { detail: String },
     #[error("not enough disk space: {detail}")]
@@ -86,6 +88,7 @@ pub enum BootcError {
 pub enum ErrorKind {
     Busy,
     Network,
+    ImageNotFound,
     SignatureRejected,
     NoSpace,
     NotBootcHost,
@@ -102,6 +105,7 @@ impl BootcError {
         match self {
             Self::Busy { .. } => ErrorKind::Busy,
             Self::Network { .. } => ErrorKind::Network,
+            Self::ImageNotFound { .. } => ErrorKind::ImageNotFound,
             Self::SignatureRejected { .. } => ErrorKind::SignatureRejected,
             Self::NoSpace { .. } => ErrorKind::NoSpace,
             Self::NotBootcHost { .. } => ErrorKind::NotBootcHost,
@@ -163,6 +167,12 @@ const SIGNATURE: &[&str] = &[
     "specifies a default of `insecureacceptanything`",
 ];
 
+/// containers/image `image/docker/docker_image_src.go` wraps the registry's answer for a tag it
+/// does not have as `reading manifest TAG in REPO: …`: the OCI error code or a bare 404.
+const IMAGE_NOT_FOUND: &[&str] = &["manifest unknown"];
+const IMAGE_NOT_FOUND_CONTEXT: &str = "reading manifest";
+const IMAGE_NOT_FOUND_CAUSE: &str = "not found";
+
 const NETWORK: &[&str] = &[
     // containers/image image/docker/docker_client.go, detectPropertiesHelper()
     "pinging container registry",
@@ -211,6 +221,10 @@ pub fn classify_failure(command: CommandKind, exit: ExitState, stderr: &[u8]) ->
         BootcError::NoSpace { detail }
     } else if has(SIGNATURE) {
         BootcError::SignatureRejected { detail }
+    } else if has(IMAGE_NOT_FOUND)
+        || (lower.contains(IMAGE_NOT_FOUND_CONTEXT) && lower.contains(IMAGE_NOT_FOUND_CAUSE))
+    {
+        BootcError::ImageNotFound { detail }
     } else if has(NETWORK) {
         BootcError::Network { detail }
     } else {

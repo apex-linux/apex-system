@@ -164,6 +164,7 @@ impl<R: CommandRunner> CommandRunner for &R {
 pub struct TokioRunner {
     program: PathBuf,
     ostree: PathBuf,
+    btrfs: PathBuf,
     lock_path: PathBuf,
     kill_grace: Duration,
     timeout_override: Option<Duration>,
@@ -180,6 +181,7 @@ impl TokioRunner {
         Self {
             program: command::program(),
             ostree: command::ostree_program(),
+            btrfs: command::btrfs_program(),
             lock_path: PathBuf::from(SYSROOT_LOCK_PATH),
             kill_grace: KILL_GRACE,
             timeout_override: None,
@@ -195,6 +197,7 @@ impl TokioRunner {
         Self {
             program: program.to_owned(),
             ostree: program.to_owned(),
+            btrfs: program.to_owned(),
             lock_path: lock_path.to_owned(),
             kill_grace: Duration::from_millis(200),
             timeout_override: timeout,
@@ -213,6 +216,7 @@ impl CommandRunner for TokioRunner {
         let program = match kind.program() {
             Program::Bootc => &self.program,
             Program::Ostree => &self.ostree,
+            Program::Btrfs => &self.btrfs,
         };
         let spec = ProcessSpec {
             program: program.clone(),

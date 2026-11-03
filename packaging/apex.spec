@@ -45,6 +45,7 @@ Requires:       ostree
 Requires:       grub2-tools-minimal
 Requires:       /usr/bin/unshare
 Requires:       /usr/bin/mount
+Requires:       btrfs-progs
 Requires:       bootupd
 Requires:       dbus
 Requires:       dbus-common

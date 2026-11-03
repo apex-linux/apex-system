@@ -200,3 +200,31 @@ fn transient_errors() {
     );
     assert!(!signature.is_transient());
 }
+
+/// The next Fedora major's tag before it is published (`bootc switch` to `…/apex:46`).
+#[test]
+fn a_missing_tag_is_image_not_found_and_final() {
+    for stderr in [
+        "error: Switching (ostree): Pulling: Creating importer: failed to invoke method OpenImage: \
+         reading manifest 46 in ghcr.io/apex-linux/apex: manifest unknown",
+        "error: Switching (ostree): Pulling: failed to invoke method OpenImage: reading manifest \
+         46 in ghcr.io/apex-linux/apex: StatusCode: 404, 404 page not found",
+    ] {
+        let err = classify_failure(CommandKind::SwitchDownloadOnly, ONE, stderr.as_bytes());
+        assert_eq!(err.kind(), ErrorKind::ImageNotFound, "{stderr:?} -> {err}");
+        assert!(!err.is_transient());
+        assert!(err.to_string().contains("ghcr.io/apex-linux/apex"), "{err}");
+    }
+    let refused = classify_failure(
+        CommandKind::SwitchDownloadOnly,
+        ONE,
+        b"error: reading manifest 46 in ghcr.io/x: A signature was required, but no signature exists",
+    );
+    assert_eq!(refused.kind(), ErrorKind::SignatureRejected);
+    let offline = classify_failure(
+        CommandKind::SwitchDownloadOnly,
+        ONE,
+        b"error: pinging container registry ghcr.io: dial tcp: no such host",
+    );
+    assert_eq!(offline.kind(), ErrorKind::Network);
+}

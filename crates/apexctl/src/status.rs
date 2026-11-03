@@ -44,8 +44,12 @@ meaning until \"schema\" changes.
                    a deployment, or null when there is none
   hardware         hardware notes read on this computer, one object per check: check
                    (\"nvidia\"), ok (true or false), detail (a sentence)
-  kept             deployments the update service pinned as the last version known to work
-                   that are none of those, so only the boot menu offers them; [] when none
+  kept             deployments the update service pinned, as the last version known to work
+                   or by a major upgrade, that are none of those, so only the boot menu
+                   offers them; [] when none
+  snapshots        the read-only /var snapshots major upgrades made, oldest first, one
+                   object per snapshot: path, major (the Fedora release it was taken on),
+                   taken_at (Unix seconds); [] when none
 
 A deployment has these keys, each null when unknown:
   image            image reference, e.g. \"ghcr.io/apex-linux/apex:45\"
@@ -165,7 +169,15 @@ pub struct StatusJson {
     pub rollback: Option<DeploymentJson>,
     pub available: Option<DeploymentJson>,
     pub kept: Vec<DeploymentJson>,
+    pub snapshots: Vec<SnapshotJson>,
     pub hardware: Vec<HardwareNote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SnapshotJson {
+    pub path: String,
+    pub major: u32,
+    pub taken_at: u64,
 }
 
 /// Read on this computer, not from the update service.
@@ -230,6 +242,15 @@ impl StatusJson {
                 .kept
                 .iter()
                 .filter_map(DeploymentJson::from_deployment)
+                .collect(),
+            snapshots: status
+                .snapshots
+                .iter()
+                .map(|(path, major, taken_at)| SnapshotJson {
+                    path: path.clone(),
+                    major: *major,
+                    taken_at: *taken_at,
+                })
                 .collect(),
             hardware: Vec::new(),
         }
@@ -614,6 +635,14 @@ pub fn render_status(status: &ServiceStatus) -> String {
         labelled_rows(&mut out, "Held", &rows);
     }
     labelled_rows(&mut out, "Stock", &stock_rows(&status.booted));
+    let snapshots: Vec<String> = status
+        .snapshots
+        .iter()
+        .map(|(path, major, taken_at)| {
+            format!("{path} (/var on Apex {major}, {})", format_utc(*taken_at))
+        })
+        .collect();
+    labelled_rows(&mut out, "Snapshots", &snapshots);
 
     let mut notes = Vec::new();
     if !status.deferred_reason.is_empty() {
@@ -782,6 +811,7 @@ pub(crate) mod tests {
             last_fallback: String::new(),
             automatic_downloads: Some(true),
             kept: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 
@@ -1122,6 +1152,39 @@ pub(crate) mod tests {
             status.rollback.pin_reason
         );
         assert_eq!(json.booted.unwrap().pin_reason, None);
+    }
+
+    #[test]
+    fn a_major_upgrade_shows_the_version_it_kept_and_the_snapshot_it_took() {
+        let mut status = staged_status();
+        status.state = State::ReadyForReboot;
+        status.staged.download_only = Some(false);
+        status.booted.pinned = Some(true);
+        status.booted.pin_reason = Some("Kept by the move to Apex 46.".to_owned());
+        status.snapshots = vec![(
+            "/var/lib/apex/snapshots/var-fedora45-1790300000".to_owned(),
+            45,
+            1_790_300_000,
+        )];
+        let text = render_status(&status);
+        assert!(text.contains("Kept by the move to Apex 46."), "{text}");
+        assert!(
+            text.contains(
+                "Snapshots  /var/lib/apex/snapshots/var-fedora45-1790300000 (/var on Apex 45, "
+            ),
+            "{text}"
+        );
+        let json = serde_json::to_value(StatusJson::new(&status)).unwrap();
+        assert_eq!(
+            json["snapshots"],
+            serde_json::json!([{
+                "path": "/var/lib/apex/snapshots/var-fedora45-1790300000",
+                "major": 45,
+                "taken_at": 1_790_300_000
+            }])
+        );
+        status.snapshots.clear();
+        assert!(!render_status(&status).contains("Snapshots"));
     }
 
     #[test]

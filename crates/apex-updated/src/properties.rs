@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use apex_dbus::{Channel, Deployment, State};
+use apex_dbus::{Channel, Deployment, Snapshot, State};
 use apex_update::state::is_available;
 use apex_update::{AfterCheck, SystemSnapshot, plan_after_check};
 use zbus::Variant;
@@ -26,6 +26,7 @@ pub struct Properties {
     pub last_fallback: String,
     pub automatic_downloads: bool,
     pub kept: Vec<Deployment>,
+    pub snapshots: Vec<Snapshot>,
 }
 
 impl Default for Properties {
@@ -46,6 +47,7 @@ impl Default for Properties {
             last_fallback: String::new(),
             automatic_downloads: true,
             kept: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 }
@@ -81,6 +83,9 @@ impl Properties {
             .chain(self.health_failure_checks.iter_mut())
         {
             *text = display_text(text);
+        }
+        for (path, _, _) in &mut self.snapshots {
+            *path = display_text(path);
         }
         self
     }
@@ -165,6 +170,11 @@ impl Properties {
             "Kept",
             self.kept != previous.kept,
             Variant::from(self.kept.clone()),
+        );
+        put(
+            "Snapshots",
+            self.snapshots != previous.snapshots,
+            Variant::from(self.snapshots.clone()),
         );
         changed
     }
@@ -483,7 +493,7 @@ mod tests {
     #[test]
     fn every_contract_property_is_signalled_alone_when_it_changes() {
         let before = Properties::default();
-        let edits: [(&str, Edit); 15] = [
+        let edits: [(&str, Edit); 16] = [
             ("State", |p| p.state = State::Staged),
             ("Progress", |p| p.progress = 0.5),
             ("Booted", |p| p.booted = deployment("b")),
@@ -505,12 +515,15 @@ mod tests {
             ("LastFallback", |p| p.last_fallback = "sha256:f".into()),
             ("AutomaticDownloads", |p| p.automatic_downloads = false),
             ("Kept", |p| p.kept = vec![deployment("k")]),
+            ("Snapshots", |p| {
+                p.snapshots = vec![("/var/lib/apex/snapshots/var-fedora45-1".into(), 45, 1)];
+            }),
         ];
         let contract = contract_properties();
         assert_eq!(
             contract.len(),
             edits.len(),
-            "the XML has fifteen properties"
+            "the XML has sixteen properties"
         );
         let mut all = before.clone();
         for (name, edit) in edits {

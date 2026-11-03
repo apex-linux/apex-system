@@ -6,7 +6,7 @@ use std::time::Duration;
 use apex_bootc::CommandRunner;
 use apex_dbus::{
     ApexError, BootVerdict, Change, Channel, Deployment, ErrorKind, INTERFACE, OBJECT_PATH,
-    PolkitAction, State, UnknownValueError,
+    PolkitAction, Snapshot, State, UnknownValueError,
 };
 use tokio::sync::watch;
 use zbus::Connection;
@@ -144,6 +144,22 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
             "Rollback",
             self.queued(&header, PolkitAction::Rollback, Op::Rollback { mark_bad })
                 .await,
+        )
+    }
+
+    async fn major_upgrade(
+        &self,
+        target_major: u32,
+        override_soft_gates: bool,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<(), ApexError> {
+        let op = Op::MajorUpgrade {
+            target_major,
+            override_soft_gates,
+        };
+        reply(
+            "MajorUpgrade",
+            self.queued(&header, PolkitAction::MajorUpgrade, op).await,
         )
     }
 
@@ -307,6 +323,11 @@ impl<R: CommandRunner + 'static> Update1Service<R> {
     #[zbus(property)]
     async fn kept(&self) -> Vec<Deployment> {
         self.read_property(|p| p.kept.clone()).await
+    }
+
+    #[zbus(property)]
+    async fn snapshots(&self) -> Vec<Snapshot> {
+        self.read_property(|p| p.snapshots.clone()).await
     }
 }
 

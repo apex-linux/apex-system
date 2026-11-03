@@ -103,6 +103,24 @@ impl<R: CommandRunner> Bootc<R> {
             .map(drop)
     }
 
+    pub async fn pin_booted(&self, cancel: &CancelToken) -> Result<(), BootcError> {
+        self.run(invoke(BootcCommand::PinBooted, cancel))
+            .await
+            .map(drop)
+    }
+
+    /// The caller creates [`crate::SNAPSHOT_DIR`] first: btrfs does not.
+    pub async fn snapshot_var(
+        &self,
+        major: u32,
+        unix: u64,
+        cancel: &CancelToken,
+    ) -> Result<(), BootcError> {
+        self.run(invoke(BootcCommand::SnapshotVar { major, unix }, cancel))
+            .await
+            .map(drop)
+    }
+
     pub async fn ostree_status(
         &self,
         cancel: &CancelToken,

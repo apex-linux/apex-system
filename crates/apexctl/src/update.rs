@@ -550,6 +550,13 @@ mod tests {
             }
             ready(result)
         }
+        fn major_upgrade(
+            &self,
+            target_major: u32,
+            force: bool,
+        ) -> impl Future<Output = Result<(), ClientError>> {
+            ready(self.call(format!("major_upgrade({target_major}, {force})")))
+        }
     }
 
     fn digest(c: char) -> String {
@@ -581,6 +588,7 @@ mod tests {
             last_fallback: String::new(),
             automatic_downloads: Some(true),
             kept: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 

@@ -39,7 +39,8 @@
                          lane lock: family, and the lock's reason ("" when none), such as
                          the break-glass image's break-glass: ...
     "pin-reason"     s   only on a deployment apex-updated pinned itself, why: the booted
-                         deployment was unconfirmed or failed when an update was applied
+                         deployment was unconfirmed or failed when an update was applied,
+                         or it was the running version before a major upgrade
 
   Errors io.github.apex_linux.Apex.Update1.Error.<Kind>:
     Busy             another operation is running or waiting
@@ -59,6 +60,7 @@
     io.github.apex-linux.apex.update.discard         yes         AcknowledgeHealthFailure
     io.github.apex-linux.apex.update.rollback        auth_admin
     io.github.apex-linux.apex.update.configure       auth_admin  SetAutomaticDownloads
+    io.github.apex-linux.apex.update.major-upgrade   auth_admin  MajorUpgrade
 -->
 <node>
   <interface name="io.github.apex_linux.Apex.Update1">
@@ -114,6 +116,9 @@
     <!-- Deployments apex-updated pinned itself (each with "pin-reason") that are not
          Booted, Staged or Rollback, so they show only in the boot menu; empty if none. -->
     <property name="Kept" type="aa{sv}" access="read"/>
+    <!-- The read-only /var snapshots MajorUpgrade made, oldest first: (path, Fedora major
+         it was taken on, Unix seconds). apex-updated never deletes them. -->
+    <property name="Snapshots" type="a(sut)" access="read"/>
 
     <!-- Liveness probe for the boot health check, no polkit check; Internal when bootc
          cannot be used. -->
@@ -138,6 +143,19 @@
          denylisted. -->
     <method name="Rollback">
       <arg name="mark_bad" type="b" direction="in"/>
+    </method>
+
+    <!-- Moves to the next Fedora major's stable image. target_major must be Booted's
+         Fedora major plus 1. It downloads the image locked (override_soft_gates as for
+         Download), pins the booted deployment, which apex-updated never unpins, and saves
+         /var as a read-only btrfs snapshot (see Snapshots). Then it applies the stage as
+         Apply does: armed, never rebooting. NothingToDo when no image is published for
+         target_major or Booted is already on it. PolicyDenied when a stage is pending,
+         /var is not a btrfs subvolume or a gate refuses. InvalidArgument for any other
+         target_major. -->
+    <method name="MajorUpgrade">
+      <arg name="target_major" type="u" direction="in"/>
+      <arg name="override_soft_gates" type="b" direction="in"/>
     </method>
 
     <!-- Entries: (name, arch, kind, from_evr, to_evr), kind one of "added", "removed",

@@ -4,6 +4,7 @@ pub mod codec;
 pub mod exit;
 pub mod hda;
 pub mod hw;
+pub mod major_upgrade;
 pub mod manifest;
 pub mod patch;
 pub mod profile;

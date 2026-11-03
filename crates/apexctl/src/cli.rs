@@ -40,6 +40,28 @@ pub enum Command {
     },
     #[command(subcommand, about = "Check for, download, apply or undo OS updates")]
     Update(UpdateCommand),
+    #[command(
+        about = "Move to the next Fedora release's Apex (asks for an administrator password)",
+        long_about = concat!(
+            "Move to the next Fedora release's Apex (asks for an administrator password).\n\n",
+            "Downloads it locked, keeps the running version pinned in the boot menu, saves /var ",
+            "as a read-only btrfs snapshot, then installs it for the next restart, armed like ",
+            "any update. Exits 3 when no image is published for the next release yet or this ",
+            "computer already runs it, and 2 when a downloaded update is waiting, /var is not a ",
+            "btrfs subvolume or an update gate refuses. apex-updated never deletes the ",
+            "snapshots: apexctl status lists them, and btrfs subvolume delete removes one."
+        )
+    )]
+    MajorUpgrade {
+        #[arg(
+            long,
+            help = concat!(
+                "Download even on battery or on a metered network (never overrides the space or ",
+                "bootc-state gates)"
+            )
+        )]
+        force: bool,
+    },
     #[command(subcommand, about = "Read-only hardware diagnostics for this laptop")]
     Hw(HwCommand),
     #[command(subcommand, about = "Repair the boot loader's files (root only)")]
@@ -400,6 +422,8 @@ mod tests {
             &["update", "auto", "on"],
             &["update", "auto", "off"],
             &["update", "auto", "status"],
+            &["major-upgrade"],
+            &["major-upgrade", "--force"],
             &["hw", "report", "--json"],
             &["boot", "repair-grub"],
             &[

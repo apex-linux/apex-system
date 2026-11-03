@@ -9,7 +9,8 @@ use std::{
 };
 
 use apex_dbus::{
-    ApexError, BootVerdict, Change, ChangeKind, Channel, Deployment, ErrorKind, INTERFACE, State,
+    ApexError, BootVerdict, Change, ChangeKind, Channel, Deployment, ErrorKind, INTERFACE,
+    Snapshot, State,
 };
 use zbus::{
     message::{Flags, Header},
@@ -119,6 +120,14 @@ pub(crate) fn kept() -> Deployment {
         pin_reason: Some("Kept as the last version known to work.".to_owned()),
         ..booted()
     }
+}
+
+pub(crate) fn snapshot() -> Snapshot {
+    (
+        "/var/lib/apex/snapshots/var-fedora45-1790400000".to_owned(),
+        45,
+        1_790_400_000,
+    )
 }
 
 pub(crate) fn changes() -> Vec<Change> {
@@ -247,6 +256,19 @@ impl MockDaemon {
             Ok(())
         } else {
             Err(ApexError::NothingToDo("no rollback deployment".to_owned()))
+        }
+    }
+
+    fn major_upgrade(
+        &self,
+        target_major: u32,
+        override_soft_gates: bool,
+        #[zbus(header)] header: Header<'_>,
+    ) -> Result<(), ApexError> {
+        self.log.call(&header);
+        match (target_major, override_soft_gates) {
+            (46, false) => Ok(()),
+            _ => Err(ApexError::NothingToDo("no Apex 47 image".to_owned())),
         }
     }
 
@@ -411,6 +433,12 @@ impl MockDaemon {
     fn kept(&self) -> Vec<Deployment> {
         self.log.property("Kept");
         vec![kept()]
+    }
+
+    #[zbus(property)]
+    fn snapshots(&self) -> Vec<Snapshot> {
+        self.log.property("Snapshots");
+        vec![snapshot()]
     }
 }
 

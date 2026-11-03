@@ -46,6 +46,7 @@ pub fn describe(action: PolkitAction) -> &'static str {
         PolkitAction::Discard => "dismiss update warnings",
         PolkitAction::Rollback => "go back to the previous version",
         PolkitAction::Configure => "change how updates are downloaded",
+        PolkitAction::MajorUpgrade => "move to the next Fedora release",
     }
 }
 

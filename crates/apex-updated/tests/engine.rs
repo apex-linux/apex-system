@@ -1465,6 +1465,13 @@ impl apex_updated::store::Store for UnflushedStore {
         self.0.write_pins(pins)?;
         Err(unflushed("pinned.json"))
     }
+    fn read_major_upgrades(&self) -> Result<apex_update::MajorUpgrades, StoreError> {
+        self.0.read_major_upgrades()
+    }
+    fn write_major_upgrades(&self, record: &apex_update::MajorUpgrades) -> Result<(), StoreError> {
+        self.0.write_major_upgrades(record)?;
+        Err(unflushed("major-upgrade.json"))
+    }
 }
 
 #[tokio::test(start_paused = true)]
