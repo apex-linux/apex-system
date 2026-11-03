@@ -2,8 +2,8 @@
 #
 # Enabled by 80-apex.preset through `systemctl --user --global preset-all` in the image.
 [Unit]
-Description=Apex session agent: window radius, terminal caret, the crash-guard offer, Updates Ready and the battery refresh rate
-Documentation=https://github.com/apex-linux/apex-system/blob/main/docs/ARCHITECTURE.md
+Description=Apex session agent: window radius, terminal caret, accent folder icons, the crash-guard offer, update notices and the battery refresh rate
+Documentation=https://github.com/apex-linux/apex/blob/main/docs/ARCHITECTURE.md
 PartOf=graphical-session.target
 After=graphical-session.target
 # Neither system users nor the greeter have anything to set. GDM 51's greeter is a dynamic user,
