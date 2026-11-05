@@ -67,8 +67,8 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
 ```
 
 - `packages` is sorted by `(name, arch)` in byte order and is unique on that key.
-- `degraded` is sorted and holds any of `adwaita`, `audio`, `files`, `fingerprint`,
-  `nvidia`, `settings`, `shell` and `terminal`.
+- `degraded` is sorted and holds any of `adwaita`, `audio`, `code`, `files`,
+  `fingerprint`, `nvidia`, `settings`, `shell` and `terminal`.
   `nvidia` (S1c) marks an image the owner published without the NVIDIA set, because the
   kmod could not follow the kernel: the dGPU stays unbound in D3cold (ADR 0015 §4).
   `shell` (S1a) marks an image with Fedora's gnome-shell and mutter: the owner chose
@@ -78,7 +78,9 @@ Produced in the final image stage by `apexctl build manifest --root / --version 
   Apex build, so the terminal has no sessions sidebar or pane headers (ADR 0014,
   Consequences). `files` and `settings` mark Fedora's nautilus and gnome-control-center
   the same way, without the Apex Files and Settings work. `adwaita` marks Fedora's
-  libadwaita: host apps take a new window radius at their next start, not live. A rebuild-lane family that is stock or degraded needs its name here
+  libadwaita: host apps take a new window radius at their next start, not live. `code`
+  (E1) marks Fedora's GNOME Builder: Apex Code's family had no good build, so the editor
+  ships without the Apex Code series (ADR 0017). A rebuild-lane family that is stock or degraded needs its name here
   before an image can ship it; the build fails otherwise.
 - `held` (S1a) is sorted and lists the rebuild-lane families (`packaging/pkgs/*/pkg.env`
   `family=`, for example `gnome-shell`) that the lane's lock holds at their last good

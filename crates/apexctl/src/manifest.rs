@@ -15,6 +15,7 @@ pub const IMAGE_NAME: &str = "apex";
 pub const DEGRADED_COMPONENTS: &[&str] = &[
     "adwaita",
     "audio",
+    "code",
     "files",
     "fingerprint",
     "nvidia",
@@ -37,7 +38,7 @@ pub enum ManifestBuildError {
     #[error("base image {0:?} is not pinned by digest (<repository>@sha256:<64 hex digits>)")]
     Base(String),
     #[error(
-        "unknown degraded component {0:?} (known: adwaita, audio, files, fingerprint, nvidia, settings, shell, terminal)"
+        "unknown degraded component {0:?} (known: adwaita, audio, code, files, fingerprint, nvidia, settings, shell, terminal)"
     )]
     Degraded(String),
     #[error("held family {0:?} is not a package name ([a-z0-9][a-z0-9._+-]*)")]
@@ -332,6 +333,7 @@ kernel-core\t0\t7.2.9\t300.fc45\tx86_64
         let mut shell = input();
         shell.degraded = vec![
             "adwaita".to_owned(),
+            "code".to_owned(),
             "files".to_owned(),
             "settings".to_owned(),
             "shell".to_owned(),
