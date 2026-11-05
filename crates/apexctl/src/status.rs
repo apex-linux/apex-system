@@ -454,6 +454,7 @@ fn degraded_meaning(component: &str) -> &'static str {
         "adwaita" => "stock libadwaita, so apps take a new window radius only at their next start",
         "files" => "stock Files, without the Apex footer, details pane, recent strip and chips",
         "settings" => "stock Settings, without the Apex Desktop panel and Software Updates page",
+        "code" => "stock GNOME Builder, without Apex Code",
         _ => "degraded",
     }
 }
@@ -1286,6 +1287,7 @@ pub(crate) mod tests {
         let mut status = staged_status();
         status.booted.degraded = Some(vec![
             "adwaita".to_owned(),
+            "code".to_owned(),
             "files".to_owned(),
             "settings".to_owned(),
         ]);
@@ -1293,7 +1295,8 @@ pub(crate) mod tests {
         assert!(
             text.contains(
                 "\nDegraded   adwaita: stock libadwaita, so apps take a new window radius only at \
-                 their next start\n           files: stock Files, without the Apex footer, details pane, recent \
+                 their next start\n           code: stock GNOME Builder, without Apex \
+                 Code\n           files: stock Files, without the Apex footer, details pane, recent \
                  strip and chips\n           settings: stock Settings, without the Apex Desktop \
                  panel and Software Updates page\n"
             ),
