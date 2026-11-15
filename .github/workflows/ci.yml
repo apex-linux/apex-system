@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: registry.fedoraproject.org/fedora:45@sha256:1e13e11f63e147a40a935c9046c79d53a30b861a3cf05ebb023bb53c562382cb
+      image: registry.fedoraproject.org/fedora:45@sha256:b174cd5906c712f59a675cc85ea2ca8ff3bcf3643f1a1f3bc4e14dc28bcf1872
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: "0"
